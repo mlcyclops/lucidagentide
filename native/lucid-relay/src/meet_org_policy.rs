@@ -3,6 +3,12 @@
 // field rule and limit of an org policy, its verification (root or the signer's intermediate, the root's CRL) and
 // the relay's store of signed policies. The same bytes and the same words as the Python module; the issuer-side
 // signing helpers and the SSO byte layouts stay in Python (the relay never signs).
+//
+// SD-1 slice SD-1b (docs/storage/contract.md 6.2, 13.5): the `storage` key (`check_storage`, as a device checks
+// it), `sharing` refused, the older-client gate (`storage_gate`), and the org storage map (`check_storage_map`,
+// `verify_storage_map` over `lp("lucid-meet-org-storage-v1", canonical JSON)`, wire `{map, sig, chain}`) with the
+// relay's `MapStore`. This relay's signer terms stop at version 2, so the registry cloud check of `storage.cloud`
+// (ID-1 1.5) has no Entra provider to compare with here; the signer and devices apply it.
 
 use indexmap::IndexMap;
 use serde_json::{Map, Value};
@@ -26,16 +32,95 @@ const LIFE_MAX: i64 = 90 * 86400; // expires - issued
 const SKEW: i64 = 300; // a policy dated this far in the future is still taken
 const SIGNED_MAX: usize = 64 * 1024; // the whole signed object
 pub const RELAY_MAX: usize = 64; // org policies one relay holds
-const RETENTION_KINDS: &[&str] = &["dm", "group", "channel", "files", "canvas"];
+const RETENTION_KINDS: &[&str] = &["dm", "group", "channel", "files", "canvas", "ai"];
 const RETENTION_MAX: i64 = 3650;
-const APP_TYPES: &[&str] = &["bot", "webhook", "workflows"];
+const APP_TYPES: &[&str] = &["bot", "webhook", "workflows", "ai", "api"];
+/// API-1c 2.3: an every-message app the org's connector runs.
+pub const API_APP_TYPE: &str = "api";
+pub const APP_TYPE_WORDS: &str = "an app's type must be bot, webhook, workflows, ai or api";
+pub const API_APP_COMMANDS: &str = "an api app has no commands";
 const SCOPES: &[&str] = &["mentions", "all"];
 const EXTERNAL_ARCHIVES: &[&str] = &["allow", "refuse"];
 const APPS_PREFIX: &str = "apps.";
 const TOP_KEYS: &[&str] = &[
     "v", "org", "label", "domains", "seq", "issued", "expires", "admins", "archive", "archive_reviewers", "apps",
-    "workflows", "external_archives", "external_apps", "retention",
+    "workflows", "external_archives", "external_apps", "retention", "identity", "notify", "video", "ai", "storage", "sharing",
+    "lan_scope", "watch", "guests", "web_devices",
 ];
+/// AW-1 section 2.1: `watch` is `allow` or `refuse` (absent means refuse).
+const WATCH_VALUES: &[&str] = &["allow", "refuse"];
+pub const WATCH_SHAPE: &str = "watch must be allow or refuse";
+/// BG-1 section 2.1: the camera background of the people the policy covers.
+const VIDEO_KEYS: &[&str] = &["background", "team_image", "change"];
+const VIDEO_BACKGROUNDS: &[&str] = &["none", "blur", "team"];
+const VIDEO_CHANGES: &[&str] = &["allow", "refuse"];
+// SD-1 6.2 and 13.5 (exact words and limits of relay/meet_org_policy.py)
+const STORAGE_PROVIDERS: &[&str] = &["onedrive", "sharepoint", "gdrive", "dropbox", "s3", "relay_share", "local", "synced_folder"];
+const STORAGE_KINDS: &[&str] = &["recording", "audio", "transcript", "notes", "attendance", "chat_file", "canvas", "slides", "export"];
+/// Built-in place ids (no map entry) and the provider each one is (the same names).
+const STORAGE_BUILTINS: &[&str] = &["onedrive", "gdrive", "dropbox", "local", "synced_folder"];
+const STORAGE_KEYS: &[&str] =
+    &["providers", "labels", "own", "group", "people_choose", "form", "keep_local_days", "expire_days", "cloud", "map_sha256"];
+const STORAGE_FORMS: &[&str] = &["sealed", "plain"];
+const STORAGE_DAYS_MAX: i64 = 3650;
+const ENTRA_CLOUDS: &[&str] = &["global", "usgov-high", "usgov-dod"];
+const PLACE_LABEL_MAX: usize = 64;
+const PLACE_LABEL_MARKS: &str = " .,()&'-";
+pub const SHARING_REFUSED: &str = "sharing rules are not available on this relay yet";
+/// The SD-1b release of the Hub and the iPhone (older ones refuse the whole policy for its unknown top key).
+const STORAGE_CLIENTS: [(&str, &str); 2] = [("hub", "0.98.0"), ("ios", "0.98.0")];
+pub const STORAGE_TOO_SOON: &str =
+    "Storage rules need every Meeting Hub and iPhone app at 0.98.0 or later. Raise the relay's minimum app versions first.";
+const MAP_LABEL: &str = "lucid-meet-org-storage-v1";
+/// The whole signed map.
+const MAP_MAX: usize = 256 * 1024;
+const MAP_KEYS: &[&str] = &["v", "org", "seq", "issued", "microsoft", "places"];
+const MAP_REQUIRED: &[&str] = &["v", "org", "seq", "issued", "places"];
+const MAP_WIRE_KEYS: &[&str] = &["map", "sig", "chain"];
+const MAP_PLACES_MAX: usize = 64;
+/// `channels` and `groups` of one place.
+const MAP_ENTRIES_MAX: usize = 2000;
+const MAP_TEXT_MAX: usize = 256;
+/// `kms_key`.
+const MAP_KEY_MAX: usize = 2048;
+/// Orgs whose maps one relay holds.
+pub const MAP_ORGS_MAX: usize = 64;
+const MAP_PROVIDERS: &[&str] = &["sharepoint", "gdrive", "dropbox", "s3", "relay_share"];
+const CONNECTOR_KEYS: &[&str] = &["url", "principal", "device"];
+const SITE_KEYS: &[&str] = &["site", "drive", "folder"];
+const TEAM_KEYS: &[&str] = &["team", "channel"];
+const S3_SSE: &[&str] = &["s3", "kms", "none"];
+pub const CONNECTORS_REFUSED: &str = "storage connectors are not available on this relay yet";
+/// Personal Microsoft accounts.
+const PERSONAL_TENANT: &str = "9188040d-6c67-4c5b-b112-36a304b66dad";
+/// LS-1 section 2: the keys of `lan_scope` and its one refusal.
+const LAN_SCOPE_KEYS: &[&str] = &["networks", "ttl", "anchors"];
+const LAN_SCOPE_SHAPE: &str = "lan_scope must list 1 to 32 private IPv4 networks, a ttl of 1 to 16 and anchors inside those networks";
+// WA-1: guest rules (contract sections 3.3 and 3.5) and web devices (section 7.1).
+const GUESTS_KEYS: &[&str] = &["links", "profile", "captioner", "rules"];
+const GUESTS_CHOICES: [(&str, &[&str]); 3] = [("links", &["allow", "refuse"]), ("profile", &["standard", "us-gov"]), ("captioner", &["allow", "refuse"])];
+const GUEST_RULES_MAX: usize = 20;
+const GUEST_MATCH_MAX: usize = 50;
+const GUEST_METHODS: &[&str] = &["none", "sso", "sso_phr", "piv"];
+const GUEST_CLASSES: &[&str] = &["*", "unverified", "verified", "us-gov"];
+const RULE_KEYS: &[&str] =
+    &["match", "allow", "verify", "lobby", "large_calls", "record", "chat", "third_party_text", "ai", "captions", "ocsp", "link_max_minutes", "log_hours"];
+const RULE_CHOICES: [(&str, &[&str]); 8] = [
+    ("lobby", &["verified_bypass", "always"]),
+    ("large_calls", &["allow", "refuse"]),
+    ("record", &["consent", "refuse"]),
+    ("chat", &["any", "e2ee"]),
+    ("third_party_text", &["allow", "refuse"]),
+    ("ai", &["any", "local", "off"]),
+    ("captions", &["on", "off"]),
+    ("ocsp", &["best_effort", "required"]),
+];
+const RULE_RANGES: [(&str, i64, i64); 2] = [("link_max_minutes", 1, 1440), ("log_hours", 0, 168)];
+const WEB_DEVICES_KEYS: &[&str] = &["allow", "max_hours", "verify"];
+const WEB_VERIFY: &[&str] = &["sso", "sso_phr"];
+const WEB_HOURS_MAX: i64 = 168;
+/// NT-1 section 3.9: the only `notify` the policy may carry.
+const NOTIFY_SHAPE: &str = "notify must be {\"previews\": \"off\"}";
 const REQUIRED: &[&str] = &["v", "org", "label", "domains", "seq", "issued", "expires"];
 const ARCHIVE_KEYS: &[&str] = &["principal", "device", "host", "since"];
 const APP_KEYS: &[&str] =
@@ -43,7 +128,44 @@ const APP_KEYS: &[&str] =
 const APP_REQUIRED: &[&str] = &["principal", "device", "name", "type", "scope", "host"];
 const COMMAND_KEYS: &[&str] = &["name", "description", "usage"];
 const WIRE_KEYS: &[&str] = &["policy", "sig", "chain"];
-const SSO_SERVICE_KEYS: &[&str] = &["serial", "orgs", "domains"];
+const SSO_SERVICE_KEYS: &[&str] = &["serial", "orgs", "domains", "guest_verify"];
+const SSO_SERVICE_REQUIRED: &[&str] = &["serial", "orgs", "domains"];
+
+// ---- ID-1 (docs/identity/contract.md sections 1.5, 3.1 to 3.3 and 3.8) ----
+/// The Lucid password baseline `B` (owner decision 1, TechLead187/lucidagentIDEaddon#251): the Hub vault's 8.
+pub const PASSWORD_BASELINE: i64 = 8;
+/// Release gates the Rust relay build holds `verified` (2.12): none until G-RUST is verified and released.
+pub const RELAY_GATES: &[&str] = &[];
+const IDENTITY_KEYS: &[&str] = &[
+    "v", "min_password_length", "require_phishing_resistant", "session_max_minutes", "idle_max_minutes", "signin_max_days",
+    "passwordless_unlock", "providers", "imported",
+];
+const UNLOCK_KEYS: &[&str] = &["required", "enforce_at", "kinds", "exceptions"];
+const EXCEPTION_KEYS: &[&str] = &["id", "device", "until"];
+const IR_PROVIDER_KEYS: &[&str] = &["id", "iss", "phr_values"];
+const IMPORTED_KEYS: &[&str] = &["provider", "read_at", "proposal_sha256"];
+const IDENTITY_PROVIDER_KEYS: &[&str] = &["org", "id", "kind", "cloud", "iss", "sso_serial", "allowed_domains"];
+const IDENTITY_PROVIDER_REQUIRED: &[&str] = &["org", "id", "kind", "iss", "sso_serial", "allowed_domains"];
+const PROVIDER_KINDS: &[&str] = &["entra", "logingov", "okta", "google", "keycloak", "authentik", "jumpcloud", "ping", "saml"];
+const REGISTRY_MAX: usize = 64;
+const IR_PROVIDERS_MAX: usize = 8;
+/// Revision 5: at most 4 `phr_values` per provider.
+const PHR_MAX: usize = 4;
+/// Revision 6: each `phr_values` entry at most 128 characters.
+const PHR_LEN: usize = 128;
+const EXCEPTIONS_MAX: usize = 64;
+const IMPORTED_MAX: usize = 8;
+const EXCEPTION_LIFE: i64 = 14 * 86400;
+const EVIDENCE_MAX: usize = 32;
+const EVIDENCE_LEN: usize = 256;
+const EVIDENCE_PREFIXES: &[&str] = &["acr:", "acrs:", "aal:", "saml:", "saml-amr:"];
+const LOWERING_LABEL: &str = "lucid-identity-lowering-v1";
+const LOWERING_KEYS: &[&str] =
+    &["v", "typ", "org", "base_seq", "base_hash", "next_seq", "policy", "reason", "signed_at", "effective_at", "signers"];
+const LOWERING_WIRE_KEYS: &[&str] = &["lowering", "sig", "chain"];
+const LOWERING_SIGNER_KEYS: &[&str] = &["principal", "cert_sha256", "proof"];
+const LOWERING_NOTICE: i64 = 86400;
+const REASON_MAX: usize = 500;
 
 // Words (contract PC-1, exact).
 pub const DOMAIN_REFUSED: &str = "that domain is not assigned to this organization";
@@ -360,9 +482,48 @@ pub struct SignerTerms {
     pub org_domains: IndexMap<String, Vec<String>>,
     pub org_admins: IndexMap<String, Vec<String>>,
     pub intermediate_serial: String,
+    /// The signer policy says `enclave` (AI-1 1.2: frontier only through AskSage).
+    pub enclave: bool,
+    /// `sso_services`: (serial, orgs, domains) of each registered SSO service (AI-1 6.4 binds its posts to them).
+    pub sso_services: Vec<(String, Vec<String>, Vec<String>)>,
+    /// Serials of the SSO services listed with `guest_verify: true` (WA-1 section 2.6).
+    pub guest_verifiers: Vec<String>,
+    /// The signer policy's version (1, 2 or 3); ID-1 needs 3.
+    pub version: i64,
+    /// Version 3: the root-signed provider registry (1.5).
+    pub identity_providers: Vec<IdentityProvider>,
+}
+
+/// One root-signed registry entry (signer policy v3 `identity_providers`); the relay checks `allowed_domains` but
+/// does not keep it (the signer and the SSO service apply it). `cloud` (an entra entry's, "" otherwise) is kept for
+/// SD-1's `storage.cloud` check.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct IdentityProvider {
+    pub org: String,
+    pub id: String,
+    pub kind: String,
+    pub iss: String,
+    pub sso_serial: String,
+    pub cloud: String,
 }
 
 impl SignerTerms {
+    /// The registry entry `(org, id)`.
+    pub fn provider(&self, org: &str, id: &str) -> Option<&IdentityProvider> {
+        self.identity_providers.iter().find(|p| p.org == org && p.id == id)
+    }
+
+    /// Every registry entry of `org`.
+    pub fn providers_of(&self, org: &str) -> Vec<&IdentityProvider> {
+        self.identity_providers.iter().filter(|p| p.org == org).collect()
+    }
+
+    /// True when the SSO service with certificate `serial` (hex) is listed with `guest_verify: true`.
+    pub fn guest_verifier(&self, serial: &str) -> bool {
+        let serial = serial.to_lowercase();
+        self.guest_verifiers.iter().any(|s| *s == serial)
+    }
+
     /// The org the root assigned `domain` to ("" when none).
     pub fn org_of(&self, domain: &str) -> String {
         self.org_domains.iter().find(|(_, names)| names.iter().any(|n| n == domain)).map(|(o, _)| o.clone()).unwrap_or_default()
@@ -374,10 +535,17 @@ impl SignerTerms {
 pub fn signer_terms(policy: &Obj) -> Result<SignerTerms, String> {
     let serial = pj::s(policy, "intermediate_serial").to_lowercase();
     if py_eq(policy.get("v"), 1) {
-        return Ok(SignerTerms { intermediate_serial: serial, ..SignerTerms::default() });
+        return Ok(SignerTerms { intermediate_serial: serial, version: 1, ..SignerTerms::default() });
     }
-    if !py_eq(policy.get("v"), 2) {
-        return Err("the signer policy is not version 1 or 2".into());
+    let version = if py_eq(policy.get("v"), 2) {
+        2
+    } else if py_eq(policy.get("v"), 3) {
+        3
+    } else {
+        return Err("the signer policy is not version 1, 2 or 3".into());
+    };
+    if version == 2 && policy.contains_key("identity_providers") {
+        return Err("identity_providers needs signer policy version 3".into());
     }
     let empty_obj = Value::Object(Obj::new());
     let empty_list = Value::Array(Vec::new());
@@ -415,10 +583,24 @@ pub fn signer_terms(policy: &Obj) -> Result<SignerTerms, String> {
         org_admins.insert(org.clone(), kept);
     }
     let services = list(policy.get("sso_services").unwrap_or(&empty_list), "sso_services", 100, 0)?;
+    let mut sso_services = Vec::new();
+    let mut guest_verifiers = Vec::new();
+    let mut service_orgs: Vec<(String, String)> = Vec::new();
     for svc in services {
-        let o = keys(svc, SSO_SERVICE_KEYS, SSO_SERVICE_KEYS, "an SSO service")?;
+        if let (Some(serial), Some(orgs)) = (svc.get("serial").and_then(Value::as_str), svc.get("orgs").and_then(Value::as_array)) {
+            service_orgs.extend(orgs.iter().filter_map(Value::as_str).map(|o| (serial.to_string(), o.to_string())));
+        }
+        let o = keys(svc, SSO_SERVICE_KEYS, SSO_SERVICE_REQUIRED, "an SSO service")?;
         if !o["serial"].as_str().is_some_and(|s| hex_ok(s, 1, 40)) {
             return Err("an SSO service's serial must be lower-case hex".into());
+        }
+        let guest_verify = match o.get("guest_verify") {
+            None => false,
+            Some(Value::Bool(b)) => *b,
+            Some(_) => return Err("an SSO service's guest_verify must be true or false".into()),
+        };
+        if guest_verify {
+            guest_verifiers.push(pj::py_str(&o["serial"]));
         }
         let orgs = list(&o["orgs"], "an SSO service's orgs", RELAY_MAX, 1)?;
         if orgs.iter().any(|x| !x.as_str().is_some_and(|x| org_domains.contains_key(x))) {
@@ -433,6 +615,8 @@ pub fn signer_terms(policy: &Obj) -> Result<SignerTerms, String> {
         if domains.iter().any(|d| !d.as_str().is_some_and(|d| allowed.contains(d))) {
             return Err("an SSO service names a domain outside its organizations".into());
         }
+        let texts = |l: &[Value]| l.iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>();
+        sso_services.push((pj::py_str(&o["serial"]), texts(orgs), texts(domains)));
     }
     // the relay checks the SSO terms (the signer and the SSO service apply them) but keeps none of them
     let raw_sso = policy.get("sso").unwrap_or(&empty_obj).as_object().ok_or("sso must be an object")?;
@@ -457,7 +641,516 @@ pub fn signer_terms(policy: &Obj) -> Result<SignerTerms, String> {
     if !matches!(policy.get("enclave"), None | Some(Value::Bool(_))) {
         return Err("enclave must be true or false".into());
     }
-    Ok(SignerTerms { org_domains, org_admins, intermediate_serial: serial })
+    let enclave = policy.get("enclave") == Some(&Value::Bool(true));
+    let identity_providers = registry_of(policy.get("identity_providers"), &org_domains, &service_orgs)?;
+    Ok(SignerTerms { org_domains, org_admins, intermediate_serial: serial, enclave, sso_services, guest_verifiers, version, identity_providers })
+}
+
+/// Signer policy v3 `identity_providers` (1.5): a canonical array sorted by `(org, id)`, unique by `(org, id)` and
+/// `(org, iss)`, at most 64.
+fn registry_of(v: Option<&Value>, org_domains: &IndexMap<String, Vec<String>>, services: &[(String, String)]) -> Res<Vec<IdentityProvider>> {
+    let Some(v) = v else { return Ok(Vec::new()) };
+    let what = "identity_providers";
+    let entries = list(v, what, REGISTRY_MAX, 0)?;
+    let mut out: Vec<IdentityProvider> = Vec::new();
+    for e in entries {
+        let o = keys(e, IDENTITY_PROVIDER_KEYS, IDENTITY_PROVIDER_REQUIRED, "an identity provider")?;
+        let s = |k: &str| o.get(k).and_then(Value::as_str).unwrap_or_default().to_string();
+        let p = IdentityProvider {
+            org: s("org"),
+            id: s("id"),
+            kind: s("kind"),
+            iss: s("iss"),
+            sso_serial: s("sso_serial"),
+            cloud: s("cloud"),
+        };
+        let Some(domains) = org_domains.get(&p.org) else {
+            return Err("an identity provider names an organization without domains".into());
+        };
+        if !o["id"].as_str().is_some_and(slug_ok) || re_core(&p.id) != p.id {
+            return Err("an identity provider's id must be 1 to 32 of a-z, 0-9 and -".into());
+        }
+        if !PROVIDER_KINDS.contains(&p.kind.as_str()) {
+            return Err(format!("{}: unknown identity provider kind", p.id));
+        }
+        match o.get("cloud") {
+            None if p.kind != "entra" => {}
+            Some(Value::String(c)) if p.kind == "entra" && ENTRA_CLOUDS.contains(&c.as_str()) => {}
+            _ => return Err(format!("{}: cloud is only for entra (global, usgov-high or usgov-dod)", p.id)),
+        }
+        if !o["iss"].as_str().is_some_and(|i| (1..=1024).contains(&i.chars().count()) && pj::printable(i)) {
+            return Err(format!("{}: iss must be 1 to 1024 characters", p.id));
+        }
+        if !o["sso_serial"].as_str().is_some_and(|x| hex_ok(x, 1, 40)) || !services.iter().any(|(serial, org)| *serial == p.sso_serial && *org == p.org) {
+            return Err(format!("{}: sso_serial must be an SSO service of {}", p.id, p.org));
+        }
+        let allowed = canonical_strings(&o["allowed_domains"], &format!("{}: allowed_domains", p.id), 20, 1, 1, 253)?;
+        if allowed.iter().any(|d| !domains.contains(d)) {
+            return Err(format!("{}: allowed_domains must be domains of {}", p.id, p.org));
+        }
+        if let Some(prev) = out.last() {
+            if (prev.org.as_bytes(), prev.id.as_bytes()) >= (p.org.as_bytes(), p.id.as_bytes()) {
+                return Err(format!("{what} must be sorted by (org, id), each once"));
+            }
+        }
+        if out.iter().any(|q| q.org == p.org && q.iss == p.iss) {
+            return Err(format!("{what} names one issuer twice for {}", p.org));
+        }
+        out.push(p);
+    }
+    Ok(out)
+}
+
+/// A signed string list (shared rule C2): strings sorted by UTF-8 bytes, each once, `low` to `high` entries of
+/// `min_len` to `max_len` characters. Never normalized.
+fn canonical_strings(v: &Value, what: &str, high: usize, low: usize, min_len: usize, max_len: usize) -> Res<Vec<String>> {
+    let Some(a) = v.as_array().filter(|a| (low..=high).contains(&a.len())) else {
+        return Err(format!("{what} must be a list of {low} to {high} entries"));
+    };
+    let mut out: Vec<String> = Vec::with_capacity(a.len());
+    for x in a {
+        let Some(s) = x.as_str().filter(|s| (min_len..=max_len).contains(&s.chars().count())) else {
+            return Err(format!("{what} must list strings of {min_len} to {max_len} characters"));
+        };
+        if out.last().is_some_and(|prev| prev.as_bytes() >= s.as_bytes()) {
+            return Err(format!("{what} must be sorted, each entry once"));
+        }
+        out.push(s.to_string());
+    }
+    Ok(out)
+}
+
+// ---- identity rules (IR-1, 3.1 to 3.3) ------------------------------------------------------------------------
+
+fn invalid(field: &str) -> PolicyError {
+    PolicyError::Bad(format!("the identity rules are not valid: {field}"))
+}
+
+const LOGINGOV_PHR: &[&str] =
+    &["aal:http://idmanagement.gov/ns/assurance/aal/2?hspd12=true", "aal:http://idmanagement.gov/ns/assurance/aal/2?phishing_resistant=true"];
+
+/// 2.10 (`PHR_RULES`): the `phr_values` prefixes and exact values a registry kind may use, and the gate that must be
+/// `verified` first.
+fn phr_rule(kind: &str) -> Option<(&'static [&'static str], &'static [&'static str], &'static str)> {
+    match kind {
+        "entra" => Some((&["acrs:"], &[], "G-ENTRA-ACRS")),
+        "logingov" => Some((&[], LOGINGOV_PHR, "G-LOGINGOV-AAL")),
+        "okta" => Some((&["acr:"], &[], "G-OKTA-PHR")),
+        "keycloak" => Some((&["acr:", "amr:"], &[], "G-KC-ACR")),
+        "authentik" => Some((&[], &["amr:sc", "amr:user"], "G-AK-AMR")),
+        _ => None,
+    }
+}
+
+/// `phr_allowed`: every value is allowed for the kind and, with `gates`, its gate is verified.
+fn phr_allowed(kind: &str, values: &[String], gates: Option<&[&str]>) -> bool {
+    let Some((prefixes, exact, gate)) = phr_rule(kind) else { return false };
+    values.iter().all(|v| exact.contains(&v.as_str()) || prefixes.iter().any(|p| v.starts_with(p) && v.len() > p.len())) && gates.is_none_or(|g| g.contains(&gate))
+}
+
+/// `provider_name`: the name the 3.7 words give a registry kind.
+pub fn kind_name(kind: &str) -> &'static str {
+    match kind {
+        "entra" => "Microsoft",
+        "logingov" => "Login.gov",
+        "okta" => "Okta",
+        "google" => "Google",
+        "keycloak" => "Keycloak",
+        "authentik" => "Authentik",
+        "jumpcloud" => "JumpCloud",
+        "ping" => "Ping Identity",
+        "saml" => "SAML",
+        _ => "your identity provider",
+    }
+}
+
+fn phr_unproven(name: &str) -> PolicyError {
+    PolicyError::Refused(format!("{name} cannot prove a phishing-resistant sign-in yet; nothing was signed"))
+}
+
+fn path(base: &str, key: &str) -> String {
+    if base.is_empty() {
+        key.to_string()
+    } else {
+        format!("{base}.{key}")
+    }
+}
+
+/// An object at `at` whose keys are all `allowed` ("unknown identity rule: <path>" otherwise).
+fn rule_obj<'a>(v: &'a Value, allowed: &[&str], required: &[&str], at: &str) -> Result<&'a Obj, PolicyError> {
+    let o = v.as_object().ok_or_else(|| invalid(at))?;
+    let mut extra: Vec<&String> = o.keys().filter(|k| !allowed.contains(&k.as_str())).collect();
+    extra.sort();
+    if let Some(k) = extra.first() {
+        return Err(PolicyError::Bad(format!("unknown identity rule: {}", path(at, k))));
+    }
+    if let Some(k) = required.iter().find(|k| !o.contains_key(**k)) {
+        return Err(invalid(&path(at, k)));
+    }
+    Ok(o)
+}
+
+/// `_id_int`: an int (not a bool) from `low` to `high`.
+fn id_int(v: &Value, field: &str, low: i64, high: i64) -> Result<i64, PolicyError> {
+    pj::as_int(Some(v)).filter(|n| (low..=high).contains(n)).ok_or_else(|| invalid(field))
+}
+
+fn id_bool(v: &Value, field: &str) -> Result<bool, PolicyError> {
+    v.as_bool().ok_or_else(|| invalid(field))
+}
+
+/// `_id_text`: a printable string of `low` to `high` characters.
+fn id_text<'a>(v: &'a Value, field: &str, low: usize, high: usize) -> Result<&'a str, PolicyError> {
+    v.as_str().filter(|s| (low..=high).contains(&s.chars().count()) && pj::printable(s)).ok_or_else(|| invalid(field))
+}
+
+fn id_list<'a>(v: &'a Value, field: &str, high: usize) -> Result<&'a [Value], PolicyError> {
+    v.as_array().filter(|a| a.len() <= high).map(Vec::as_slice).ok_or_else(|| invalid(field))
+}
+
+/// `_id_strings`: a signed string list, sorted by UTF-8 bytes, unique, bounded.
+fn id_strings(v: &Value, field: &str, high: usize, low_len: usize, high_len: usize) -> Result<Vec<String>, PolicyError> {
+    let list = id_list(v, field, high)?;
+    let mut out: Vec<String> = Vec::with_capacity(list.len());
+    for item in list {
+        out.push(id_text(item, field, low_len, high_len)?.to_string());
+    }
+    if out.windows(2).any(|w| w[0].as_bytes() >= w[1].as_bytes()) {
+        return Err(invalid(field));
+    }
+    Ok(out)
+}
+
+fn name_ok(s: &str) -> bool {
+    slug_ok(s) && re_core(s) == s
+}
+
+/// EXCEPTION_DEVICE_RE: `urn:lucid-meet:device:<16 hex>` (Meeting Hub) or `n_<32 hex>` (Remote Spokes).
+fn exception_device_ok(s: &str) -> bool {
+    let hex = |t: &str, n: usize| t.len() == n && t.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+    s.strip_prefix("urn:lucid-meet:device:").is_some_and(|t| hex(t, 16)) || s.strip_prefix("n_").is_some_and(|t| hex(t, 32))
+}
+
+/// `(id, iss, phr_values)` of an IR-1 provider entry.
+pub type IrProvider = (String, String, Vec<String>);
+
+/// `_check_rule_providers`: the shape of IR-1 `providers` (sorted by id, unique by id and iss).
+fn check_rule_providers(v: &Value) -> Result<Vec<IrProvider>, PolicyError> {
+    let list = id_list(v, "providers", IR_PROVIDERS_MAX)?;
+    let mut out: Vec<IrProvider> = Vec::with_capacity(list.len());
+    for (i, p) in list.iter().enumerate() {
+        let at = format!("providers[{i}]");
+        let o = rule_obj(p, IR_PROVIDER_KEYS, &["id", "iss"], &at)?;
+        let id = o["id"].as_str().filter(|s| name_ok(s)).ok_or_else(|| invalid(&path(&at, "id")))?;
+        let iss = id_text(&o["iss"], &path(&at, "iss"), 1, 1024)?;
+        let phr = match o.get("phr_values") {
+            None => Vec::new(),
+            Some(v) => id_strings(v, &path(&at, "phr_values"), PHR_MAX, 3, PHR_LEN)?,
+        };
+        out.push((id.to_string(), iss.to_string(), phr));
+    }
+    let mut isses: Vec<&str> = out.iter().map(|p| p.1.as_str()).collect();
+    isses.sort_unstable();
+    isses.dedup();
+    if out.windows(2).any(|w| w[0].0.as_bytes() >= w[1].0.as_bytes()) || isses.len() != out.len() {
+        return Err(invalid("providers"));
+    }
+    Ok(out)
+}
+
+/// `meet_org_policy.check_identity`: the IR-1 object of an org policy (3.1) against the root-signed registry and the
+/// release gates this build holds `verified`. `label` names the org in the 3.7 words; `issued` is the policy's.
+/// `stored`: the signer's stored effective provider set (an absent `providers` means it); None: the org's registry.
+#[allow(clippy::too_many_arguments)]
+pub fn check_identity(
+    identity: &Value,
+    terms: &SignerTerms,
+    org: &str,
+    label: &str,
+    issued: i64,
+    gates: Option<&[&str]>,
+    stored: Option<&[IrProvider]>,
+) -> Result<(), PolicyError> {
+    let (o, listed, require_phr) = identity_parts(identity, PASSWORD_BASELINE, label, issued, gates)?;
+    let registry = terms.providers_of(org);
+    let by_id = |id: &String| registry.iter().find(|e| e.id == *id).copied();
+    for (id, iss, _) in listed.iter().flatten() {
+        if by_id(id).is_none_or(|e| e.iss != *iss) {
+            return Err(PolicyError::Refused(format!("that identity provider is not registered for {label} by the root; nothing was signed")));
+        }
+    }
+    for (id, _, phr) in listed.iter().flatten() {
+        let kind = by_id(id).map(|e| e.kind.as_str()).unwrap_or_default();
+        if !phr.is_empty() && !phr_allowed(kind, phr, gates) {
+            return Err(phr_unproven(kind_name(kind)));
+        }
+    }
+    let Some(gates) = gates else { return Ok(()) };
+    let eff: Vec<IrProvider> = match (listed, stored) {
+        (Some(l), _) => l,
+        (None, Some(s)) => s.to_vec(),
+        (None, None) => registry.iter().map(|e| (e.id.clone(), e.iss.clone(), Vec::new())).collect(),
+    };
+    let kinds: Vec<&str> = eff.iter().map(|(id, iss, _)| by_id(id).filter(|e| e.iss == *iss).map(|e| e.kind.as_str()).unwrap_or_default()).collect();
+    if require_phr {
+        for ((id, _, phr), kind) in eff.iter().zip(&kinds) {
+            if phr.is_empty() || !phr_allowed(kind, phr, Some(gates)) {
+                let name = if kind.is_empty() || kind_name(kind) == "your identity provider" { id.as_str() } else { kind_name(kind) };
+                return Err(phr_unproven(name));
+            }
+        }
+    }
+    if kinds.contains(&"logingov") && o.get("signin_max_days").and_then(Value::as_i64).is_none_or(|d| d > 30) {
+        return Err(invalid("signin_max_days"));
+    }
+    Ok(())
+}
+
+/// ID-1 3.1, shape only: an IR-1 object a device reads from a carrier the root already checked, with no provider
+/// registry and no gates (orgrules.ts `identityProblem` with `gates: null` and no registry). `baseline`: the
+/// product's password baseline (Remote Spokes: 12). `issued`: the carrier's signing time.
+pub fn identity_shape(identity: &Value, baseline: i64, issued: i64) -> Result<(), PolicyError> {
+    identity_parts(identity, baseline, "this organization", issued, None).map(|_| ())
+}
+
+/// The IR-1 object, its listed providers and `require_phishing_resistant`.
+type IdentityParts<'a> = (&'a Obj, Option<Vec<IrProvider>>, bool);
+
+/// The registry-free part of `check_identity`.
+fn identity_parts<'a>(identity: &'a Value, baseline: i64, label: &str, issued: i64, gates: Option<&[&str]>) -> Result<IdentityParts<'a>, PolicyError> {
+    if !identity.is_object() {
+        return Err(invalid("identity"));
+    }
+    let o = rule_obj(identity, IDENTITY_KEYS, &["v"], "")?;
+    id_int(&o["v"], "v", 2, 2)?;
+    if let Some(v) = o.get("min_password_length") {
+        let floor = pj::as_int(Some(v)).filter(|n| *n <= 64).ok_or_else(|| invalid("min_password_length"))?;
+        if floor < baseline {
+            return Err(PolicyError::Refused(format!("the password minimum cannot be below Lucid's minimum of {baseline}")));
+        }
+    }
+    let require_phr = match o.get("require_phishing_resistant") {
+        None => false,
+        Some(v) => id_bool(v, "require_phishing_resistant")?,
+    };
+    for (key, low, high) in [("session_max_minutes", 5, 1440), ("idle_max_minutes", 1, 60), ("signin_max_days", 1, 90)] {
+        if let Some(v) = o.get(key) {
+            id_int(v, key, low, high)?;
+        }
+    }
+    if let Some(u) = o.get("passwordless_unlock") {
+        check_unlock(u, issued, label, gates)?;
+    }
+    let listed = match o.get("providers") {
+        None => None,
+        Some(v) => Some(check_rule_providers(v)?),
+    };
+    if let Some(v) = o.get("imported") {
+        check_imported(v)?;
+    }
+    Ok((o, listed, require_phr))
+}
+
+/// `_check_unlock`: IR-1 `passwordless_unlock`. Without `gates` (a device or the relay checking a policy the
+/// signer already checked) the gate and `issued` checks are skipped, as in Python.
+fn check_unlock(u: &Value, issued: i64, label: &str, gates: Option<&[&str]>) -> Result<(), PolicyError> {
+    let at = "passwordless_unlock";
+    let u = rule_obj(u, UNLOCK_KEYS, &[], at)?;
+    let required = match u.get("required") {
+        None => false,
+        Some(v) => id_bool(v, "passwordless_unlock.required")?,
+    };
+    match u.get("enforce_at") {
+        Some(v) => {
+            let when = id_int(v, "passwordless_unlock.enforce_at", 0, MAX_INT)?;
+            if gates.is_some() && when < issued {
+                return Err(invalid("passwordless_unlock.enforce_at"));
+            }
+        }
+        None if required => return Err(invalid("passwordless_unlock.enforce_at")),
+        None => {}
+    }
+    if let Some(k) = u.get("kinds") {
+        if gates.is_some_and(|g| !g.contains(&"G-KIND")) {
+            return Err(PolicyError::Refused(format!("{label} cannot require a particular kind of authenticator yet; nothing was signed")));
+        }
+        let kinds = id_strings(k, "passwordless_unlock.kinds", 8, 1, 32)?;
+        if kinds.is_empty() || !kinds.iter().all(|k| name_ok(k)) {
+            return Err(invalid("passwordless_unlock.kinds"));
+        }
+    }
+    let empty = Value::Array(Vec::new());
+    let list = id_list(u.get("exceptions").unwrap_or(&empty), "passwordless_unlock.exceptions", EXCEPTIONS_MAX)?;
+    for (i, e) in list.iter().enumerate() {
+        let at = format!("passwordless_unlock.exceptions[{i}]");
+        let x = rule_obj(e, EXCEPTION_KEYS, EXCEPTION_KEYS, &at)?;
+        if !x["id"].as_str().is_some_and(|s| hex_ok(s, 16, 16) && re_core(s) == s) {
+            return Err(invalid(&path(&at, "id")));
+        }
+        if !x["device"].as_str().is_some_and(exception_device_ok) {
+            return Err(invalid(&path(&at, "device")));
+        }
+        if id_int(&x["until"], &path(&at, "until"), 0, MAX_INT)? > issued + EXCEPTION_LIFE {
+            return Err(PolicyError::Refused(EXCEPTION_REFUSED.into()));
+        }
+    }
+    let ids: Vec<&str> = list.iter().map(|e| e["id"].as_str().unwrap_or_default()).collect();
+    let mut devices: Vec<&str> = list.iter().map(|e| e["device"].as_str().unwrap_or_default()).collect();
+    devices.sort_unstable();
+    devices.dedup();
+    if ids.windows(2).any(|w| w[0].as_bytes() >= w[1].as_bytes()) || devices.len() != list.len() {
+        return Err(invalid("passwordless_unlock.exceptions"));
+    }
+    Ok(())
+}
+
+/// `_check_imported`: IR-1 `imported`, sorted by `(provider, read_at)`, unique by `proposal_sha256`.
+fn check_imported(v: &Value) -> Result<(), PolicyError> {
+    let list = id_list(v, "imported", IMPORTED_MAX)?;
+    for (i, item) in list.iter().enumerate() {
+        let at = format!("imported[{i}]");
+        let x = rule_obj(item, IMPORTED_KEYS, IMPORTED_KEYS, &at)?;
+        if !x["provider"].as_str().is_some_and(name_ok) {
+            return Err(invalid(&path(&at, "provider")));
+        }
+        id_int(&x["read_at"], &path(&at, "read_at"), 0, MAX_INT)?;
+        if !x["proposal_sha256"].as_str().is_some_and(|h| hex_ok(h, 64, 64) && re_core(h) == h) {
+            return Err(invalid(&path(&at, "proposal_sha256")));
+        }
+    }
+    let keys: Vec<(&[u8], i64)> = list.iter().map(|x| (x["provider"].as_str().unwrap_or_default().as_bytes(), x["read_at"].as_i64().unwrap_or(0))).collect();
+    let mut hashes: Vec<&str> = list.iter().map(|x| x["proposal_sha256"].as_str().unwrap_or_default()).collect();
+    hashes.sort_unstable();
+    hashes.dedup();
+    if keys.windows(2).any(|w| w[0] >= w[1]) || hashes.len() != list.len() {
+        return Err(invalid("imported"));
+    }
+    Ok(())
+}
+
+pub const EXCEPTION_REFUSED: &str =
+    "that computer already had its one unlock exception, or the exception lasts too long; use the two-administrator lowering; nothing was signed";
+
+// The relay signs nothing, so 3.2 and 3.3 run here only on the shared vectors (the signer and devices apply them).
+
+/// 3.2, normative: does one requirement match the attested method array.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn method_matches(requirement: &str, evidence: &[String]) -> bool {
+    let has = |x: &str| evidence.iter().any(|e| e == x);
+    if requirement.contains(':') {
+        if let Some(raw) = requirement.strip_prefix("amr:") {
+            return has(raw);
+        }
+        return has(requirement);
+    }
+    has(requirement) || ["acr:", "acrs:", "aal:"].iter().any(|p| has(&format!("{p}{requirement}")))
+}
+
+/// 3.2: an attested method array is a signed string list (sorted by UTF-8 bytes, each once, at most 32 entries of 1
+/// to 256 characters), and a value with ":" carries an evidence prefix (a raw `amr` value never has one).
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn evidence_ok(evidence: &Value) -> bool {
+    match canonical_strings(evidence, "methods", EVIDENCE_MAX, 0, 1, EVIDENCE_LEN) {
+        Ok(list) => list.iter().all(|e| pj::printable(e) && (!e.contains(':') || EVIDENCE_PREFIXES.iter().any(|p| e.starts_with(p) && e.len() > p.len()))),
+        Err(_) => false,
+    }
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn int_field(o: &Obj, key: &str) -> Option<i64> {
+    o.get(key).and_then(Value::as_i64)
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn bool_field(o: &Obj, key: &str) -> bool {
+    matches!(o.get(key), Some(Value::Bool(true)))
+}
+
+#[cfg_attr(not(test), allow(dead_code))]
+fn ir_list(v: Option<&Value>) -> Option<Vec<IrProvider>> {
+    let a = v?.as_array()?;
+    Some(
+        a.iter()
+            .filter_map(Value::as_object)
+            .map(|p| (pj::s(p, "id"), pj::s(p, "iss"), p.get("phr_values").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect()))
+            .collect(),
+    )
+}
+
+/// 3.3, normative: Ok when `new` is stronger than or equal to `old`, else Err with the first rule it lowers (in the
+/// order of 3.3). `old` and `new` are the `identity` objects (None: absent, every field absent). `stored` is the
+/// signer's stored effective provider set (an absent list means it); `used_devices` and `used_ids` the devices and
+/// exception ids that ever had an exception for this org.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn identity_stronger_or_equal(
+    old: Option<&Obj>,
+    new: Option<&Obj>,
+    stored: &[IrProvider],
+    used_devices: &[String],
+    used_ids: &[String],
+) -> Result<(), &'static str> {
+    let empty = Obj::new();
+    let (old, new) = (old.unwrap_or(&empty), new.unwrap_or(&empty));
+    let min = |o: &Obj| int_field(o, "min_password_length").unwrap_or(PASSWORD_BASELINE);
+    if min(new) < min(old) {
+        return Err("min_password_length");
+    }
+    if bool_field(old, "require_phishing_resistant") && !bool_field(new, "require_phishing_resistant") {
+        return Err("require_phishing_resistant");
+    }
+    for key in ["session_max_minutes", "idle_max_minutes", "signin_max_days"] {
+        match (int_field(old, key), int_field(new, key)) {
+            (Some(_), None) => return Err(key),
+            (Some(a), Some(b)) if b > a => return Err(key),
+            _ => {}
+        }
+    }
+    let unlock = |o: &Obj| o.get("passwordless_unlock").and_then(Value::as_object).cloned().unwrap_or_default();
+    let (ou, nu) = (unlock(old), unlock(new));
+    if bool_field(&ou, "required") && !bool_field(&nu, "required") {
+        return Err("passwordless_unlock.required");
+    }
+    match (int_field(&ou, "enforce_at"), int_field(&nu, "enforce_at")) {
+        (Some(_), None) => return Err("passwordless_unlock.enforce_at"),
+        (Some(a), Some(b)) if b > a => return Err("passwordless_unlock.enforce_at"),
+        _ => {}
+    }
+    if bool_field(&ou, "required") {
+        let kinds = |u: &Obj| u.get("kinds").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_str).map(str::to_string).collect::<Vec<_>>());
+        match (kinds(&ou), kinds(&nu)) {
+            (None, _) => {}
+            (Some(_), None) => return Err("passwordless_unlock.kinds"),
+            (Some(a), Some(b)) if !b.iter().all(|k| a.contains(k)) => return Err("passwordless_unlock.kinds"),
+            _ => {}
+        }
+    }
+    let resolve = |o: &Obj| ir_list(o.get("providers")).unwrap_or_else(|| stored.to_vec());
+    let (op, np) = (resolve(old), resolve(new));
+    if !np.iter().all(|(id, iss, _)| op.iter().any(|(i, s, _)| i == id && s == iss)) {
+        return Err("providers");
+    }
+    // phr_values may only shrink while phishing-resistant sign-in is required
+    if bool_field(old, "require_phishing_resistant") {
+        for (id, iss, phr) in &np {
+            let before = op.iter().find(|(i, s, _)| i == id && s == iss).map(|p| &p.2);
+            if before.is_some_and(|b| !phr.iter().all(|x| b.contains(x))) {
+                return Err("phr_values");
+            }
+        }
+    }
+    let exceptions = |u: &Obj| u.get("exceptions").and_then(Value::as_array).cloned().unwrap_or_default();
+    let before = exceptions(&ou);
+    for e in exceptions(&nu) {
+        if before.contains(&e) {
+            continue;
+        }
+        let device = e.get("device").and_then(Value::as_str).unwrap_or_default();
+        let id = e.get("id").and_then(Value::as_str).unwrap_or_default();
+        if used_devices.iter().any(|d| d == device) || used_ids.iter().any(|d| d == id) {
+            return Err("exceptions");
+        }
+    }
+    Ok(())
 }
 
 // ---- the org policy -------------------------------------------------------------------------------------------
@@ -481,6 +1174,95 @@ fn service<'a>(principal: &'a Value, domains: &[&str], what: &str) -> Res<&'a st
 /// True when some entry equals an earlier one (`len(set(x)) != len(x)`).
 fn has_dup<T: PartialEq>(items: &[T]) -> bool {
     (1..items.len()).any(|i| items[..i].contains(&items[i]))
+}
+
+fn choice<'a>(v: &'a Value, choices: &[&str], what: &str) -> Res<&'a str> {
+    v.as_str().filter(|s| choices.contains(s)).ok_or_else(|| format!("{what} must be {}", choices.join(" or ")))
+}
+
+fn methods(v: &Value, allowed: &[&str], what: &str, low: usize) -> Res<()> {
+    if !list(v, what, allowed.len(), low)?.iter().all(|m| m.as_str().is_some_and(|m| allowed.contains(&m))) {
+        return Err(format!("{what} may list only {}", allowed.join(", ")));
+    }
+    Ok(())
+}
+
+/// One rule object of WA-1 section 3.3 (every field optional).
+pub fn check_guest_rule(rule: &Value, what: &str) -> Res<()> {
+    let r = keys(rule, RULE_KEYS, &[], what)?;
+    canonical_json(rule)?;
+    if let Some(m) = r.get("match") {
+        for x in list(m, &format!("{what}'s match"), GUEST_MATCH_MAX, 1)? {
+            let ok = x.as_str().is_some_and(|s| GUEST_CLASSES.contains(&s) || (s.chars().count() <= 253 && s.split('.').all(label_ok)));
+            if !ok {
+                return Err(format!("{what}'s match lists *, unverified, verified, us-gov or lower-case DNS names"));
+            }
+        }
+    }
+    if r.get("allow").is_some_and(|a| !a.is_boolean()) {
+        return Err(format!("{what}'s allow must be true or false"));
+    }
+    if let Some(v) = r.get("verify") {
+        methods(v, GUEST_METHODS, &format!("{what}'s verify"), 0)?;
+    }
+    for (key, choices) in RULE_CHOICES {
+        if let Some(v) = r.get(key) {
+            choice(v, choices, &format!("{what}'s {key}"))?;
+        }
+    }
+    for (key, low, high) in RULE_RANGES {
+        if let Some(v) = r.get(key) {
+            int(v, &format!("{what}'s {key}"), low, high)?;
+        }
+    }
+    Ok(())
+}
+
+/// A list of at most 20 rule objects (`guests.rules`; the relay's `guest_rules`).
+pub fn check_guest_rules(rules: &Value, what: &str) -> Res<()> {
+    for r in list(rules, what, GUEST_RULES_MAX, 0)? {
+        check_guest_rule(r, "a guest rule")?;
+    }
+    Ok(())
+}
+
+fn check_guests(v: &Value) -> Res<()> {
+    let g = keys(v, GUESTS_KEYS, &[], "guests")?;
+    for (key, choices) in GUESTS_CHOICES {
+        if let Some(x) = g.get(key) {
+            choice(x, choices, &format!("guests.{key}"))?;
+        }
+    }
+    if let Some(r) = g.get("rules") {
+        check_guest_rules(r, "guests.rules")?;
+    }
+    Ok(())
+}
+
+fn check_web_devices(v: &Value) -> Res<()> {
+    let w = keys(v, WEB_DEVICES_KEYS, &[], "web_devices")?;
+    if w.get("allow").is_some_and(|a| !a.is_boolean()) {
+        return Err("web_devices.allow must be true or false".into());
+    }
+    if let Some(h) = w.get("max_hours") {
+        int(h, "web_devices.max_hours", 1, WEB_HOURS_MAX)?;
+    }
+    if let Some(m) = w.get("verify") {
+        methods(m, WEB_VERIFY, "web_devices.verify", 1)?;
+    }
+    Ok(())
+}
+
+/// A key hash: SHA-256 of a SubjectPublicKeyInfo DER, unpadded base64url (43 characters).
+pub fn key_sha256(spki: &[u8]) -> String {
+    crate::codec::b64u(&crate::codec::sha256(spki))
+}
+
+/// What the SSO service signs in a guest verification result (WA-1 section 2.4 step 6).
+#[allow(clippy::too_many_arguments)]
+pub fn guest_verify_bytes(room: &str, key: &str, email: &str, domain: &str, method: &str, idp: &str, aal: &str, ocsp: &str, at: i64, exp: i64) -> Vec<u8> {
+    let (a, e) = ((at as u64).to_be_bytes(), (exp as u64).to_be_bytes());
+    lp(&[b"lucid-meet-guest-verify-v1", b"1", room.as_bytes(), key.as_bytes(), email.as_bytes(), domain.as_bytes(), method.as_bytes(), idp.as_bytes(), aal.as_bytes(), ocsp.as_bytes(), &a, &e])
 }
 
 /// Every field rule and limit of an org policy, and its domains against the root's `org_domains` (Refused with
@@ -544,7 +1326,10 @@ pub fn check_policy(policy: &Value, terms: &SignerTerms) -> Result<(), PolicyErr
         text(&a["name"], "an app's name", LABEL_MAX)?;
         let kind = a["type"].as_str();
         if !kind.is_some_and(|t| APP_TYPES.contains(&t)) {
-            return Err(bad("an app's type must be bot, webhook or workflows"));
+            return Err(bad(APP_TYPE_WORDS));
+        }
+        if kind == Some(API_APP_TYPE) && a.contains_key("commands") {
+            return Err(bad(API_APP_COMMANDS)); // API-1c 2.3
         }
         if !a["scope"].as_str().is_some_and(|s| SCOPES.contains(&s)) {
             return Err(bad("an app's scope must be mentions or all"));
@@ -605,6 +1390,1504 @@ pub fn check_policy(policy: &Value, terms: &SignerTerms) -> Result<(), PolicyErr
     if let Some(r) = p.get("retention") {
         for (kind, days) in keys(r, RETENTION_KINDS, &[], "retention")? {
             int(days, &format!("retention.{kind}"), if kind == "canvas" { 0 } else { 1 }, RETENTION_MAX)?;
+        }
+    }
+    if let Some(identity) = p.get("identity") {
+        if terms.version < 3 {
+            return Err(refused("identity rules need the root's signer policy version 3; nothing was signed"));
+        }
+        check_identity(identity, terms, org, p["label"].as_str().unwrap_or(org), issued, None, None)?;
+    }
+    if let Some(g) = p.get("guests") {
+        check_guests(g)?;
+    }
+    if let Some(w) = p.get("web_devices") {
+        check_web_devices(w)?;
+    }
+    if let Some(n) = p.get("notify") {
+        let ok = n.as_object().is_some_and(|o| o.len() == 1 && o.get("previews").and_then(Value::as_str) == Some("off"));
+        if !ok {
+            return Err(bad(NOTIFY_SHAPE));
+        }
+    }
+    if let Some(v) = p.get("video") {
+        let got = keys(v, VIDEO_KEYS, &["background"], "video")?;
+        let background = got["background"].as_str().filter(|b| VIDEO_BACKGROUNDS.contains(b));
+        let Some(background) = background else {
+            return Err(bad("video.background must be none, blur or team"));
+        };
+        if let Some(i) = got.get("team_image") {
+            if !i.as_str().is_some_and(|i| hex_ok(i, 64, 64)) {
+                return Err(bad("video.team_image must be 64 lower-case hex digits"));
+            }
+        }
+        if background == "team" && !got.contains_key("team_image") {
+            return Err(bad("a team background needs video.team_image"));
+        }
+        if let Some(c) = got.get("change") {
+            if !c.as_str().is_some_and(|c| VIDEO_CHANGES.contains(&c)) {
+                return Err(bad("video.change must be allow or refuse"));
+            }
+        }
+    }
+    if let Some(w) = p.get("watch") {
+        if !w.as_str().is_some_and(|w| WATCH_VALUES.contains(&w)) {
+            return Err(bad(WATCH_SHAPE));
+        }
+    }
+    if let Some(a) = p.get("ai") {
+        check_ai(a, terms)?;
+    }
+    if p.contains_key("sharing") {
+        return Err(refused(SHARING_REFUSED));
+    }
+    if let Some(s) = p.get("storage") {
+        check_storage(s)?;
+        // SD-1 6.2: the cloud of the org's Entra provider in the root-signed registry (ID-1 signer policy v3)
+        let cloud = s.get("cloud").and_then(Value::as_str).unwrap_or("global");
+        let org = p["org"].as_str().unwrap_or_default();
+        if let Some(e) = terms.providers_of(org).into_iter().find(|e| e.kind == "entra" && e.cloud != cloud) {
+            let label = p["label"].as_str().unwrap_or(org);
+            return Err(PolicyError::Refused(format!("storage.cloud must be {}, the cloud of {label}'s Microsoft sign-in", e.cloud)));
+        }
+    }
+    if let Some(s) = p.get("lan_scope") {
+        if !lan_scope_ok(s) {
+            return Err(bad(LAN_SCOPE_SHAPE));
+        }
+    }
+    Ok(())
+}
+
+/// BG-1 section 2.1: `(background, team_image, change)` of a checked policy, with the absent values filled
+/// (`team_image` "", `change` "allow"); None without `video`.
+pub fn video(policy: Option<&Obj>) -> Option<(String, String, String)> {
+    let v = policy?.get("video")?.as_object()?;
+    let text = |k: &str, d: &str| v.get(k).and_then(Value::as_str).unwrap_or(d).to_string();
+    Some((text("background", ""), text("team_image", ""), text("change", "allow")))
+}
+
+/// BG-1 section 2.3: the default marker ("", `none`, `blur` or `team:<sha256>`).
+pub fn video_default(policy: Option<&Obj>) -> String {
+    match video(policy) {
+        None => String::new(),
+        Some((b, image, _)) if b == "team" => format!("team:{image}"),
+        Some((b, _, _)) => b,
+    }
+}
+
+/// AW-1 section 2.1: `allow` or `refuse` (absent, or no policy, means refuse).
+pub fn watch(policy: Option<&Obj>) -> &'static str {
+    if policy.and_then(|p| p.get("watch")).and_then(Value::as_str) == Some("allow") { "allow" } else { "refuse" }
+}
+
+// ---- AI-1: the `ai` key, its gates and the members-only AI map (docs/ai/contract.md 1, 2) ----------------------
+
+const AI_KEYS: &[&str] = &[
+    "v", "enabled", "who", "order", "classes", "cui_classes", "default_class", "frontier_classes",
+    "redact_for_frontier", "frontier", "models", "device_models", "embedding", "deadlines_ms", "budgets", "org_index",
+    "map_sha256", "local_mcp",
+];
+/// API-1c 10.6: the fields of `ai.local_mcp` and the Hub-local MCP tools it may name.
+const AI_LOCAL_MCP_KEYS: &[&str] = &["enabled", "classes", "tools", "send"];
+pub const LOCAL_MCP_TOOLS: &[&str] =
+    &["search", "read_conversation", "list_meetings", "read_meeting_notes", "draft_reply", "send_message"];
+pub const AI_LOCAL_MCP: &str = "ai.local_mcp must be an object of enabled, classes, tools and send";
+pub const AI_LOCAL_MCP_ENABLED: &str = "ai.local_mcp.enabled must be true or false";
+pub const AI_LOCAL_MCP_CLASSES: &str = "ai.local_mcp.classes must be classes and never CUI";
+pub const AI_LOCAL_MCP_TOOLS: &str = "ai.local_mcp.tools must name local MCP tools";
+pub const AI_LOCAL_MCP_SEND: &str = "ai.local_mcp.send needs send_message";
+pub const AI_LOCAL_MCP_STANDARD: &str = "AI apps on people's computers (ai.local_mcp) need an enterprise license.";
+/// The API-1c release of the Hub and the iPhone (`api` apps and `ai.local_mcp`).
+const API_1C_CLIENTS: [(&str, &str); 2] = [("hub", "0.99.0"), ("ios", "0.99.0")];
+pub const API_APP_TOO_SOON: &str =
+    "API apps need every Meeting Hub and iPhone app at 0.99.0 or later. Raise the relay's minimum app versions first.";
+pub const LOCAL_MCP_TOO_SOON: &str = "AI apps on people's computers need every Meeting Hub and iPhone app at 0.99.0 or later. Raise the relay's minimum app versions first.";
+const AI_ROUTES: &[&str] = &["device", "org", "frontier"];
+const AI_ACCESS: &[&str] = &["org", "personal", "either", "none"];
+const AI_PLANS: &[&str] = &["business", "any"];
+const AI_LIST_MAX: usize = 50;
+const AI_TEXT_MAX: usize = 128;
+const AI_CLASSES_MAX: usize = 8;
+const AI_PROVIDERS_MAX: usize = 16;
+/// The Lucid IDE provider ids personal access may name (5.2).
+pub const AI_PROVIDERS: &[&str] = &["anthropic", "openai", "google", "xai", "azure", "google-vertex", "amazon-bedrock", "asksage"];
+pub const AI_FRONTIER_DISAGREE: &str = "ai.order and ai.frontier.access disagree about frontier.";
+pub const AI_ENCLAVE: &str = "An enclave org cannot use frontier models except through AskSage.";
+pub const AI_CUI: &str = "CUI cannot go to commercial frontier models.";
+pub const AI_ASKSAGE: &str = "Under the AskSage lockdown, personal access must be AskSage.";
+/// The AI-1a release of the Hub and the iPhone (older ones refuse the whole policy for its unknown key).
+const AI_CLIENTS: [(&str, &str); 2] = [("hub", "0.98.0"), ("ios", "0.98.0")];
+pub const AI_TOO_SOON: &str =
+    "AI rules need every Meeting Hub and iPhone app at 0.98.0 or later. Raise the relay's minimum app versions first.";
+pub const AI_BIG_ORG: &str = "A big organization's AI needs the organization archive with at least 3 archive reviewers.";
+pub const AI_ONE_REVIEWER: &str = "With an archive, at least one archive reviewer is needed.";
+
+/// 1 to `limit` printable ASCII characters.
+fn ascii_text(v: &Value, limit: usize) -> bool {
+    v.as_str().is_some_and(|s| (1..=limit).contains(&s.len()) && s.bytes().all(|b| (0x20..0x7f).contains(&b)))
+}
+
+/// `sha256:` + 64 lower-case hex.
+fn digest_ok(v: &Value) -> bool {
+    v.as_str().and_then(|s| s.strip_prefix("sha256:")).is_some_and(|h| hex_ok(h, 64, 64))
+}
+
+/// `[a-z0-9-]{1,32}` as a full match.
+fn ai_label(v: &Value) -> Option<&str> {
+    v.as_str().filter(|s| !s.ends_with('\n') && slug_ok(s))
+}
+
+/// 0 to `most` distinct strings, each passing `ok`; None otherwise.
+fn ai_strs<'a>(v: Option<&'a Value>, low: usize, most: usize, ok: impl Fn(&Value) -> bool) -> Option<Vec<&'a str>> {
+    let a = v?.as_array().filter(|a| (low..=most).contains(&a.len()))?;
+    let out: Vec<&str> = a.iter().filter(|x| ok(x)).filter_map(Value::as_str).collect();
+    (out.len() == a.len() && !has_dup(&out)).then_some(out)
+}
+
+/// `_ai_list(..., distinct=False)`: 0 to `most` strings, each passing `ok`.
+fn ai_strs_any(v: Option<&Value>, most: usize, ok: impl Fn(&Value) -> bool) -> bool {
+    v.and_then(Value::as_array).is_some_and(|a| a.len() <= most && a.iter().all(|x| x.is_string() && ok(x)))
+}
+
+fn ai_obj<'a>(v: Option<&'a Value>, allowed: &[&str], required: &[&str], words: &str) -> Result<&'a Obj, PolicyError> {
+    v.and_then(Value::as_object)
+        .filter(|o| o.keys().all(|k| allowed.contains(&k.as_str())) && required.iter().all(|k| o.contains_key(*k)))
+        .ok_or_else(|| bad(words))
+}
+
+fn ai_bool(v: Option<&Value>, words: &str) -> Result<bool, PolicyError> {
+    v.and_then(Value::as_bool).ok_or_else(|| bad(words))
+}
+
+fn ai_int(v: Option<&Value>, low: i64, high: i64, words: &str) -> Result<i64, PolicyError> {
+    pj::as_int(v).filter(|n| (low..=high).contains(n)).ok_or_else(|| bad(words))
+}
+
+/// Contract AI-1 1.2: every field and limit of the `ai` key, then the cross-field rules, each with its own words.
+pub fn check_ai(ai: &Value, terms: &SignerTerms) -> Result<(), PolicyError> {
+    let a = keys(ai, AI_KEYS, &[], "ai")?;
+    if pj::as_int(a.get("v")) != Some(1) {
+        return Err(bad("ai.v must be 1"));
+    }
+    ai_bool(a.get("enabled"), "ai.enabled must be true or false")?;
+    const WHO: &str = "ai.who.groups must list immutable group ids";
+    let w = ai_obj(a.get("who"), &["groups"], &["groups"], WHO)?;
+    let group_ok = |x: &Value| ascii_text(x, AI_TEXT_MAX) && !x.as_str().is_some_and(|s| s.starts_with("name:"));
+    ai_strs(w.get("groups"), 0, AI_LIST_MAX, group_ok).ok_or_else(|| bad(WHO))?;
+    let order = ai_strs(a.get("order"), 1, 3, |x| x.as_str().is_some_and(|s| AI_ROUTES.contains(&s)))
+        .ok_or_else(|| bad("ai.order must list device, org or frontier, each once"))?;
+    let classes = ai_strs(a.get("classes"), 1, AI_CLASSES_MAX, |x| ai_label(x).is_some())
+        .ok_or_else(|| bad("ai.classes must be 1 to 8 distinct labels"))?;
+    let of_classes = |key: &str, words: &str| -> Result<Vec<&str>, PolicyError> {
+        match a.get(key) {
+            None => Ok(Vec::new()),
+            v => ai_strs(v, 0, AI_CLASSES_MAX, |x| x.as_str().is_some_and(|s| classes.contains(&s))).ok_or_else(|| bad(words)),
+        }
+    };
+    let cui = of_classes("cui_classes", "ai.cui_classes must be classes")?;
+    if !a.get("default_class").and_then(Value::as_str).is_some_and(|d| classes.contains(&d)) {
+        return Err(bad("ai.default_class must be one of ai.classes"));
+    }
+    let frontier_classes = of_classes("frontier_classes", "ai.frontier_classes must be classes")?;
+    let f = ai_obj(a.get("frontier"), &["access", "personal"], &["access"], "ai.frontier.access must be org, personal, either or none")?;
+    let Some(access) = f.get("access").and_then(Value::as_str).filter(|s| AI_ACCESS.contains(s)) else {
+        return Err(bad("ai.frontier.access must be org, personal, either or none"));
+    };
+    let wants_personal = access == "personal" || access == "either";
+    if wants_personal != f.contains_key("personal") {
+        return Err(bad("ai.frontier.personal is needed only for personal or either"));
+    }
+    let mut personal_classes: Vec<&str> = Vec::new();
+    let mut personal_providers: Vec<&str> = Vec::new();
+    if let Some(pv) = f.get("personal") {
+        let pk = &["api_keys", "oauth", "providers", "classes", "plans"];
+        let po = ai_obj(Some(pv), pk, &[], "ai.frontier.personal is needed only for personal or either")?;
+        let (keys_ok, oauth) = (po.get("api_keys").and_then(Value::as_bool), po.get("oauth").and_then(Value::as_bool));
+        if keys_ok.is_none() || oauth.is_none() || (keys_ok == Some(false) && oauth == Some(false)) {
+            return Err(bad("ai.frontier.personal must allow keys, OAuth or both"));
+        }
+        personal_providers = ai_strs(po.get("providers"), 1, AI_PROVIDERS_MAX, |x| x.as_str().is_some_and(|s| AI_PROVIDERS.contains(&s)))
+            .ok_or_else(|| bad("ai.frontier.personal.providers must be provider ids"))?;
+        personal_classes = ai_strs(po.get("classes"), 0, AI_CLASSES_MAX, |x| x.as_str().is_some_and(|s| classes.contains(&s)))
+            .ok_or_else(|| bad("ai.frontier.personal.classes must be classes"))?;
+        if !po.get("plans").and_then(Value::as_str).is_some_and(|p| AI_PLANS.contains(&p)) {
+            return Err(bad("ai.frontier.personal.plans must be business or any"));
+        }
+    }
+    if let Some(r) = a.get("redact_for_frontier") {
+        let ok = |x: &Value| x.as_str().is_some_and(|s| frontier_classes.contains(&s) || personal_classes.contains(&s));
+        ai_strs(Some(r), 0, AI_CLASSES_MAX, ok).ok_or_else(|| bad("ai.redact_for_frontier must be frontier classes"))?;
+    }
+    const MODELS_WORDS: &str = "ai.models must use the Lucid IDE models fields";
+    let mut asksage_only = false;
+    if let Some(mv) = a.get("models") {
+        let mo = ai_obj(Some(mv), &["asksageOnly", "allowed", "denied", "lock"], &[], MODELS_WORDS)?;
+        for k in ["asksageOnly", "lock"] {
+            if let Some(b) = mo.get(k) {
+                let b = ai_bool(Some(b), MODELS_WORDS)?;
+                if k == "asksageOnly" {
+                    asksage_only = b;
+                }
+            }
+        }
+        for k in ["allowed", "denied"] {
+            if mo.contains_key(k) && !ai_strs_any(mo.get(k), AI_LIST_MAX, |x| ascii_text(x, AI_TEXT_MAX)) {
+                return Err(bad(MODELS_WORDS));
+            }
+        }
+    }
+    if let Some(dv) = a.get("device_models") {
+        const W: &str = "ai.device_models.allow_digests must be sha256 digests";
+        let d = ai_obj(Some(dv), &["allow_digests"], &["allow_digests"], W)?;
+        if !ai_strs_any(d.get("allow_digests"), AI_LIST_MAX, digest_ok) {
+            return Err(bad(W));
+        }
+    }
+    if let Some(ev) = a.get("embedding") {
+        const W: &str = "ai.embedding must name a model, digest and dims";
+        let e = ai_obj(Some(ev), &["model", "digest", "dims"], &["model", "digest", "dims"], W)?;
+        if !ascii_text(&e["model"], AI_TEXT_MAX) || !digest_ok(&e["digest"]) {
+            return Err(bad(W));
+        }
+        ai_int(e.get("dims"), 64, 4096, W)?;
+    }
+    {
+        const W: &str = "ai.deadlines_ms must be 2000 to 300000";
+        let d = ai_obj(a.get("deadlines_ms"), &["search", "catch_up"], &["search", "catch_up"], W)?;
+        for v in d.values() {
+            ai_int(Some(v), 2000, 300_000, W)?;
+        }
+    }
+    {
+        const W: &str = "ai.budgets must be whole dollars";
+        const B: &[&str] = &["frontier_usd_month", "frontier_usd_user_day"];
+        let b = ai_obj(a.get("budgets"), B, B, W)?;
+        ai_int(b.get("frontier_usd_month"), 0, 10_000_000, W)?;
+        ai_int(b.get("frontier_usd_user_day"), 0, 100_000, W)?;
+    }
+    if let Some(v) = a.get("org_index") {
+        ai_bool(Some(v), "ai.org_index must be true or false")?;
+    }
+    if !a.get("map_sha256").and_then(Value::as_str).is_some_and(|h| !h.ends_with('\n') && hex_ok(h, 64, 64)) {
+        return Err(bad("ai.map_sha256 must name the AI map"));
+    }
+    if let Some(lm) = a.get("local_mcp") {
+        check_local_mcp(lm, &classes, &cui)?;
+    }
+    // cross-field rules
+    let frontier_in_order = order.contains(&"frontier");
+    if frontier_in_order != (access != "none") {
+        return Err(bad(AI_FRONTIER_DISAGREE));
+    }
+    if terms.enclave && frontier_in_order && !asksage_only {
+        return Err(bad(AI_ENCLAVE));
+    }
+    if !asksage_only && cui.iter().any(|c| frontier_classes.contains(c) || personal_classes.contains(c)) {
+        return Err(bad(AI_CUI));
+    }
+    if asksage_only && f.contains_key("personal") && personal_providers != ["asksage"] {
+        return Err(bad(AI_ASKSAGE));
+    }
+    Ok(())
+}
+
+/// API-1c 10.6: `ai.local_mcp` against the `ai` key's `classes` and `cui_classes`. `enabled` and `tools` are required;
+/// `classes` defaults to none and `send` to false. Each row of the table with its own words, in its order.
+pub fn check_local_mcp(lm: &Value, classes: &[&str], cui: &[&str]) -> Result<(), PolicyError> {
+    let o = lm.as_object().filter(|o| o.keys().all(|k| AI_LOCAL_MCP_KEYS.contains(&k.as_str()))).ok_or_else(|| bad(AI_LOCAL_MCP))?;
+    ai_bool(o.get("enabled"), AI_LOCAL_MCP_ENABLED)?;
+    if let Some(c) = o.get("classes") {
+        let ok = |x: &Value| x.as_str().is_some_and(|s| classes.contains(&s) && !cui.contains(&s));
+        ai_strs(Some(c), 0, AI_CLASSES_MAX, ok).ok_or_else(|| bad(AI_LOCAL_MCP_CLASSES))?;
+    }
+    let tools = ai_strs(o.get("tools"), 1, LOCAL_MCP_TOOLS.len(), |x| x.as_str().is_some_and(|s| LOCAL_MCP_TOOLS.contains(&s)))
+        .ok_or_else(|| bad(AI_LOCAL_MCP_TOOLS))?;
+    let send = match o.get("send") {
+        None => false,
+        v => ai_bool(v, AI_LOCAL_MCP_SEND)?,
+    };
+    if send && !tools.contains(&"send_message") {
+        return Err(bad(AI_LOCAL_MCP_SEND));
+    }
+    Ok(())
+}
+
+/// The policy lists an app of type `api`.
+pub fn has_api_app(policy: &Obj) -> bool {
+    policy.get("apps").and_then(Value::as_array).into_iter().flatten().any(|a| a.get("type").and_then(Value::as_str) == Some(API_APP_TYPE))
+}
+
+/// api_app_gate (API-1c 2.3): a policy with an `api` app is taken only once the relay's minimums reach the API-1c
+/// release of both the Hub and the iPhone (an older app refuses the whole policy for the unknown type).
+pub fn api_app_gate(policy: Option<&Value>, minimums: &Obj) -> Result<(), String> {
+    if policy.and_then(Value::as_object).is_some_and(has_api_app) && !version_ready(&API_1C_CLIENTS, minimums) {
+        return Err(API_APP_TOO_SOON.into());
+    }
+    Ok(())
+}
+
+/// local_mcp_gate (API-1c 10.6): a policy whose `ai` key has `local_mcp` is taken only once the relay's minimums reach
+/// the API-1c release (an older app refuses an `ai` key with an unknown field).
+pub fn local_mcp_gate(policy: Option<&Value>, minimums: &Obj) -> Result<(), String> {
+    let wants = policy.and_then(|p| p.get("ai")).and_then(Value::as_object).is_some_and(|a| a.contains_key("local_mcp"));
+    if wants && !version_ready(&API_1C_CLIENTS, minimums) {
+        return Err(LOCAL_MCP_TOO_SOON.into());
+    }
+    Ok(())
+}
+
+fn version_ready(clients: &[(&str, &str)], minimums: &Obj) -> bool {
+    clients.iter().all(|(app, least)| {
+        minimums.get(*app).map(|v| crate::meet::version_key(&pj::py_str(v)) >= crate::meet::version_key(least)).unwrap_or(false)
+    })
+}
+
+/// ai_gate (1.3): a policy with `ai`, or with `retention.ai`, is taken only once the relay's minimums reach the AI-1a
+/// release of both the Hub and the iPhone.
+pub fn ai_gate(policy: Option<&Value>, minimums: &Obj) -> Result<(), String> {
+    let p = policy.and_then(Value::as_object);
+    let wants = p.is_some_and(|p| p.contains_key("ai") || p.get("retention").and_then(|r| r.get("ai")).is_some());
+    if wants && !version_ready(&AI_CLIENTS, minimums) {
+        return Err(AI_TOO_SOON.into());
+    }
+    Ok(())
+}
+
+/// ai_edition_gate (1.5): with `ai.enabled` true, a big organization (`enterprise`) needs the archive and at least 3
+/// archive reviewers; a small one (`standard`) with an archive needs at least one reviewer. Any edition other than
+/// `standard`, and no license at all (`None`), is big. API-1c 10.6 (decision O6): `ai.local_mcp.enabled` true is
+/// refused on `standard`, whatever `ai.enabled` says.
+pub fn ai_edition_gate(policy: &Obj, edition: Option<&str>) -> Result<(), String> {
+    let local_mcp_on = policy.get("ai").and_then(|a| a.get("local_mcp")).and_then(|l| l.get("enabled")).and_then(Value::as_bool) == Some(true);
+    if edition == Some("standard") && local_mcp_on {
+        return Err(AI_LOCAL_MCP_STANDARD.into());
+    }
+    let enabled = policy.get("ai").and_then(|a| a.get("enabled")).and_then(Value::as_bool) == Some(true);
+    if !enabled {
+        return Ok(());
+    }
+    let reviewers = policy.get("archive_reviewers").and_then(Value::as_array).map_or(0, Vec::len);
+    let archive = policy.contains_key("archive");
+    let small = edition == Some("standard");
+    if !small && (!archive || reviewers < 3) {
+        return Err(AI_BIG_ORG.into());
+    }
+    if small && archive && reviewers < 1 {
+        return Err(AI_ONE_REVIEWER.into());
+    }
+    Ok(())
+}
+
+const AI_MAP_LABEL: &str = "lucid-meet-org-ai-v1";
+/// The whole signed AI map.
+const AI_MAP_MAX: usize = 256 * 1024;
+const AI_MAP_KEYS: &[&str] = &["v", "org", "seq", "issued", "gateways", "channel_classes", "excluded_channels", "who_principals", "mcp_servers", "mcp_cleared"];
+const AI_MAP_REQUIRED: &[&str] = &["v", "org", "seq", "issued"];
+const AI_GATEWAY_KEYS: &[&str] = &["url", "principal", "device", "spki", "region"];
+const AI_GATEWAY_REQUIRED: &[&str] = &["url", "principal", "device", "spki"];
+const AI_GATEWAYS_MAX: usize = 8;
+const AI_URL_MAX: usize = 256;
+const AI_CHANNELS_MAX: usize = 5000;
+const AI_PEOPLE_MAX: usize = 5000;
+/// Orgs whose AI maps one relay holds.
+pub const AI_MAP_ORGS_MAX: usize = 64;
+
+const AI_MAP_V: &str = "the AI map must be version 1";
+const AI_MAP_ORG_ID: &str = "the AI map's org must be 1 to 32 of a-z, 0-9 and -";
+const AI_MAP_GATEWAYS: &str = "the AI map's gateways must be 0 to 8 gateways {url, principal, device, spki}";
+const AI_MAP_URL: &str = "a gateway url must be https:// with a DNS name or IP and a port";
+const AI_MAP_PRINCIPAL: &str = "a gateway principal must be <name>@apps.<one of the policy's domains>";
+const AI_MAP_DEVICE: &str = "a gateway must be an ai app of the policy, with its device";
+const AI_MAP_SPKI: &str = "a gateway spki must be 64 lower-case hex digits";
+const AI_MAP_REGION: &str = "a gateway region must be 1 to 32 of a-z, 0-9 and -";
+const AI_MAP_NEEDS_GATEWAY: &str = "the AI map needs a gateway for the org route";
+const AI_MAP_CLASSES: &str = "channel_classes must map ch: cids to the policy's classes";
+const AI_MAP_EXCLUDED: &str = "excluded_channels must list ch: cids";
+const AI_MAP_WHO: &str = "who_principals must list people of the policy's domains, each once";
+const AI_MAP_ORG: &str = "the AI map is for another organization";
+pub const AI_MAP_NOT_NAMED: &str = "{label}'s AI map is not the one its policy names, so it was not used.";
+
+/// AI_CID_RE: `ch:[a-z0-9-]{1,64}` (a full match).
+fn ai_cid_ok(s: &str) -> bool {
+    s.strip_prefix("ch:").is_some_and(|r| (1..=64).contains(&r.len()) && r.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'))
+}
+
+/// `[0-9a-f]{n}` as a full match.
+fn hex_full(v: &Value, n: usize) -> bool {
+    v.as_str().is_some_and(|s| !s.ends_with('\n') && hex_ok(s, n, n))
+}
+
+/// `_ai_url`: `https://` + a DNS name, IPv4 address or bracketed IPv6 address + `:port` (1 to 65535, no leading
+/// zero), nothing after it, at most 256 characters.
+fn gateway_url_ok(v: &Value) -> bool {
+    let Some(s) = v.as_str().filter(|s| s.chars().count() <= AI_URL_MAX) else { return false };
+    let Some(rest) = s.strip_prefix("https://") else { return false };
+    let Some((host, port)) = rest.rsplit_once(':') else { return false };
+    let port_ok = !port.is_empty()
+        && port.len() <= 5
+        && port.bytes().all(|b| b.is_ascii_digit())
+        && !port.starts_with('0')
+        && port.parse::<u32>().is_ok_and(|n| (1..=65535).contains(&n));
+    if !port_ok {
+        return false;
+    }
+    if let Some(inner) = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')) {
+        return inner.parse::<std::net::Ipv6Addr>().is_ok();
+    }
+    is_domain(host) || ipv4_strict(host)
+}
+
+/// Python's `ipaddress.IPv4Address`: four decimal octets, no leading zeros.
+fn ipv4_strict(s: &str) -> bool {
+    let parts: Vec<&str> = s.split('.').collect();
+    parts.len() == 4
+        && parts.iter().all(|p| {
+            (1..=3).contains(&p.len()) && p.bytes().all(|b| b.is_ascii_digit()) && !(p.len() > 1 && p.starts_with('0')) && p.parse::<u16>().is_ok_and(|n| n <= 255)
+        })
+}
+
+/// `_ai_gateway_domain`: the org domain of an app principal `<name>@apps.<domain>` ("" when it is not one).
+fn gateway_domain(v: &Value) -> &str {
+    match split_value(v) {
+        Ok((local, domain)) if slug_ok(local) && local != "archive" => domain.strip_prefix(APPS_PREFIX).unwrap_or(""),
+        _ => "",
+    }
+}
+
+/// `ai_needs_gateway`: the policy's `ai` routes to the org (`org` in `order`) or the org frontier (`access` org or
+/// either).
+pub fn ai_needs_gateway(policy: &Obj) -> bool {
+    let Some(ai) = policy.get("ai").and_then(Value::as_object) else { return false };
+    let access = ai.get("frontier").and_then(|f| f.get("access")).and_then(Value::as_str);
+    ai.get("order").and_then(Value::as_array).is_some_and(|o| o.iter().any(|x| x.as_str() == Some("org"))) || matches!(access, Some("org" | "either"))
+}
+
+/// Contract AI-1 2: the AI map's field rules (Bad). With the org's `policy` also: the same org, each gateway an `ai`
+/// app of the policy (principal and device) on one of its domains, a gateway when the policy needs one,
+/// `channel_classes` values among `ai.classes` and `who_principals` inside its `domains`. A relay stores a map with
+/// the shape checks only; devices and the gateway pass the policy.
+pub fn check_ai_map(ai_map: &Value, policy: Option<&Obj>) -> Result<(), PolicyError> {
+    let m = keys(ai_map, AI_MAP_KEYS, AI_MAP_REQUIRED, "the AI map")?;
+    canonical_json(ai_map)?;
+    if !matches!(&m["v"], Value::Number(n) if n.as_i64() == Some(1)) {
+        return Err(bad(AI_MAP_V));
+    }
+    let Some(org) = m["org"].as_str().filter(|o| slug_ok(o)) else { return Err(bad(AI_MAP_ORG_ID)) };
+    int(&m["seq"], "seq", 1, MAX_INT)?;
+    int(&m["issued"], "issued", 1, MAX_INT)?;
+    let empty_list = Value::Array(Vec::new());
+    let Some(gateways) = m.get("gateways").unwrap_or(&empty_list).as_array().filter(|g| g.len() <= AI_GATEWAYS_MAX) else {
+        return Err(bad(AI_MAP_GATEWAYS));
+    };
+    for g in gateways {
+        let ok = g.as_object().is_some_and(|o| o.keys().all(|k| AI_GATEWAY_KEYS.contains(&k.as_str())) && AI_GATEWAY_REQUIRED.iter().all(|k| o.contains_key(*k)));
+        if !ok {
+            return Err(bad(AI_MAP_GATEWAYS));
+        }
+        if !gateway_url_ok(&g["url"]) {
+            return Err(bad(AI_MAP_URL));
+        }
+        if gateway_domain(&g["principal"]).is_empty() {
+            return Err(bad(AI_MAP_PRINCIPAL));
+        }
+        if !hex_full(&g["device"], 16) {
+            return Err(bad(AI_MAP_DEVICE));
+        }
+        if !hex_full(&g["spki"], 64) {
+            return Err(bad(AI_MAP_SPKI));
+        }
+        if g.get("region").is_some_and(|r| ai_label(r).is_none()) {
+            return Err(bad(AI_MAP_REGION));
+        }
+    }
+    let urls: Vec<&Value> = gateways.iter().map(|g| &g["url"]).collect();
+    let devices: Vec<&Value> = gateways.iter().map(|g| &g["device"]).collect();
+    if has_dup(&urls) || has_dup(&devices) {
+        return Err(bad(AI_MAP_GATEWAYS));
+    }
+    let empty_obj = Value::Object(Obj::new());
+    let classes_ok = m.get("channel_classes").unwrap_or(&empty_obj).as_object().filter(|o| {
+        o.len() <= AI_CHANNELS_MAX && o.iter().all(|(k, v)| ai_cid_ok(k) && ai_label(v).is_some())
+    });
+    let Some(channel_classes) = classes_ok else { return Err(bad(AI_MAP_CLASSES)) };
+    ai_strs(Some(m.get("excluded_channels").unwrap_or(&empty_list)), 0, AI_CHANNELS_MAX, |v| v.as_str().is_some_and(ai_cid_ok))
+        .ok_or_else(|| bad(AI_MAP_EXCLUDED))?;
+    let person = |v: &Value| split_value(v).is_ok_and(|(_, d)| !d.starts_with(APPS_PREFIX));
+    let who = ai_strs(Some(m.get("who_principals").unwrap_or(&empty_list)), 0, AI_PEOPLE_MAX, person).ok_or_else(|| bad(AI_MAP_WHO))?;
+    // API-1 r6 8.1: the gateway MCP allow list (optional keys, readers first)
+    crate::ai_mcp::check_mcp_shape(m).map_err(|e| bad(&e))?;
+    let Some(policy) = policy else { return Ok(()) };
+    if policy.get("org").and_then(Value::as_str) != Some(org) {
+        return Err(bad(AI_MAP_ORG));
+    }
+    let domains: Vec<&str> = policy.get("domains").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).collect();
+    for g in gateways {
+        if !domains.contains(&gateway_domain(&g["principal"])) {
+            return Err(bad(AI_MAP_PRINCIPAL));
+        }
+        let named = policy.get("apps").and_then(Value::as_array).into_iter().flatten().any(|a| {
+            a.get("type").and_then(Value::as_str) == Some("ai") && a.get("principal") == Some(&g["principal"]) && a.get("device") == Some(&g["device"])
+        });
+        if !named {
+            return Err(bad(AI_MAP_DEVICE));
+        }
+    }
+    if gateways.is_empty() && ai_needs_gateway(policy) {
+        return Err(bad(AI_MAP_NEEDS_GATEWAY));
+    }
+    let classes: Vec<&Value> = policy.get("ai").and_then(|a| a.get("classes")).and_then(Value::as_array).into_iter().flatten().collect();
+    if channel_classes.values().any(|v| !classes.contains(&v)) {
+        return Err(bad(AI_MAP_CLASSES));
+    }
+    if who.iter().any(|p| !p.split_once('@').is_some_and(|(_, d)| domains.contains(&d))) {
+        return Err(bad(AI_MAP_WHO));
+    }
+    crate::ai_mcp::check_mcp_policy(m, policy).map_err(|e| bad(&e))?;
+    Ok(())
+}
+
+/// `check_ai_map_named`: a device uses only the map its pinned policy names (Refused).
+pub fn check_ai_map_named(policy: &Obj, map_hash: &str) -> Result<(), PolicyError> {
+    let named = policy.get("ai").and_then(|a| a.get("map_sha256")).and_then(Value::as_str);
+    if named != Some(map_hash) {
+        return Err(PolicyError::Refused(AI_MAP_NOT_NAMED.replace("{label}", &pj::s(policy, "label"))));
+    }
+    Ok(())
+}
+
+// ---- AI-1 6.4: who may use org AI ------------------------------------------------------------------------------
+
+const AI_GROUPS_KEYS: &[&str] = &["org", "provider", "records", "sso_attestation"];
+const AI_GROUP_RECORD_KEYS: &[&str] = &["principal", "listed", "read_at"];
+const AI_GROUPS_RECORDS_MAX: usize = 1000;
+const AI_ATTESTATION_MAX: usize = 16384;
+/// ID-1 `poll_minutes` + `outage_minutes` defaults (seconds).
+pub const AI_GROUPS_FRESH_S: i64 = (15 + 30) * 60;
+const AI_GROUPS_SHAPE: &str = "ai-groups must be {org, provider, records, sso_attestation}";
+const AI_GROUPS_RECORD: &str = "each record must be {principal, listed, read_at}";
+const AI_GROUPS_UNLISTED: &str = "listed may name only groups in ai.who.groups";
+const AI_GROUPS_FUTURE: &str = "read_at is in the future";
+
+/// One stored `ai-groups` record.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AiGroupRecord {
+    pub principal: String,
+    pub listed: Vec<String>,
+    pub read_at: i64,
+}
+
+fn same_keys(v: &Value, keys: &[&str]) -> bool {
+    v.as_object().is_some_and(|o| o.len() == keys.len() && keys.iter().all(|k| o.contains_key(*k)))
+}
+
+/// `check_ai_groups`: the records of `POST /v1/sso/c/ai-groups` to store, all or nothing. `policy`: the org's current
+/// policy; `held`: the stored `read_at` per principal. Bad (shape, 400) or Refused (the service, a principal, a
+/// `read_at` not newer than the held one, 403).
+pub fn check_ai_groups(
+    post: &Value,
+    caller_serial: &str,
+    terms: &SignerTerms,
+    policy: Option<&Obj>,
+    held: &dyn Fn(&str) -> i64,
+    now: f64,
+) -> Result<Vec<AiGroupRecord>, PolicyError> {
+    if !same_keys(post, AI_GROUPS_KEYS) {
+        return Err(bad(AI_GROUPS_SHAPE));
+    }
+    let (org, provider, records, att) = (&post["org"], &post["provider"], &post["records"], &post["sso_attestation"]);
+    let shape_ok = org.as_str().is_some_and(slug_ok)
+        && provider.as_str().is_some_and(slug_ok)
+        && att.as_str().is_some_and(|a| (1..=AI_ATTESTATION_MAX).contains(&a.chars().count()) && pj::printable(a))
+        && records.as_array().is_some_and(|r| (1..=AI_GROUPS_RECORDS_MAX).contains(&r.len()));
+    if !shape_ok {
+        return Err(bad(AI_GROUPS_SHAPE));
+    }
+    let org = org.as_str().unwrap_or_default();
+    let serial = caller_serial.to_lowercase();
+    let served: Vec<&(String, Vec<String>, Vec<String>)> =
+        terms.sso_services.iter().filter(|(s, orgs, _)| *s == serial && orgs.iter().any(|o| o == org)).collect();
+    if serial.is_empty() || served.is_empty() {
+        return Err(PolicyError::Refused(format!("this sign-in service is not registered for {org}")));
+    }
+    let service_domains: Vec<&str> = served.iter().flat_map(|(_, _, d)| d.iter().map(String::as_str)).collect();
+    let groups: Vec<&str> = policy
+        .filter(|p| p.get("org").and_then(Value::as_str) == Some(org))
+        .and_then(|p| p.get("ai"))
+        .and_then(|a| a.get("who"))
+        .and_then(|w| w.get("groups"))
+        .and_then(Value::as_array)
+        .map(|g| g.iter().filter_map(Value::as_str).collect())
+        .unwrap_or_default();
+    let (Some(policy), false) = (policy, groups.is_empty()) else {
+        return Err(PolicyError::Refused(format!("{org}'s policy lists no AI groups")));
+    };
+    let mut out: Vec<AiGroupRecord> = Vec::new();
+    for rec in records.as_array().into_iter().flatten() {
+        if !same_keys(rec, AI_GROUP_RECORD_KEYS) {
+            return Err(bad(AI_GROUPS_RECORD));
+        }
+        let Some((principal, domain)) = rec["principal"].as_str().and_then(|p| split_principal(p).ok().map(|(_, d)| (p, d))) else {
+            return Err(bad(AI_GROUPS_RECORD));
+        };
+        if out.iter().any(|r| r.principal == principal) {
+            return Err(PolicyError::Bad(format!("a record names {principal} twice")));
+        }
+        if !service_domains.contains(&domain) || !covers(policy, principal) {
+            return Err(PolicyError::Refused(format!("{principal} is not a person this sign-in service serves for {org}")));
+        }
+        let Some(listed) = ai_strs(Some(&rec["listed"]), 0, AI_LIST_MAX, |x| ascii_text(x, AI_TEXT_MAX)) else {
+            return Err(bad(AI_GROUPS_RECORD));
+        };
+        if listed.iter().any(|g| !groups.contains(g)) {
+            return Err(bad(AI_GROUPS_UNLISTED));
+        }
+        let Some(read_at) = pj::as_int(Some(&rec["read_at"])).filter(|n| (1..=MAX_INT).contains(n)) else {
+            return Err(bad(AI_GROUPS_RECORD));
+        };
+        if read_at as f64 > now + SKEW as f64 {
+            return Err(bad(AI_GROUPS_FUTURE));
+        }
+        if read_at <= held(principal) {
+            return Err(PolicyError::Refused(format!("the record for {principal} is not newer than the one held")));
+        }
+        let mut sorted: Vec<String> = listed.iter().map(|s| s.to_string()).collect();
+        sorted.sort();
+        out.push(AiGroupRecord { principal: principal.to_string(), listed: sorted, read_at });
+    }
+    Ok(out)
+}
+
+/// `ai_allowed` (6.4) at answer time: `(allowed, read_at)`. Allowed when the stored `listed` meets the current
+/// policy's `who.groups` and `read_at` is at most `fresh_s` old, or when the principal is in the current AI map's
+/// `who_principals` (then `read_at` is the map's `issued`).
+pub fn ai_allowed(principal: &str, policy: Option<&Obj>, ai_map: Option<&Obj>, record: Option<&AiGroupRecord>, now: f64, fresh_s: i64) -> (bool, i64) {
+    let read_at = record.map_or(0, |r| r.read_at);
+    let Some(policy) = policy.filter(|p| p.get("ai").is_some_and(Value::is_object) && covers(p, principal)) else {
+        return (false, read_at);
+    };
+    let groups: Vec<&str> = policy["ai"].get("who").and_then(|w| w.get("groups")).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).collect();
+    if let Some(r) = record {
+        if r.listed.iter().any(|g| groups.contains(&g.as_str())) && now - read_at as f64 <= fresh_s as f64 {
+            return (true, read_at);
+        }
+    }
+    if let Some(m) = ai_map {
+        if m.get("who_principals").and_then(Value::as_array).is_some_and(|w| w.iter().any(|p| p.as_str() == Some(principal))) {
+            return (true, pj::as_int(m.get("issued")).unwrap_or(0));
+        }
+    }
+    (false, read_at)
+}
+
+/// `lp("lucid-meet-org-ai-v1", canonical JSON of the map)` (empty JSON for a map canonical JSON refuses: every caller
+/// checks the map first).
+pub fn ai_map_bytes(ai_map: &Obj) -> Vec<u8> {
+    let mut out = String::new();
+    let json = match enc_obj(ai_map, &mut out) {
+        Ok(()) => out.into_bytes(),
+        Err(_) => Vec::new(),
+    };
+    lp(&[AI_MAP_LABEL.as_bytes(), &json])
+}
+
+/// Hex SHA-256 of the AI map's signed bytes (what `ai.map_sha256` names).
+pub fn ai_map_hash(ai_map: &Obj) -> String {
+    sha256_hex(&ai_map_bytes(ai_map))
+}
+
+/// A verified signed AI map.
+#[derive(Clone, Debug)]
+pub struct VerifiedAiMap {
+    pub wire: Obj,
+    pub org: String,
+    pub seq: i64,
+    pub hash: String,
+    /// "root" or the intermediate's serial (hex).
+    pub signer: String,
+}
+
+/// A relay's or device's check of a signed AI map, as `verify` checks a policy: the root-signed signer policy, the
+/// signature by the root or the signer's current (or previous) intermediate valid at `issued` and not in the root's
+/// CRL, `check_ai_map` (with the org's `policy` when given), then an org the root assigned domains to. A device then
+/// calls `check_ai_map_named` and pins the `seq`.
+pub fn verify_ai_map(
+    wire: &Value,
+    root: &Cert,
+    signer_policy: &Obj,
+    root_crl: Option<&Crl>,
+    previous_serial: &str,
+    now: f64,
+    policy: Option<&Obj>,
+) -> Result<VerifiedAiMap, PolicyError> {
+    let w = keys(wire, WIRE_MAP_KEYS, WIRE_MAP_KEYS, "the signed AI map")?;
+    if canonical_json(wire)?.len() > AI_MAP_MAX {
+        return Err(bad("the signed AI map is larger than 256 KB"));
+    }
+    if !verify_signer_policy(root, signer_policy) {
+        return Err(refused("the signer policy is not signed by the root"));
+    }
+    let terms = signer_terms(signer_policy)?;
+    let m = keys(&w["map"], AI_MAP_KEYS, AI_MAP_REQUIRED, "the AI map")?;
+    let issued = int(&m["issued"], "issued", 1, MAX_INT)?;
+    if issued as f64 > now + SKEW as f64 {
+        return Err(refused("the AI map is dated in the future"));
+    }
+    let sig = pj::b64_strict(&pj::py_str(&w["sig"])).ok_or("sig must be base64")?;
+    canonical_json(&w["map"])?;
+    let data = ai_map_bytes(m);
+    let chain = match &w["chain"] {
+        Value::Array(c) if c.len() <= 1 && c.iter().all(Value::is_string) => c,
+        _ => return Err(bad("chain must be [] or [one intermediate PEM]")),
+    };
+    let inter = chain
+        .first()
+        .and_then(Value::as_str)
+        .map(|pem| Some(pem).filter(|p| p.is_ascii()).and_then(Cert::from_pem).ok_or("the chain is not a certificate"))
+        .transpose()?;
+    let signer = match &inter {
+        Some(c) => check_intermediate(c, root, &terms, previous_serial, issued, root_crl)?,
+        None => "root".to_string(),
+    };
+    let spki = inter.as_ref().map_or(&root.spki, |c| &c.spki);
+    if !ecdsa_sha256_verified(spki, &data, &sig) {
+        return Err(refused("the AI map's signature does not verify"));
+    }
+    check_ai_map(&w["map"], policy)?;
+    let org = pj::text_of(m, "org");
+    if !terms.org_domains.contains_key(&org) {
+        return Err(refused(DOMAIN_REFUSED));
+    }
+    Ok(VerifiedAiMap { wire: w.clone(), org, seq: pj::as_int(m.get("seq")).unwrap_or(0), hash: sha256_hex(&data), signer })
+}
+
+const WIRE_MAP_KEYS: &[&str] = &["map", "sig", "chain"]; // a policy's wire has `policy` in place of `map`
+
+/// What a relay keeps (AI-1 2): per org the newest AI map and the one the org's current policy names by
+/// `ai.map_sha256` (at most 2 per org, 64 orgs).
+#[derive(Default)]
+pub struct AiMapStore {
+    pub newest: IndexMap<String, VerifiedAiMap>,
+    pub kept: IndexMap<String, IndexMap<String, VerifiedAiMap>>,
+}
+
+impl AiMapStore {
+    /// Verify and keep one signed map. `named`: the `ai.map_sha256` of the org's current policy ("" when none). A
+    /// `seq` not above the newest is refused unless it is that named map.
+    #[allow(clippy::too_many_arguments)]
+    pub fn accept_at(
+        &mut self,
+        wire: &Value,
+        root: &Cert,
+        signer_policy: &Obj,
+        root_crl: Option<&Crl>,
+        previous_serial: &str,
+        now: f64,
+        named: &str,
+    ) -> Result<VerifiedAiMap, PolicyError> {
+        let vm = verify_ai_map(wire, root, signer_policy, root_crl, previous_serial, now, None)?;
+        if let Some(held) = self.kept.get(&vm.org).and_then(|h| h.get(&vm.hash)) {
+            return Ok(held.clone());
+        }
+        match self.newest.get(&vm.org) {
+            None if !self.kept.contains_key(&vm.org) && self.kept.len() >= AI_MAP_ORGS_MAX => {
+                return Err(refused("this relay already holds the AI maps of 64 organizations"));
+            }
+            Some(cur) if vm.seq <= cur.seq && vm.hash != named => {
+                return Err(PolicyError::Refused(format!("that AI map's seq is not higher than {}", cur.seq)));
+            }
+            _ => {}
+        }
+        if self.newest.get(&vm.org).is_none_or(|cur| vm.seq > cur.seq) {
+            self.newest.insert(vm.org.clone(), vm.clone());
+        }
+        self.kept.entry(vm.org.clone()).or_default().insert(vm.hash.clone(), vm.clone());
+        self.prune(&vm.org, named);
+        Ok(vm)
+    }
+
+    /// Keep only the org's newest map and the one its current policy names.
+    pub fn prune(&mut self, org: &str, named: &str) {
+        let newest = self.newest.get(org).map(|v| v.hash.clone()).unwrap_or_default();
+        if let Some(held) = self.kept.get_mut(org) {
+            held.retain(|h, _| *h == newest || h == named);
+        }
+    }
+
+    /// `GET /v1/org/ai?org=` (the newest) or `&sha256=` (that kept map).
+    pub fn get(&self, org: &str, sha256: &str) -> Option<&VerifiedAiMap> {
+        if sha256.is_empty() {
+            self.newest.get(org)
+        } else {
+            self.kept.get(org).and_then(|h| h.get(&sha256.to_lowercase()))
+        }
+    }
+
+    /// Every kept map, by org and `seq` (what `ext["pc"]["ai_maps"]` holds).
+    pub fn persisted(&self) -> Vec<Value> {
+        let mut orgs: Vec<&String> = self.kept.keys().collect();
+        orgs.sort();
+        let mut out = Vec::new();
+        for org in orgs {
+            let mut maps: Vec<&VerifiedAiMap> = self.kept[org].values().collect();
+            maps.sort_by_key(|v| v.seq);
+            out.extend(maps.into_iter().map(|v| Value::Object(v.wire.clone())));
+        }
+        out
+    }
+}
+
+// ---- SD-1: the `storage` key and the org storage map (docs/storage/contract.md 6.2) ------------------------------
+
+/// `_place_id`: `[a-z0-9-]{1,32}` (a full match: no trailing newline).
+fn place_ok(s: &str) -> bool {
+    !s.ends_with('\n') && slug_ok(s)
+}
+
+fn place_id<'a>(v: &'a Value, what: &str) -> Res<&'a str> {
+    v.as_str().filter(|s| place_ok(s)).ok_or_else(|| format!("{what} must be a place id (1 to 32 of a-z, 0-9 and -)"))
+}
+
+/// Unicode general category Cf (format characters: bidi controls, zero-width marks, tags).
+fn is_format_char(c: char) -> bool {
+    matches!(c as u32,
+        0xad | 0x600..=0x605 | 0x61c | 0x6dd | 0x70f | 0x890..=0x891 | 0x8e2 | 0x180e | 0x200b..=0x200f
+        | 0x202a..=0x202e | 0x2060..=0x2064 | 0x2066..=0x206f | 0xfeff | 0xfff9..=0xfffb | 0x110bd | 0x110cd
+        | 0x13430..=0x1343f | 0x1bca0..=0x1bca3 | 0x1d173..=0x1d17a | 0xe0001 | 0xe0020..=0xe007f)
+}
+
+/// `check_place_label`: 1 to 64 characters of Unicode letters, digits, spaces and `.,()&'-`; no Unicode format
+/// characters. Rust's std has no general categories: letters and digits are `is_alphabetic` and `is_numeric`, a
+/// little wider than Python's L* and Nd (combining vowel signs, Roman numerals, superscripts also pass here).
+pub fn check_place_label(v: &Value, what: &str) -> Res<()> {
+    let Some(s) = v.as_str().filter(|s| (1..=PLACE_LABEL_MAX).contains(&s.chars().count())) else {
+        return Err(format!("{what} must be 1 to {PLACE_LABEL_MAX} characters"));
+    };
+    for c in s.chars() {
+        if is_format_char(c) {
+            return Err(format!("{what} must not contain Unicode format characters"));
+        }
+        if !(c.is_alphabetic() || c.is_numeric() || PLACE_LABEL_MARKS.contains(c)) {
+            return Err(format!("{what} may hold only letters, digits, spaces and .,()&'-"));
+        }
+    }
+    Ok(())
+}
+
+/// The map place ids `own` and `group` name (sorted, each once; built-in ids left out).
+fn storage_map_places(s: &Obj) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for key in ["own", "group"] {
+        for place in s.get(key).and_then(Value::as_object).into_iter().flat_map(|o| o.values()).filter_map(Value::as_str) {
+            if !STORAGE_BUILTINS.contains(&place) && !out.iter().any(|p| p == place) {
+                out.push(place.to_string());
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+/// `check_storage` as a device runs it (no maps): 6.2's field table, `map_sha256` required when `own` or `group`
+/// names a map place. Bad naming the field.
+pub fn check_storage(storage: &Value) -> Result<(), PolicyError> {
+    let s = keys(storage, STORAGE_KEYS, &[], "storage")?;
+    let mut providers: Option<Vec<&str>> = None;
+    if let Some(p) = s.get("providers") {
+        let mut names = Vec::new();
+        for x in list(p, "storage.providers", STORAGE_PROVIDERS.len(), 0)? {
+            match x.as_str().filter(|x| STORAGE_PROVIDERS.contains(x)) {
+                Some(n) => names.push(n),
+                None => return Err(PolicyError::Bad(format!("storage.providers may list only {}", STORAGE_PROVIDERS.join(", ")))),
+            }
+        }
+        providers = Some(names);
+    }
+    for key in ["own", "group"] {
+        let Some(v) = s.get(key) else { continue };
+        for (kind, place) in keys(v, STORAGE_KINDS, &[], &format!("storage.{key}"))? {
+            let place = place_id(place, &format!("storage.{key}.{kind}"))?;
+            if STORAGE_BUILTINS.contains(&place) && providers.as_ref().is_some_and(|p| !p.contains(&place)) {
+                return Err(PolicyError::Bad(format!("storage.{key}.{kind}: {place} is not in storage.providers")));
+            }
+        }
+    }
+    let empty = Obj::new();
+    let mut labels = &empty;
+    if let Some(l) = s.get("labels") {
+        let Some(o) = l.as_object().filter(|o| o.len() <= MAP_PLACES_MAX + STORAGE_BUILTINS.len()) else {
+            return Err(bad("storage.labels must be an object of place ids to labels"));
+        };
+        for (place, label) in o {
+            if !place_ok(place) {
+                return Err(PolicyError::Bad(format!("storage.labels.{place} must be a place id (1 to 32 of a-z, 0-9 and -)")));
+            }
+            check_place_label(label, &format!("storage.labels.{place}"))?;
+        }
+        labels = o;
+    }
+    let named = storage_map_places(s);
+    let missing: Vec<&str> = named.iter().map(String::as_str).filter(|p| !labels.contains_key(*p)).collect();
+    if !missing.is_empty() {
+        return Err(PolicyError::Bad(format!("storage.labels needs a label for {}", missing.join(", "))));
+    }
+    if let Some(v) = s.get("people_choose") {
+        for kind in list(v, "storage.people_choose", STORAGE_KINDS.len(), 0)? {
+            if !kind.as_str().is_some_and(|k| STORAGE_KINDS.contains(&k)) {
+                return Err(PolicyError::Bad(format!("storage.people_choose may list only {}", STORAGE_KINDS.join(", "))));
+            }
+        }
+    }
+    if let Some(v) = s.get("form") {
+        for (kind, form) in keys(v, STORAGE_KINDS, &[], "storage.form")? {
+            if !form.as_str().is_some_and(|f| STORAGE_FORMS.contains(&f)) {
+                return Err(PolicyError::Bad(format!("storage.form.{kind} must be sealed or plain")));
+            }
+        }
+    }
+    if let Some(v) = s.get("keep_local_days") {
+        int(v, "storage.keep_local_days", -1, STORAGE_DAYS_MAX)?;
+    }
+    if let Some(v) = s.get("expire_days") {
+        for (kind, days) in keys(v, STORAGE_KINDS, &[], "storage.expire_days")? {
+            int(days, &format!("storage.expire_days.{kind}"), 1, STORAGE_DAYS_MAX)?;
+        }
+    }
+    if let Some(c) = s.get("cloud") {
+        if !c.as_str().is_some_and(|c| ENTRA_CLOUDS.contains(&c)) {
+            return Err(bad("storage.cloud must be global, usgov-high or usgov-dod"));
+        }
+    }
+    if let Some(d) = s.get("map_sha256") {
+        if !d.as_str().is_some_and(|d| !d.ends_with('\n') && hex_ok(d, 64, 64)) {
+            return Err(bad("storage.map_sha256 must be 64 lower-case hex digits"));
+        }
+    }
+    if !named.is_empty() && !s.contains_key("map_sha256") {
+        return Err(bad("storage.map_sha256 is required when own or group names a map place"));
+    }
+    Ok(())
+}
+
+/// SD-1 13.5 (SD1-R2): a policy with `storage` is signed only once the relay's minimums reach the SD-1b release of
+/// both the Hub and the iPhone (older apps refuse the whole policy for its unknown top key).
+pub fn storage_gate(policy: Option<&Value>, minimums: &Obj) -> Result<(), String> {
+    let wants = policy.and_then(Value::as_object).is_some_and(|p| p.contains_key("storage"));
+    let ready = STORAGE_CLIENTS.iter().all(|(app, least)| minimums.get(*app).map(|v| crate::meet::version_key(&pj::py_str(v)) >= crate::meet::version_key(least)).unwrap_or(false));
+    if wants && !ready {
+        return Err(STORAGE_TOO_SOON.into());
+    }
+    Ok(())
+}
+
+/// A lower-case GUID (a full match).
+fn guid_ok(s: &str) -> bool {
+    let parts: Vec<&str> = s.split('-').collect();
+    parts.len() == 5
+        && parts.iter().zip([8, 4, 4, 4, 12]).all(|(p, n)| p.len() == n && p.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
+}
+
+fn map_text<'a>(v: &'a Value, what: &str, limit: usize, path: bool) -> Res<&'a str> {
+    let t = text(v, what, limit)?;
+    if path && t.split(['/', '\\']).any(|part| part == "..") {
+        return Err(format!("{what} must not hold a .. segment"));
+    }
+    Ok(t)
+}
+
+/// `_https_origin`: what Python's `urlsplit` reads as an `https` URL with a host, no user, no path other than "/",
+/// no query or fragment, and a port (when given) from 1 to 65535.
+fn https_origin(v: &Value, what: &str) -> Res<()> {
+    let err = || format!("{what} must be an https:// origin");
+    let Some(s) = v.as_str().filter(|s| s.chars().count() <= MAP_TEXT_MAX) else { return Err(err()) };
+    let Some((scheme, rest)) = s.split_once(':') else { return Err(err()) };
+    if !scheme.eq_ignore_ascii_case("https") {
+        return Err(err());
+    }
+    let Some(rest) = rest.strip_prefix("//") else { return Err(err()) };
+    let (rest, fragment) = rest.split_once('#').unwrap_or((rest, ""));
+    let (rest, query) = rest.split_once('?').unwrap_or((rest, ""));
+    let (netloc, path) = match rest.find('/') {
+        Some(i) => (&rest[..i], &rest[i..]),
+        None => (rest, ""),
+    };
+    if !fragment.is_empty() || !query.is_empty() || !(path.is_empty() || path == "/") || netloc.contains('@') {
+        return Err(err());
+    }
+    let (host, port) = if let Some(inner) = netloc.strip_prefix('[') {
+        let Some((h, after)) = inner.split_once(']') else { return Err(err()) };
+        match after {
+            "" => (h, None),
+            a => match a.strip_prefix(':') {
+                Some(p) => (h, Some(p)),
+                None => return Err(err()),
+            },
+        }
+    } else {
+        match netloc.split_once(':') {
+            Some((h, p)) => (h, Some(p)),
+            None => (netloc, None),
+        }
+    };
+    if host.is_empty() {
+        return Err(err());
+    }
+    if let Some(p) = port.filter(|p| !p.is_empty()) {
+        let ok = p.bytes().all(|b| b.is_ascii_digit()) && p.parse::<u32>().is_ok_and(|n| (1..65536).contains(&n));
+        if !ok {
+            return Err(err());
+        }
+    }
+    Ok(())
+}
+
+/// `{}` (false) or `{url, principal, device}` (true, shape checked; refused by the caller until SD-1e).
+fn check_connector(v: &Value, what: &str, policy: Option<&Obj>) -> Res<bool> {
+    if v.as_object().is_some_and(Obj::is_empty) {
+        return Ok(false);
+    }
+    let con = keys(v, CONNECTOR_KEYS, CONNECTOR_KEYS, what)?;
+    https_origin(&con["url"], &format!("{what}.url"))?;
+    let (local, domain) = split_value(&con["principal"])?;
+    let domains = policy.and_then(|p| p.get("domains")).and_then(Value::as_array);
+    let ok = local == "storage"
+        && domain.strip_prefix(APPS_PREFIX).is_some_and(|rest| domains.is_none_or(|d| d.iter().any(|x| x.as_str() == Some(rest))));
+    if !ok {
+        return Err(format!("{what}.principal must be storage@apps.<one of the policy's domains>"));
+    }
+    check_device_id(&con["device"])?;
+    Ok(true)
+}
+
+fn check_site(v: &Value, what: &str) -> Res<()> {
+    let site = keys(v, SITE_KEYS, &["site", "drive"], what)?;
+    map_text(&site["site"], &format!("{what}.site"), MAP_TEXT_MAX, false)?;
+    map_text(&site["drive"], &format!("{what}.drive"), MAP_TEXT_MAX, false)?;
+    if let Some(f) = site.get("folder") {
+        map_text(f, &format!("{what}.folder"), MAP_TEXT_MAX, true)?;
+    }
+    Ok(())
+}
+
+/// The fields one map place of `provider` may have, and those it needs besides `id` and `provider`.
+fn place_keys(provider: &str) -> (&'static [&'static str], &'static [&'static str]) {
+    const SHAREPOINT: &[&str] = &["id", "provider", "connector", "channels", "groups", "site"];
+    const SHAREPOINT_NEEDS: &[&str] = &["id", "provider"];
+    const GDRIVE: &[&str] = &["id", "provider", "connector", "drive", "folder"];
+    const GDRIVE_NEEDS: &[&str] = &["id", "provider", "drive"];
+    const DROPBOX: &[&str] = &["id", "provider", "connector", "folder"];
+    const DROPBOX_NEEDS: &[&str] = &["id", "provider", "folder"];
+    const S3: &[&str] = &["id", "provider", "connector", "endpoint", "region", "bucket", "prefix", "sse", "kms_key"];
+    const S3_NEEDS: &[&str] = &["id", "provider", "endpoint", "region", "bucket", "sse"];
+    const RELAY_SHARE: &[&str] = &["id", "provider", "share", "folder"];
+    const RELAY_SHARE_NEEDS: &[&str] = &["id", "provider", "share"];
+    match provider {
+        "sharepoint" => (SHAREPOINT, SHAREPOINT_NEEDS),
+        "gdrive" => (GDRIVE, GDRIVE_NEEDS),
+        "dropbox" => (DROPBOX, DROPBOX_NEEDS),
+        "s3" => (S3, S3_NEEDS),
+        _ => (RELAY_SHARE, RELAY_SHARE_NEEDS),
+    }
+}
+
+/// One map place: (id, provider, has a connector).
+fn check_place(place: &Value, policy: Option<&Obj>) -> Res<(String, String, bool)> {
+    let Some(po) = place.as_object() else { return Err("each place must be an object".into()) };
+    let null = Value::Null;
+    let pid = place_id(po.get("id").unwrap_or(&null), "a place's id")?;
+    let what = format!("places.{pid}");
+    if STORAGE_BUILTINS.contains(&pid) {
+        return Err(format!("{what}: {pid} is a built-in place id"));
+    }
+    let Some(provider) = po.get("provider").and_then(Value::as_str).filter(|p| MAP_PROVIDERS.contains(p)) else {
+        return Err(format!("{what}.provider must be one of {}", MAP_PROVIDERS.join(", ")));
+    };
+    let (allowed, required) = place_keys(provider);
+    keys(place, allowed, required, &what)?;
+    let connector = match po.get("connector") {
+        Some(c) => check_connector(c, &format!("{what}.connector"), policy)?,
+        None => false,
+    };
+    match provider {
+        "sharepoint" => {
+            if let Some(channels) = po.get("channels") {
+                let Some(c) = channels.as_object().filter(|c| c.len() <= MAP_ENTRIES_MAX) else {
+                    return Err(format!("{what}.channels must be an object of at most {MAP_ENTRIES_MAX} entries"));
+                };
+                for (cid, team) in c {
+                    let ok = (1..=64).contains(&cid.len()) && cid.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+                    if !ok {
+                        return Err(format!("{what}.channels: {} is not a channel id", repr_str(cid)));
+                    }
+                    let t = keys(team, TEAM_KEYS, TEAM_KEYS, &format!("{what}.channels.{cid}"))?;
+                    map_text(&t["team"], &format!("{what}.channels.{cid}.team"), MAP_TEXT_MAX, false)?;
+                    map_text(&t["channel"], &format!("{what}.channels.{cid}.channel"), MAP_TEXT_MAX, false)?;
+                }
+            }
+            if let Some(groups) = po.get("groups") {
+                let Some(g) = groups.as_object().filter(|g| g.len() <= MAP_ENTRIES_MAX) else {
+                    return Err(format!("{what}.groups must be an object of at most {MAP_ENTRIES_MAX} entries"));
+                };
+                for (gid, site) in g {
+                    if !guid_ok(gid) {
+                        return Err(format!("{what}.groups: {} is not a lower-case GUID", repr_str(gid)));
+                    }
+                    check_site(site, &format!("{what}.groups.{gid}"))?;
+                }
+            }
+            if let Some(site) = po.get("site") {
+                check_site(site, &format!("{what}.site"))?;
+            }
+        }
+        "gdrive" => {
+            map_text(&po["drive"], &format!("{what}.drive"), MAP_TEXT_MAX, false)?;
+            if let Some(f) = po.get("folder") {
+                map_text(f, &format!("{what}.folder"), MAP_TEXT_MAX, true)?;
+            }
+        }
+        "dropbox" => {
+            map_text(&po["folder"], &format!("{what}.folder"), MAP_TEXT_MAX, true)?;
+        }
+        "s3" => {
+            https_origin(&po["endpoint"], &format!("{what}.endpoint"))?;
+            let region_ok = po["region"].as_str().is_some_and(|r| (1..=32).contains(&r.len()) && r.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'));
+            if !region_ok {
+                return Err(format!("{what}.region must be 1 to 32 of a-z, 0-9 and -"));
+            }
+            let bucket_ok = po["bucket"].as_str().is_some_and(|b| {
+                let x = b.as_bytes();
+                let edge = |c: &u8| c.is_ascii_lowercase() || c.is_ascii_digit();
+                (3..=63).contains(&x.len()) && edge(&x[0]) && edge(&x[x.len() - 1]) && x.iter().all(|c| edge(c) || *c == b'.' || *c == b'-')
+            });
+            if !bucket_ok {
+                return Err(format!("{what}.bucket must be an S3 bucket name"));
+            }
+            if let Some(p) = po.get("prefix") {
+                map_text(p, &format!("{what}.prefix"), MAP_TEXT_MAX, true)?;
+            }
+            let sse = po["sse"].as_str().filter(|s| S3_SSE.contains(s));
+            if sse.is_none() {
+                return Err(format!("{what}.sse must be s3, kms or none"));
+            }
+            if (sse == Some("kms")) != po.contains_key("kms_key") {
+                return Err(format!("{what}.kms_key is needed with sse kms, and only then"));
+            }
+            if let Some(k) = po.get("kms_key") {
+                map_text(k, &format!("{what}.kms_key"), MAP_KEY_MAX, false)?;
+            }
+        }
+        _ => {
+            if !po["share"].as_str().is_some_and(place_ok) {
+                return Err(format!("{what}.share must be 1 to 32 of a-z, 0-9 and -"));
+            }
+            if let Some(f) = po.get("folder") {
+                map_text(f, &format!("{what}.folder"), MAP_TEXT_MAX, true)?;
+            }
+        }
+    }
+    Ok((pid.to_string(), provider.to_string(), connector))
+}
+
+/// 6.2's map rules (Bad naming the field). With the org's current `policy`: `org` must be the policy's and every
+/// `connector` principal an `apps.` name of its domains. A non-empty `connector` is then refused (until SD-1e).
+pub fn check_storage_map(storage_map: &Value, policy: Option<&Obj>) -> Result<(), PolicyError> {
+    let m = keys(storage_map, MAP_KEYS, MAP_REQUIRED, "the storage map")?;
+    canonical_json(storage_map)?; // no null, no float anywhere
+    if pj::as_int(m.get("v")) != Some(1) {
+        return Err(bad("the storage map must be version 1"));
+    }
+    let Some(org) = m["org"].as_str().filter(|o| place_ok(o)) else {
+        return Err(bad("org must be 1 to 32 of a-z, 0-9 and -"));
+    };
+    if policy.is_some_and(|p| p.get("org").and_then(Value::as_str) != Some(org)) {
+        return Err(bad("the storage map's org is not the policy's"));
+    }
+    int(&m["seq"], "seq", 1, MAX_INT)?;
+    int(&m["issued"], "issued", 1, MAX_INT)?;
+    if let Some(ms) = m.get("microsoft") {
+        let ms = keys(ms, &["client_id", "tenant"], &["client_id", "tenant"], "microsoft")?;
+        for k in ["client_id", "tenant"] {
+            if !ms[k].as_str().is_some_and(guid_ok) {
+                return Err(PolicyError::Bad(format!("microsoft.{k} must be a lower-case GUID")));
+            }
+        }
+        if ms["tenant"].as_str() == Some(PERSONAL_TENANT) {
+            return Err(bad("microsoft.tenant cannot be the personal Microsoft accounts tenant"));
+        }
+    }
+    let mut ids: Vec<String> = Vec::new();
+    let (mut connectors, mut sharepoint) = (false, false);
+    for place in list(&m["places"], "places", MAP_PLACES_MAX, 0)? {
+        let (pid, provider, connector) = check_place(place, policy)?;
+        if ids.contains(&pid) {
+            return Err(PolicyError::Bad(format!("places lists {pid} twice")));
+        }
+        ids.push(pid);
+        connectors |= connector;
+        sharepoint |= provider == "sharepoint";
+    }
+    if sharepoint && !m.contains_key("microsoft") {
+        return Err(bad("microsoft (client_id and tenant) is required for a sharepoint place"));
+    }
+    if connectors {
+        return Err(refused(CONNECTORS_REFUSED));
+    }
+    Ok(())
+}
+
+/// `lp("lucid-meet-org-storage-v1", canonical JSON of the map)` (empty JSON for a map canonical JSON refuses: every
+/// caller checks the map first).
+pub fn storage_map_bytes(storage_map: &Obj) -> Vec<u8> {
+    let mut out = String::new();
+    let json = match enc_obj(storage_map, &mut out) {
+        Ok(()) => out.into_bytes(),
+        Err(_) => Vec::new(),
+    };
+    lp(&[MAP_LABEL.as_bytes(), &json])
+}
+
+/// A verified signed org storage map.
+#[derive(Clone, Debug)]
+pub struct VerifiedMap {
+    pub wire: Obj,
+    pub org: String,
+    pub seq: i64,
+    pub hash: String,
+    /// "root" or the intermediate's serial (hex).
+    pub signer: String,
+}
+
+/// A relay's or device's check of a signed storage map, as `verify` checks a policy: the root-signed signer policy,
+/// the signature by the root or the signer's current (or previous) intermediate valid at `issued` and not in the
+/// root's CRL, `check_storage_map`, then an org the root assigned domains to.
+pub fn verify_storage_map(
+    wire: &Value,
+    root: &Cert,
+    signer_policy: &Obj,
+    root_crl: Option<&Crl>,
+    previous_serial: &str,
+    now: f64,
+) -> Result<VerifiedMap, PolicyError> {
+    let w = keys(wire, MAP_WIRE_KEYS, MAP_WIRE_KEYS, "the signed storage map")?;
+    if canonical_json(wire)?.len() > MAP_MAX {
+        return Err(bad("the signed storage map is larger than 256 KB"));
+    }
+    if !verify_signer_policy(root, signer_policy) {
+        return Err(refused("the signer policy is not signed by the root"));
+    }
+    let terms = signer_terms(signer_policy)?;
+    let m = keys(&w["map"], MAP_KEYS, MAP_REQUIRED, "the storage map")?;
+    let issued = int(&m["issued"], "issued", 1, MAX_INT)?;
+    if issued as f64 > now + SKEW as f64 {
+        return Err(refused("the storage map is dated in the future"));
+    }
+    let sig = pj::b64_strict(&pj::py_str(&w["sig"])).ok_or("sig must be base64")?;
+    canonical_json(&w["map"])?;
+    let data = storage_map_bytes(m);
+    let chain = match &w["chain"] {
+        Value::Array(c) if c.len() <= 1 && c.iter().all(Value::is_string) => c,
+        _ => return Err(bad("chain must be [] or [one intermediate PEM]")),
+    };
+    let inter = chain
+        .first()
+        .and_then(Value::as_str)
+        .map(|pem| Some(pem).filter(|p| p.is_ascii()).and_then(Cert::from_pem).ok_or("the chain is not a certificate"))
+        .transpose()?;
+    let signer = match &inter {
+        Some(c) => check_intermediate(c, root, &terms, previous_serial, issued, root_crl)?,
+        None => "root".to_string(),
+    };
+    let spki = inter.as_ref().map_or(&root.spki, |c| &c.spki);
+    if !ecdsa_sha256_verified(spki, &data, &sig) {
+        return Err(refused("the storage map's signature does not verify"));
+    }
+    check_storage_map(&w["map"], None)?;
+    let org = pj::text_of(m, "org");
+    if !terms.org_domains.contains_key(&org) {
+        return Err(refused(DOMAIN_REFUSED));
+    }
+    Ok(VerifiedMap {
+        wire: w.clone(),
+        org,
+        seq: pj::as_int(m.get("seq")).unwrap_or(0),
+        hash: sha256_hex(&data),
+        signer,
+    })
+}
+
+/// What a relay keeps (13.5, SD1-R14): per org the newest storage map and the one the org's current policy names by
+/// `map_sha256` (at most 2 per org, 64 orgs), so a map uploaded before the policy is re-signed breaks nobody.
+#[derive(Default)]
+pub struct MapStore {
+    pub newest: IndexMap<String, VerifiedMap>,
+    pub kept: IndexMap<String, IndexMap<String, VerifiedMap>>,
+}
+
+impl MapStore {
+    /// Verify and keep one signed map. `named`: the `map_sha256` of the org's current policy ("" when none), kept
+    /// even when it is not the newest. A `seq` not above the newest is refused unless it is that named map.
+    #[allow(clippy::too_many_arguments)]
+    pub fn accept_at(
+        &mut self,
+        wire: &Value,
+        root: &Cert,
+        signer_policy: &Obj,
+        root_crl: Option<&Crl>,
+        previous_serial: &str,
+        now: f64,
+        named: &str,
+    ) -> Result<VerifiedMap, PolicyError> {
+        let vm = verify_storage_map(wire, root, signer_policy, root_crl, previous_serial, now)?;
+        if let Some(held) = self.kept.get(&vm.org).and_then(|h| h.get(&vm.hash)) {
+            return Ok(held.clone());
+        }
+        match self.newest.get(&vm.org) {
+            None if !self.kept.contains_key(&vm.org) && self.kept.len() >= MAP_ORGS_MAX => {
+                return Err(refused("this relay already holds the storage maps of 64 organizations"));
+            }
+            Some(cur) if vm.seq <= cur.seq && vm.hash != named => {
+                return Err(PolicyError::Refused(format!("that storage map's seq is not higher than {}", cur.seq)));
+            }
+            _ => {}
+        }
+        if self.newest.get(&vm.org).is_none_or(|cur| vm.seq > cur.seq) {
+            self.newest.insert(vm.org.clone(), vm.clone());
+        }
+        self.kept.entry(vm.org.clone()).or_default().insert(vm.hash.clone(), vm.clone());
+        self.prune(&vm.org, named);
+        Ok(vm)
+    }
+
+    /// Keep only the org's newest map and the one its current policy names.
+    pub fn prune(&mut self, org: &str, named: &str) {
+        let newest = self.newest.get(org).map(|v| v.hash.clone()).unwrap_or_default();
+        if let Some(held) = self.kept.get_mut(org) {
+            held.retain(|h, _| *h == newest || h == named);
+        }
+    }
+
+    /// `GET /v1/org/storage?org=` (the newest) or `&sha256=` (that kept map).
+    pub fn get(&self, org: &str, sha256: &str) -> Option<&Obj> {
+        if sha256.is_empty() {
+            self.newest.get(org).map(|v| &v.wire)
+        } else {
+            self.kept.get(org).and_then(|h| h.get(&sha256.to_lowercase())).map(|v| &v.wire)
+        }
+    }
+
+    /// Every kept map, by org and `seq` (what `ext["pc"]["maps"]` holds).
+    pub fn persisted(&self) -> Vec<Value> {
+        let mut orgs: Vec<&String> = self.kept.keys().collect();
+        orgs.sort();
+        let mut out = Vec::new();
+        for org in orgs {
+            let mut maps: Vec<&VerifiedMap> = self.kept[org].values().collect();
+            maps.sort_by_key(|v| v.seq);
+            out.extend(maps.into_iter().map(|v| Value::Object(v.wire.clone())));
+        }
+        out
+    }
+}
+
+/// LS-1 section 2: a canonical IPv4 dotted quad (no leading zeros), as a u32.
+fn ipv4(s: &str) -> Option<u32> {
+    let a: std::net::Ipv4Addr = s.parse().ok()?;
+    (a.to_string() == s).then(|| u32::from(a))
+}
+
+/// LS-1 section 2: a canonical private IPv4 CIDR, prefix 8 to 32, host bits zero, inside one private block.
+fn lan_network(s: &str) -> Option<(u32, u32)> {
+    let (addr, len) = s.split_once('/')?;
+    let base = ipv4(addr)?;
+    let n: u32 = len.parse().ok()?;
+    if n.to_string() != len || !(8..=32).contains(&n) {
+        return None;
+    }
+    let mask = u32::MAX << (32 - n);
+    if base & !mask != 0 {
+        return None;
+    }
+    let inside = LAN_BLOCKS.iter().any(|(b, bn)| {
+        let bm = u32::MAX << (32 - bn);
+        n >= *bn && base & bm == *b
+    });
+    inside.then_some((base, mask))
+}
+
+const LAN_BLOCKS: [(u32, u32); 4] = [(0x0A00_0000, 8), (0xAC10_0000, 12), (0xC0A8_0000, 16), (0x6440_0000, 10)];
+
+fn lan_scope_ok(s: &Value) -> bool {
+    let Some(o) = s.as_object() else { return false };
+    if o.keys().any(|k| !LAN_SCOPE_KEYS.contains(&k.as_str())) {
+        return false;
+    }
+    let Some(nets) = o.get("networks").and_then(Value::as_array) else { return false };
+    if nets.is_empty() || nets.len() > 32 {
+        return false;
+    }
+    let mut parsed = Vec::new();
+    let mut seen = HashSet::new();
+    for n in nets {
+        let Some(t) = n.as_str() else { return false };
+        let Some(net) = lan_network(t) else { return false };
+        if !seen.insert(t) {
+            return false;
+        }
+        parsed.push(net);
+    }
+    if let Some(ttl) = o.get("ttl") {
+        if !ttl.as_i64().is_some_and(|t| (1..=16).contains(&t)) {
+            return false;
+        }
+    }
+    if let Some(anchors) = o.get("anchors") {
+        let Some(list) = anchors.as_array() else { return false };
+        if list.len() > 16 {
+            return false;
+        }
+        let mut seen = HashSet::new();
+        for a in list {
+            let Some(t) = a.as_str() else { return false };
+            let Some(ip) = ipv4(t) else { return false };
+            if !seen.insert(t) || !parsed.iter().any(|(b, m)| ip & m == *b) {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// NT-1 section 3.9: the policy turns message previews off for the people it covers.
+pub fn previews_off(policy: &Obj) -> bool {
+    policy.get("notify").and_then(|n| n.get("previews")).and_then(Value::as_str) == Some("off")
+}
+
+pub const NOTIFY_TOO_SOON: &str = "Message previews can be turned off by policy once every Hub and iPhone runs 0.97.0 or later";
+pub const VIDEO_TOO_SOON: &str = "A team background can be set by policy once every Hub and iPhone runs 0.98.0 or later";
+pub const LAN_SCOPE_TOO_SOON: &str = "Own-network reach across networks can be set by policy once every Hub and iPhone runs 0.98.0 or later";
+pub const WATCH_TOO_SOON: &str = "Apple Watch can be set by policy once every Hub and iPhone runs 0.98.1 or later";
+pub const WA_TOO_SOON: &str = "Guest and web rules can be set by policy once every Hub and iPhone runs 0.98.3 or later";
+/// The WA-1 release of the Hub and the iPhone (reads `guests` and `web_devices`).
+const WA_CLIENTS: [(&str, &str); 2] = [("hub", "0.98.3"), ("ios", "0.98.3")];
+/// NT-1 section 3.9, BG-1 section 2.2, LS-1 section 2, AW-1 section 2.2 and WA-1 sections 3.5 and 7.1: each gated key, the Hub and
+/// iPhone releases that first read it (older devices refuse unknown keys), and the refusal.
+const CLIENT_GATES: [(&str, [(&str, &str); 2], &str); 6] = [
+    ("notify", [("hub", "0.97.0"), ("ios", "0.97.0")], NOTIFY_TOO_SOON),
+    ("video", [("hub", "0.98.0"), ("ios", "0.98.0")], VIDEO_TOO_SOON),
+    ("lan_scope", [("hub", "0.98.0"), ("ios", "0.98.0")], LAN_SCOPE_TOO_SOON),
+    ("watch", [("hub", "0.98.1"), ("ios", "0.98.1")], WATCH_TOO_SOON),
+    ("guests", WA_CLIENTS, WA_TOO_SOON),
+    ("web_devices", WA_CLIENTS, WA_TOO_SOON),
+];
+
+/// client_gate: a policy with a key in CLIENT_GATES is signed only once the relay's minimums (`min_client` and the
+/// release's) reach that key's release of both the Hub and the iPhone.
+pub fn client_gate(policy: Option<&Value>, minimums: &Obj) -> Result<(), String> {
+    let Some(p) = policy.and_then(Value::as_object) else { return Ok(()) };
+    for (key, clients, needs) in CLIENT_GATES {
+        let ready = clients.iter().all(|(app, least)| minimums.get(*app).map(|v| crate::meet::version_key(&pj::py_str(v)) >= crate::meet::version_key(least)).unwrap_or(false));
+        if p.contains_key(key) && !ready {
+            return Err(needs.into());
         }
     }
     Ok(())
@@ -711,7 +2994,7 @@ pub struct Verified {
     pub signer: String,
 }
 
-fn check_intermediate(
+pub(crate) fn check_intermediate(
     inter: &Cert,
     root: &Cert,
     terms: &SignerTerms,
@@ -807,7 +3090,288 @@ pub fn verify(
 pub struct Store {
     pub newest: IndexMap<String, Verified>,
     pub by_hash: IndexMap<String, Obj>,
+    /// 3.8: the lowerings kept next to each org's newest policy.
+    pub book: Book,
 }
+
+/// A verified `lucid-identity-lowering-v1` wire.
+#[derive(Clone, Debug)]
+pub struct Lowering {
+    pub wire: Obj,
+    pub org: String,
+    pub base_seq: i64,
+    pub base_hash: String,
+    pub next_seq: i64,
+    pub effective_at: i64,
+    pub policy: Obj,
+    pub label: String,
+    /// SHA-256 of the signed lowering bytes (what a cancel names).
+    pub hash: String,
+}
+
+/// A verified `lucid-identity-lowering-cancel-v1` wire.
+#[derive(Clone, Debug)]
+pub struct Cancel {
+    pub wire: Obj,
+    pub org: String,
+    pub base_seq: i64,
+    pub next_seq: i64,
+    pub lowering_sha256: String,
+}
+
+/// Python's `_LoweringBook`: held lowerings per org in `next_seq` order, canceled hashes, cancel wires and
+/// conflicts.
+#[derive(Default)]
+pub struct Book {
+    pub held: IndexMap<String, Vec<Lowering>>,
+    pub canceled: IndexMap<String, HashSet<String>>,
+    /// lowering hash -> cancel wire
+    pub cancels: IndexMap<String, Obj>,
+    pub conflicts: IndexMap<String, String>,
+}
+
+impl Book {
+    fn latest(&self, org: &str, seq: i64, digest: &str) -> (i64, String) {
+        let mut best = (seq, digest.to_string());
+        for vl in self.held.get(org).into_iter().flatten() {
+            if vl.next_seq > best.0 {
+                best = (vl.next_seq, sha256_hex(&signed_bytes(&vl.policy)));
+            }
+        }
+        best
+    }
+
+    fn add(&mut self, vl: Lowering, seq: i64, digest: &str) -> Result<bool, PolicyError> {
+        let label = vl.label.clone();
+        if self.canceled.get(&vl.org).is_some_and(|c| c.contains(&vl.hash)) {
+            return Err(PolicyError::Refused(format!("that lowering of {label}'s rules was canceled")));
+        }
+        if vl.next_seq <= seq {
+            return Ok(false);
+        }
+        let held = self.held.get(&vl.org).cloned().unwrap_or_default();
+        if held.iter().any(|h| h.hash == vl.hash) {
+            return Ok(false);
+        }
+        if held.iter().any(|h| h.base_seq == vl.base_seq) {
+            let words = format!("Two different signed versions of {label}'s rules exist. Enforcement of new rules stopped; tell an administrator.");
+            self.conflicts.insert(vl.org.clone(), words.clone());
+            return Err(PolicyError::Refused(words));
+        }
+        if (vl.base_seq, vl.base_hash.clone()) != self.latest(&vl.org, seq, digest) {
+            return Err(PolicyError::Refused(lowering_base(&label)));
+        }
+        let list = self.held.entry(vl.org.clone()).or_default();
+        list.push(vl);
+        list.sort_by_key(|h| h.next_seq);
+        Ok(true)
+    }
+
+    fn cancel(&mut self, vc: &Cancel) -> bool {
+        self.canceled.entry(vc.org.clone()).or_default().insert(vc.lowering_sha256.clone());
+        self.cancels.insert(vc.lowering_sha256.clone(), vc.wire.clone());
+        let held = self.held.entry(vc.org.clone()).or_default();
+        let before = held.len();
+        held.retain(|h| h.hash != vc.lowering_sha256);
+        let changed = held.len() != before;
+        if changed {
+            self.conflicts.shift_remove(&vc.org);
+        }
+        changed
+    }
+
+    fn supersede(&mut self, org: &str, seq: i64) {
+        if let Some(held) = self.held.get_mut(org).filter(|h| !h.is_empty()) {
+            held.retain(|h| h.next_seq > seq);
+            self.conflicts.shift_remove(org);
+        }
+    }
+
+    /// The lowering in force at `now` above ordinary `seq` (None during a conflict).
+    pub fn effective(&self, org: &str, seq: i64, now: f64) -> Option<&Lowering> {
+        if self.conflicts.contains_key(org) {
+            return None;
+        }
+        self.held.get(org)?.iter().filter(|vl| vl.effective_at as f64 <= now && vl.next_seq > seq).max_by_key(|vl| vl.next_seq)
+    }
+
+    pub fn newest(&self, org: &str) -> Option<&Lowering> {
+        self.held.get(org)?.last()
+    }
+}
+
+fn lowering_base(label: &str) -> String {
+    format!("that lowering is not based on {label}'s current policy; nothing was signed")
+}
+
+/// The signer's signature (root, or its current or previous intermediate valid at `at` and not in the root's CRL)
+/// over `data`; `words` when it does not verify.
+#[allow(clippy::too_many_arguments)]
+fn check_signature(
+    chain: &Value,
+    sig: &Value,
+    data: &[u8],
+    root: &Cert,
+    terms: &SignerTerms,
+    previous_serial: &str,
+    at: i64,
+    root_crl: Option<&Crl>,
+    words: &str,
+) -> Result<(), PolicyError> {
+    let chain = match chain {
+        Value::Array(c) if c.len() <= 1 && c.iter().all(Value::is_string) => c,
+        _ => return Err(bad("chain must be [] or [one intermediate PEM]")),
+    };
+    let inter = chain
+        .first()
+        .and_then(Value::as_str)
+        .map(|pem| Some(pem).filter(|p| p.is_ascii()).and_then(Cert::from_pem).ok_or("the chain is not a certificate"))
+        .transpose()?;
+    if let Some(c) = &inter {
+        check_intermediate(c, root, terms, previous_serial, at, root_crl)?;
+    }
+    let spki = inter.as_ref().map_or(&root.spki, |c| &c.spki);
+    match pj::b64_strict(&pj::py_str(sig)) {
+        Some(raw) if ecdsa_sha256_verified(spki, data, &raw) => Ok(()),
+        _ => Err(refused(words)),
+    }
+}
+
+const LOWERING_BAD_SIG: &str = "the lowering's signature does not verify";
+pub const CANCEL_LABEL: &str = "lucid-identity-lowering-cancel-v1";
+const CANCEL_KEYS: &[&str] = &["typ", "org", "base_seq", "next_seq", "lowering_sha256"];
+const CANCEL_WIRE_KEYS: &[&str] = &["typ", "org", "base_seq", "next_seq", "lowering_sha256", "sig", "chain"];
+/// A signed lowering: the 64 KB policy and 16 KB more.
+const LOWERING_MAX: usize = SIGNED_MAX + 16 * 1024;
+
+/// True for a signed identity lowering `{lowering, sig, chain}` or its cancel.
+pub fn is_lowering_wire(wire: &Value) -> bool {
+    wire.as_object().is_some_and(|w| w.contains_key("lowering") || w.get("typ").and_then(Value::as_str) == Some(CANCEL_LABEL))
+}
+
+/// `lp("lucid-identity-lowering-cancel-v1", canonical_json(the cancel fields))`.
+fn cancel_bytes(w: &Obj) -> Res<Vec<u8>> {
+    let body: Obj = CANCEL_KEYS.iter().filter_map(|k| w.get(*k).map(|v| (k.to_string(), v.clone()))).collect();
+    Ok(lp(&[CANCEL_LABEL.as_bytes(), &canonical_json(&Value::Object(body))?]))
+}
+
+/// `lp("lucid-identity-lowering-v1", canonical_json(lowering))`.
+pub fn lowering_bytes(lowering: &Obj) -> Vec<u8> {
+    let mut out = String::new();
+    let json = match enc_obj(lowering, &mut out) {
+        Ok(()) => out.into_bytes(),
+        Err(_) => Vec::new(),
+    };
+    lp(&[LOWERING_LABEL.as_bytes(), &json])
+}
+
+/// `check_lowering` (3.8), in the Python order: exact keys, `next_seq == base_seq + 1 == policy.seq`, `reason`,
+/// 24 hours' notice, exactly two distinct `org_admins` signers sorted by principal with distinct certificates, then
+/// the policy under every rule except 3.3. The signer checks the proofs (it holds the certificates).
+fn check_lowering(l: &Obj, terms: &SignerTerms) -> Result<(), PolicyError> {
+    keys(&Value::Object(l.clone()), LOWERING_KEYS, LOWERING_KEYS, "the lowering")?;
+    if !(py_eq(l.get("v"), 1) && l.get("typ").and_then(Value::as_str) == Some(LOWERING_LABEL)) {
+        return Err(bad("the lowering must be version 1 of lucid-identity-lowering-v1"));
+    }
+    let org = l["org"].as_str().filter(|o| slug_ok(o)).ok_or("org must be 1 to 32 of a-z, 0-9 and -")?;
+    let base = int(&l["base_seq"], "base_seq", 1, MAX_INT)?;
+    if !l["base_hash"].as_str().is_some_and(|h| hex_ok(h, 64, 64)) {
+        return Err(bad("base_hash must be 64 lower-case hex digits"));
+    }
+    let next = int(&l["next_seq"], "next_seq", 1, MAX_INT)?;
+    let policy = l["policy"].as_object();
+    if next != base + 1 || policy.is_none_or(|p| !py_eq(p.get("seq"), next) || !p.get("seq").is_some_and(Value::is_number)) {
+        return Err(bad("a lowering's next_seq and policy seq must be base_seq + 1"));
+    }
+    if policy.and_then(|p| p.get("org")).and_then(Value::as_str) != Some(org) {
+        return Err(bad("the lowered policy is for another organization"));
+    }
+    let reason = l["reason"].as_str().unwrap_or_default();
+    if reason.is_empty() || reason.chars().count() > REASON_MAX || !pj::printable(reason) {
+        return Err(bad("reason must be 1 to 500 characters without control characters"));
+    }
+    let signed_at = int(&l["signed_at"], "signed_at", 1, MAX_INT)?;
+    let effective_at = int(&l["effective_at"], "effective_at", 1, MAX_INT)?;
+    if effective_at < signed_at + LOWERING_NOTICE {
+        return Err(refused(LOWERING_REFUSED));
+    }
+    let signers = l["signers"].as_array().filter(|s| s.len() == 2).ok_or_else(|| refused(LOWERING_REFUSED))?;
+    let admins = terms.org_admins.get(org).cloned().unwrap_or_default();
+    for s in signers {
+        let o = keys(s, LOWERING_SIGNER_KEYS, LOWERING_SIGNER_KEYS, "a lowering signer")?;
+        if !o["principal"].as_str().is_some_and(|p| admins.iter().any(|a| a == p)) {
+            return Err(refused(LOWERING_REFUSED));
+        }
+        if !o["cert_sha256"].as_str().is_some_and(|h| hex_ok(h, 64, 64)) {
+            return Err(bad("cert_sha256 must be 64 lower-case hex digits"));
+        }
+        if !o["proof"].as_str().is_some_and(|p| !p.is_empty()) {
+            return Err(bad("each signer needs a proof"));
+        }
+    }
+    let (a, b) = (&signers[0], &signers[1]);
+    let principal = |s: &Value| s["principal"].as_str().unwrap_or_default().as_bytes().to_vec();
+    if principal(a) >= principal(b) || a["cert_sha256"] == b["cert_sha256"] {
+        return Err(refused(LOWERING_REFUSED));
+    }
+    check_policy(&l["policy"], terms)
+}
+
+/// `verify_lowering`: exact wire keys and size, the root-signed signer policy, the signature by the root or the
+/// signer's current (or previous) intermediate valid at `signed_at` (before the object's fields, so a stripped or
+/// changed field fails as a signature), then `check_lowering`. Whether it applies is the store's.
+pub fn verify_lowering(wire: &Value, root: &Cert, signer_policy: &Obj, root_crl: Option<&Crl>, previous_serial: &str, now: f64) -> Result<Lowering, PolicyError> {
+    let w = keys(wire, LOWERING_WIRE_KEYS, LOWERING_WIRE_KEYS, "the signed lowering")?;
+    if canonical_json(wire)?.len() > LOWERING_MAX {
+        return Err(bad("the signed lowering is larger than 80 KB"));
+    }
+    let l = w["lowering"].as_object().ok_or("lowering must be an object")?;
+    if !verify_signer_policy(root, signer_policy) {
+        return Err(refused("the signer policy is not signed by the root"));
+    }
+    let terms = signer_terms(signer_policy)?;
+    let at = pj::as_int(l.get("signed_at")).unwrap_or(0);
+    check_signature(&w["chain"], &w["sig"], &lowering_bytes(l), root, &terms, previous_serial, at, root_crl, LOWERING_BAD_SIG)?;
+    check_lowering(l, &terms)?;
+    if at as f64 > now + SKEW as f64 {
+        return Err(refused("the lowering is dated in the future"));
+    }
+    let policy = l["policy"].as_object().cloned().unwrap_or_default();
+    Ok(Lowering {
+        wire: w.clone(),
+        org: pj::text_of(l, "org"),
+        base_seq: pj::as_int(l.get("base_seq")).unwrap_or(0),
+        base_hash: pj::text_of(l, "base_hash"),
+        next_seq: pj::as_int(l.get("next_seq")).unwrap_or(0),
+        effective_at: pj::as_int(l.get("effective_at")).unwrap_or(0),
+        label: pj::text_of(&policy, "label"),
+        policy,
+        hash: sha256_hex(&lowering_bytes(l)),
+    })
+}
+
+/// `verify_cancel`: a signed cancel of a lowering (3.8); its signing certificate must be valid now.
+pub fn verify_cancel(wire: &Value, root: &Cert, signer_policy: &Obj, root_crl: Option<&Crl>, previous_serial: &str, now: f64) -> Result<Cancel, PolicyError> {
+    let w = keys(wire, CANCEL_WIRE_KEYS, CANCEL_WIRE_KEYS, "the cancel")?;
+    if w["typ"].as_str() != Some(CANCEL_LABEL) {
+        return Err(bad("the cancel must be a lucid-identity-lowering-cancel-v1"));
+    }
+    if !verify_signer_policy(root, signer_policy) {
+        return Err(refused("the signer policy is not signed by the root"));
+    }
+    let terms = signer_terms(signer_policy)?;
+    check_signature(&w["chain"], &w["sig"], &cancel_bytes(w)?, root, &terms, previous_serial, now as i64, root_crl, "the cancel's signature does not verify")?;
+    let org = w["org"].as_str().filter(|o| slug_ok(o)).ok_or("org must be 1 to 32 of a-z, 0-9 and -")?;
+    let base_seq = int(&w["base_seq"], "base_seq", 1, MAX_INT)?;
+    if int(&w["next_seq"], "next_seq", 1, MAX_INT)? != base_seq + 1 {
+        return Err(bad("a cancel's next_seq must be base_seq + 1"));
+    }
+    let digest = w["lowering_sha256"].as_str().filter(|h| hex_ok(h, 64, 64)).ok_or("lowering_sha256 must be 64 lower-case hex digits")?;
+    Ok(Cancel { wire: w.clone(), org: org.to_string(), base_seq, next_seq: base_seq + 1, lowering_sha256: digest.to_string() })
+}
+
+/// 6.9 `policy_lowering_refused`.
+pub const LOWERING_REFUSED: &str = "This lowering needs two different administrators and at least 24 hours' notice. Nothing was signed.";
 
 impl Store {
     pub fn accept(
@@ -848,7 +3412,97 @@ impl Store {
         }
         self.newest.insert(v.org.clone(), v.clone());
         self.by_hash.insert(v.hash.clone(), v.wire.clone());
+        self.book.supersede(&v.org, v.seq);
         Ok(v)
+    }
+
+    /// The `lucid-identity-lowering-v1` branch (3.8): the signer's signature over the lowering's bytes (checked before
+    /// anything else), every rule of 3.8, and its base equal to the org's newest policy. Kept next to it; the same wire
+    /// again is a no-op, a different one for that org is the two-versions conflict.
+    #[allow(clippy::too_many_arguments)]
+    pub fn accept_lowering_at(
+        &mut self,
+        wire: &Value,
+        root: &Cert,
+        signer_policy: &Obj,
+        root_crl: Option<&Crl>,
+        previous_serial: &str,
+        now: f64,
+    ) -> Result<Lowering, PolicyError> {
+        let vl = verify_lowering(wire, root, signer_policy, root_crl, previous_serial, now)?;
+        let Some(cur) = self.newest.get(&vl.org) else { return Err(PolicyError::Refused(lowering_base(&vl.label))) };
+        let (seq, digest) = (cur.seq, cur.hash.clone());
+        self.book.add(vl.clone(), seq, &digest)?;
+        Ok(vl)
+    }
+
+    /// The signed cancel branch: the lowering it names goes (and is refused if it comes back).
+    pub fn cancel_lowering_at(
+        &mut self,
+        wire: &Value,
+        root: &Cert,
+        signer_policy: &Obj,
+        root_crl: Option<&Crl>,
+        previous_serial: &str,
+        now: f64,
+    ) -> Result<Cancel, PolicyError> {
+        let vc = verify_cancel(wire, root, signer_policy, root_crl, previous_serial, now)?;
+        self.book.cancel(&vc);
+        Ok(vc)
+    }
+
+    /// Per org the newest lowering held (before or after its `effective_at`).
+    pub fn pending(&self) -> impl Iterator<Item = (&String, &Lowering)> {
+        self.book.held.iter().filter_map(|(o, h)| h.last().map(|l| (o, l)))
+    }
+
+    /// `pending_lowering` of `GET /v1/org/policy?org=` (None when none is held).
+    pub fn pending_lowering(&self, org: &str) -> Option<&Obj> {
+        self.book.newest(org).map(|l| &l.wire)
+    }
+
+    /// The policy the relay enforces for `org`: the newest ordinary one, or a held lowering's policy from its
+    /// `effective_at` on (never during a conflict).
+    pub fn in_force(&self, org: &str, now: f64) -> Option<&Obj> {
+        let cur = self.newest.get(org)?;
+        Some(self.book.effective(org, cur.seq, now).map_or(&cur.policy, |l| &l.policy))
+    }
+
+    /// `{lowerings, canceled}` for `ext["pc"]["lowerings"]` (`restore_lowerings` reads it).
+    pub fn persisted_lowerings(&self) -> Value {
+        let mut orgs: Vec<&String> = self.book.held.keys().collect();
+        orgs.sort();
+        let lowerings: Vec<Value> = orgs.into_iter().flat_map(|o| self.book.held[o].iter().map(|h| Value::Object(h.wire.clone()))).collect();
+        let mut hashes: Vec<&String> = self.book.cancels.keys().collect();
+        hashes.sort();
+        let canceled: Vec<Value> = hashes.into_iter().map(|h| Value::Object(self.book.cancels[h].clone())).collect();
+        Value::Object(Obj::from_iter([("lowerings".to_string(), Value::Array(lowerings)), ("canceled".to_string(), Value::Array(canceled))]))
+    }
+
+    /// Re-verify `persisted_lowerings()` output after the policies: cancels, then lowerings by `next_seq`. A bad
+    /// wire is skipped (the reasons come back); a kept cancel that no longer verifies still cancels.
+    pub fn restore_lowerings(&mut self, doc: &Value, root: &Cert, signer_policy: &Obj, root_crl: Option<&Crl>, previous_serial: &str, now: f64) -> Vec<String> {
+        let mut skipped = Vec::new();
+        let list = |k: &str| doc.get(k).and_then(Value::as_array).cloned().unwrap_or_default();
+        for wire in list("canceled") {
+            if let Err(e) = self.cancel_lowering_at(&wire, root, signer_policy, root_crl, previous_serial, now) {
+                skipped.push(format!("canceled: {e}"));
+                if let (Some(org), Some(h)) = (wire.get("org").and_then(Value::as_str), wire.get("lowering_sha256").and_then(Value::as_str)) {
+                    self.book.canceled.entry(org.to_string()).or_default().insert(h.to_string());
+                    if let Some(w) = wire.as_object() {
+                        self.book.cancels.insert(h.to_string(), w.clone());
+                    }
+                }
+            }
+        }
+        let mut lowerings: Vec<Value> = list("lowerings").into_iter().filter(Value::is_object).collect();
+        lowerings.sort_by_key(|w| w.get("lowering").and_then(|l| pj::as_int(l.get("next_seq"))).unwrap_or(0));
+        for wire in lowerings {
+            if let Err(e) = self.accept_lowering_at(&wire, root, signer_policy, root_crl, previous_serial, now) {
+                skipped.push(format!("lowerings: {e}"));
+            }
+        }
+        skipped
     }
 
     /// `GET /v1/org/policy?org=`: the newest.
@@ -882,6 +3536,187 @@ mod tests {
     use serde_json::json;
 
     const VECTORS: &str = include_str!("../tests/org_policy_v1.json");
+    // ID-1 shared vectors (copied byte for byte from the Meeting Hub's tests/vectors/)
+    const IDENTITY_RULES: &str = include_str!("../tests/identity_rules_v2.json");
+    const METHOD_MATCH: &str = include_str!("../tests/method_match_v1.json");
+    const LOWERING: &str = include_str!("../tests/identity_lowering_v1.json");
+
+    const ORG: &str = "acme";
+
+    fn strs(v: &Value) -> Vec<String> {
+        v.as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect()
+    }
+
+    fn ir(v: &Value) -> Option<Vec<IrProvider>> {
+        v.as_array().map(|a| a.iter().map(|p| (p["id"].as_str().unwrap().to_string(), p["iss"].as_str().unwrap().to_string(), strs(&p["phr_values"]))).collect())
+    }
+
+    fn registry_terms(registry: &Value) -> SignerTerms {
+        let identity_providers = registry
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|r| IdentityProvider {
+                org: ORG.into(),
+                id: r["id"].as_str().unwrap().into(),
+                kind: r["kind"].as_str().unwrap().into(),
+                iss: r["iss"].as_str().unwrap().into(),
+                sso_serial: "1a".into(),
+                cloud: r["cloud"].as_str().unwrap_or_default().into(),
+            })
+            .collect();
+        SignerTerms { version: 3, identity_providers, ..SignerTerms::default() }
+    }
+
+    #[test]
+    fn the_identity_rules_vectors_give_the_expected_words() {
+        let doc: Value = serde_json::from_str(IDENTITY_RULES).unwrap();
+        assert_eq!(doc["baseline"].as_i64(), Some(PASSWORD_BASELINE));
+        let cases = doc["cases"].as_array().unwrap();
+        assert!(!cases.is_empty());
+        for case in cases {
+            let ctx = &case["context"];
+            let terms = registry_terms(&ctx["registry"]);
+            let gates = strs(&ctx["gates"]);
+            let gates: Vec<&str> = gates.iter().map(String::as_str).collect();
+            let stored = ir(&ctx["effective"]);
+            let verdict = match check_identity(&case["identity"], &terms, ORG, ctx["label"].as_str().unwrap(), ctx["issued"].as_i64().unwrap(), Some(gates.as_slice()), stored.as_deref()) {
+                Ok(()) => "ok".to_string(),
+                Err(e) => e.to_string(),
+            };
+            assert_eq!(verdict, case["expect"].as_str().unwrap(), "{}", case["name"]);
+        }
+    }
+
+    #[test]
+    fn the_stronger_or_equal_vectors_name_the_first_lowering() {
+        let doc: Value = serde_json::from_str(IDENTITY_RULES).unwrap();
+        let cases = doc["stronger"].as_array().unwrap();
+        assert!(!cases.is_empty());
+        for case in cases {
+            let ctx = &case["context"];
+            let stored = ir(&ctx["effective"]).unwrap_or_default();
+            let r = identity_stronger_or_equal(case["old"].as_object(), case["new"].as_object(), &stored, &strs(&ctx["used_devices"]), &strs(&ctx["used_ids"]));
+            assert_eq!(r.is_ok(), case["expect"].as_bool().unwrap(), "{}", case["name"]);
+            assert_eq!(r.err().unwrap_or(""), case["reason"].as_str().unwrap_or(""), "{}", case["name"]);
+        }
+    }
+
+    #[test]
+    fn the_method_match_vectors_hold() {
+        let doc: Value = serde_json::from_str(METHOD_MATCH).unwrap();
+        for case in doc["cases"].as_array().unwrap() {
+            let got = method_matches(case["requirement"].as_str().unwrap(), &strs(&case["evidence"]));
+            assert_eq!(got, case["expect"].as_bool().unwrap(), "{}", case["name"]);
+        }
+        for case in doc["evidence"].as_array().unwrap() {
+            assert_eq!(evidence_ok(&case["methods"]), case["expect"].as_bool().unwrap(), "{}", case["name"]);
+        }
+    }
+
+    #[test]
+    fn the_lowering_vectors_keep_apply_and_cancel() {
+        let doc: Value = serde_json::from_str(LOWERING).unwrap();
+        let root = Cert::from_pem(doc["root_pem"].as_str().unwrap()).unwrap();
+        // the root signs every wire here: no CRL is needed
+        let crl: Option<&Crl> = None;
+        let sp = doc["signer_policy"].as_object().unwrap();
+        let org = doc["base"]["policy"]["org"].as_str().unwrap();
+        for case in doc["cases"].as_array().unwrap() {
+            let name = case["name"].as_str().unwrap_or_default();
+            let steps = case["steps"].as_array().unwrap();
+            let first = steps.first().and_then(|s| s["now"].as_f64()).unwrap();
+            let mut store = Store::default();
+            store.accept_at(&doc["base"], &root, sp, crl, "", first).unwrap();
+            for step in steps {
+                let now = step["now"].as_f64().unwrap();
+                if step["restart"].as_bool() == Some(true) {
+                    // a restart: the policies, then the kept cancels and lowerings, verified again
+                    let policies: Vec<Value> = store.newest.values().map(|v| Value::Object(v.wire.clone())).collect();
+                    let kept = store.persisted_lowerings();
+                    store = Store::default();
+                    for w in &policies {
+                        store.accept_at(w, &root, sp, crl, "", now).unwrap();
+                    }
+                    assert!(store.restore_lowerings(&kept, &root, sp, crl, "", now).is_empty(), "{name}");
+                    continue;
+                }
+                let wire = &step["wire"];
+                let r = if wire.get("lowering").is_some() {
+                    store.accept_lowering_at(wire, &root, sp, crl, "", now).map(|_| ())
+                } else if wire.get("typ").and_then(Value::as_str) == Some(CANCEL_LABEL) {
+                    store.cancel_lowering_at(wire, &root, sp, crl, "", now).map(|_| ())
+                } else {
+                    store.accept_at(wire, &root, sp, crl, "", now).map(|_| ())
+                };
+                let verdict = r.err().map(|e| e.to_string()).unwrap_or_else(|| "ok".into());
+                assert_eq!(verdict, step["expect"].as_str().unwrap(), "{name}");
+            }
+            for f in case["in_force"].as_array().into_iter().flatten() {
+                let seq = store.in_force(org, f["now"].as_f64().unwrap()).and_then(|p| pj::as_int(p.get("seq")));
+                assert_eq!(seq, f["seq"].as_i64(), "{name}");
+            }
+        }
+    }
+
+    fn okta_terms() -> SignerTerms {
+        registry_terms(&json!([{"id": "okta", "kind": "okta", "iss": "https://acme.okta.com"}, {"id": "lg", "kind": "logingov", "iss": "https://secure.login.gov/"}]))
+    }
+
+    fn check(identity: Value, gates: &[&str]) -> String {
+        check_identity(&identity, &okta_terms(), ORG, "Acme", 1_763_164_800, Some(gates), None).err().map(|e| e.to_string()).unwrap_or_else(|| "ok".into())
+    }
+
+    #[test]
+    fn identity_rules_refuse_with_paths_and_the_3_7_words() {
+        let okta = |phr: Value| json!({"v": 2, "signin_max_days": 30, "providers": [{"id": "okta", "iss": "https://acme.okta.com", "phr_values": phr}]});
+        assert_eq!(check(json!({"v": 2, "signin_max_days": 30}), &[]), "ok");
+        assert_eq!(check(json!({"v": 2, "zz": 1}), &[]), "unknown identity rule: zz");
+        assert_eq!(check(json!({"v": 2, "signin_max_days": 30, "passwordless_unlock": {"foo": 1}}), &[]), "unknown identity rule: passwordless_unlock.foo");
+        assert_eq!(check(json!({"v": 1}), &[]), "the identity rules are not valid: v");
+        assert_eq!(check(json!({"v": 2, "session_max_minutes": 4}), &[]), "the identity rules are not valid: session_max_minutes");
+        assert_eq!(check(json!({"v": 2, "min_password_length": 7}), &[]), "the password minimum cannot be below Lucid's minimum of 8");
+        assert_eq!(check(json!({"v": 2}), &[]), "the identity rules are not valid: signin_max_days");
+        // revision 5: at most 4 phr_values
+        assert_eq!(check(okta(json!(["acr:a", "acr:b", "acr:c", "acr:d"])), &["G-OKTA-PHR"]), "ok");
+        assert_eq!(check(okta(json!(["acr:a", "acr:b", "acr:c", "acr:d", "acr:e"])), &["G-OKTA-PHR"]), "the identity rules are not valid: providers[0].phr_values");
+        assert_eq!(check(okta(json!(["acr:b", "acr:a"])), &["G-OKTA-PHR"]), "the identity rules are not valid: providers[0].phr_values");
+        assert_eq!(check(okta(json!(["acr:phr"])), &[]), "Okta cannot prove a phishing-resistant sign-in yet; nothing was signed");
+        assert_eq!(check(okta(json!(["amr:hwk"])), &["G-OKTA-PHR"]), "Okta cannot prove a phishing-resistant sign-in yet; nothing was signed");
+        let other = json!({"v": 2, "providers": [{"id": "okta", "iss": "https://other.okta.com"}]});
+        assert_eq!(check(other, &[]), "that identity provider is not registered for Acme by the root; nothing was signed");
+        let kinds = json!({"v": 2, "signin_max_days": 30, "passwordless_unlock": {"required": true, "enforce_at": 1_763_164_800, "kinds": ["fido2"]}});
+        assert_eq!(check(kinds, &[]), "Acme cannot require a particular kind of authenticator yet; nothing was signed");
+        let long = json!({"v": 2, "signin_max_days": 30, "passwordless_unlock": {"exceptions": [{"id": "9f2c4e1a7b3d5f60", "device": "urn:lucid-meet:device:4b1e4b1e4b1e4b1e", "until": 1_763_164_800 + 14 * 86400 + 1}]}});
+        assert_eq!(check(long, &[]), EXCEPTION_REFUSED);
+    }
+
+    #[test]
+    fn methods_match_by_prefix_and_raw_values_never_carry_a_colon() {
+        let ev = |l: &[&str]| l.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(method_matches("phr", &ev(&["acr:phr"])));
+        assert!(method_matches("c1", &ev(&["acrs:c1"])));
+        assert!(method_matches("amr:hwk", &ev(&["hwk"])));
+        assert!(!method_matches("acr:hwk", &ev(&["hwk"])));
+        assert!(!method_matches("a,b", &ev(&["a", "b"])));
+        assert!(!method_matches("x", &ev(&["saml:x"])));
+        assert!(evidence_ok(&json!(["acr:phr", "hwk"])));
+        assert!(!evidence_ok(&json!(["hwk", "acr:phr"])));
+        assert!(!evidence_ok(&json!(["urn:x"])));
+    }
+
+    #[test]
+    fn stronger_or_equal_names_the_first_lowering() {
+        let old = json!({"v": 2, "min_password_length": 15, "session_max_minutes": 720});
+        let o = old.as_object();
+        assert_eq!(identity_stronger_or_equal(o, o, &[], &[], &[]), Ok(()));
+        assert_eq!(identity_stronger_or_equal(o, None, &[], &[], &[]), Err("min_password_length"));
+        let longer = json!({"v": 2, "min_password_length": 15, "session_max_minutes": 721});
+        assert_eq!(identity_stronger_or_equal(o, longer.as_object(), &[], &[], &[]), Err("session_max_minutes"));
+        let stored = vec![("okta".to_string(), "https://acme.okta.com".to_string(), vec!["acr:phr".to_string()])];
+        let added = json!({"v": 2, "min_password_length": 15, "session_max_minutes": 720, "providers": [{"id": "okta", "iss": "https://acme.okta.com", "phr_values": ["acr:phr"]}, {"id": "z", "iss": "https://z"}]});
+        assert_eq!(identity_stronger_or_equal(o, added.as_object(), &stored, &[], &[]), Err("providers"));
+    }
 
     struct Doc {
         doc: Value,
@@ -903,7 +3738,7 @@ mod tests {
         let d = doc();
         let cases = d.doc["cases"].as_array().unwrap();
         let names: HashSet<&str> = cases.iter().filter_map(|c| c["name"].as_str()).collect();
-        for n in ["root_signed", "intermediate_signed", "person_certificate_signed", "expired_intermediate", "domain_outside_org_domains"] {
+        for n in ["root_signed", "intermediate_signed", "person_certificate_signed", "expired_intermediate", "domain_outside_org_domains", "watch_allow", "watch_refuse", "watch_on", "watch_true", "watch_object"] {
             assert!(names.contains(n), "{n}");
         }
         for case in cases {
@@ -994,5 +3829,373 @@ mod tests {
         assert_eq!(check(json!({"label": ""})), "label must be printable text of at most 64 characters");
         assert_eq!(check(json!({"expires": 1794000000})), "expires must be after issued, at most 90 days later");
         assert_eq!(check(json!({"retention": {"canvas": -1}})), "retention.canvas must be a whole number from 0 to 3650");
+        // NT-1 section 3.9: notify is {"previews": "off"} and nothing else
+        assert_eq!(check(json!({"notify": {"previews": "off"}})), "");
+        for refused in [json!({"previews": "on"}), json!({}), json!({"previews": "off", "x": 1}), json!("off"), json!({"previews": true})] {
+            assert_eq!(check(json!({ "notify": refused })), "notify must be {\"previews\": \"off\"}");
+        }
+        let mut off = base.clone();
+        assert!(!previews_off(&off));
+        off.insert("notify".into(), json!({"previews": "off"}));
+        assert!(previews_off(&off));
+        // signing one waits for the NT-1 Hub and iPhone releases in the relay's minimums
+        let mins = |v: Value| v.as_object().unwrap().clone();
+        let with_notify = Value::Object(off.clone());
+        assert_eq!(client_gate(Some(&with_notify), &mins(json!({"hub": "0.97.0", "ios": "0.97.1"}))), Ok(()));
+        for early in [json!({}), json!({"hub": "0.97.0"}), json!({"hub": "0.96.9", "ios": "0.97.0"}), json!({"hub": "0.97", "ios": "0.9.70"})] {
+            assert_eq!(client_gate(Some(&with_notify), &mins(early)).unwrap_err(), NOTIFY_TOO_SOON);
+        }
+        assert_eq!(client_gate(Some(&Value::Object(base.clone())), &Obj::new()), Ok(()));
+        assert_eq!(client_gate(None, &Obj::new()), Ok(()));
+
+        // BG-1 section 2.1: video
+        let img = "ab".repeat(32);
+        for ok in [json!({"background": "none"}), json!({"background": "blur", "change": "refuse"}), json!({"background": "team", "team_image": img, "change": "allow"}), json!({"background": "blur", "team_image": img})] {
+            assert_eq!(check(json!({ "video": ok })), "");
+        }
+        assert_eq!(check(json!({"video": {"background": "none", "zz": 1}})), "video has unknown fields: zz");
+        assert_eq!(check(json!({"video": {"background": "photo"}})), "video.background must be none, blur or team");
+        assert_eq!(check(json!({"video": {"background": 1}})), "video.background must be none, blur or team");
+        assert_eq!(check(json!({"video": {"background": "blur", "team_image": "AB".repeat(32)}})), "video.team_image must be 64 lower-case hex digits");
+        assert_eq!(check(json!({"video": {"background": "blur", "team_image": "ab"}})), "video.team_image must be 64 lower-case hex digits");
+        assert_eq!(check(json!({"video": {"background": "team"}})), "a team background needs video.team_image");
+        assert_eq!(check(json!({"video": {"background": "none", "change": "deny"}})), "video.change must be allow or refuse");
+        let mut v = base.clone();
+        assert_eq!(video(Some(&v)), None);
+        assert_eq!(video_default(Some(&v)), "");
+        assert_eq!(video_default(None), "");
+        v.insert("video".into(), json!({"background": "team", "team_image": img}));
+        assert_eq!(video(Some(&v)), Some(("team".into(), img.clone(), "allow".into())));
+        assert_eq!(video_default(Some(&v)), format!("team:{img}"));
+        v.insert("video".into(), json!({"background": "blur", "change": "refuse"}));
+        assert_eq!(video_default(Some(&v)), "blur");
+        // BG-1 section 2.2: signing one waits for 0.98.0, and notify still waits for 0.97.0
+        let with_video = Value::Object(v.clone());
+        assert_eq!(client_gate(Some(&with_video), &mins(json!({"hub": "0.98.0", "ios": "0.98.1"}))), Ok(()));
+        for early in [json!({}), json!({"hub": "0.98.0"}), json!({"hub": "0.97.9", "ios": "0.98.0"})] {
+            assert_eq!(client_gate(Some(&with_video), &mins(early)).unwrap_err(), VIDEO_TOO_SOON);
+        }
+        v.insert("notify".into(), json!({"previews": "off"}));
+        assert_eq!(client_gate(Some(&Value::Object(v)), &mins(json!({"hub": "0.96.0", "ios": "0.96.0"}))).unwrap_err(), NOTIFY_TOO_SOON);
+        // AW-1 sections 2.1 and 2.2: watch
+        for ok in ["allow", "refuse"] {
+            assert_eq!(check(json!({ "watch": ok })), "");
+        }
+        for wrong in [json!("on"), json!("Allow"), json!(""), json!(true), json!(1), json!({"allow": true}), json!(["allow"])] {
+            assert_eq!(check(json!({ "watch": wrong })), WATCH_SHAPE);
+        }
+        let mut w = base.clone();
+        assert_eq!(watch(Some(&w)), "refuse");
+        assert_eq!(watch(None), "refuse");
+        for value in ["allow", "refuse"] {
+            w.insert("watch".into(), json!(value));
+            assert_eq!(watch(Some(&w)), value);
+            let gated = Value::Object(w.clone());
+            for good in [json!({"hub": "0.98.1", "ios": "0.98.1"}), json!({"hub": "0.99.0", "ios": "1.0.0"})] {
+                assert_eq!(client_gate(Some(&gated), &mins(good)), Ok(()));
+            }
+            for early in [json!({}), json!({"hub": "0.98.1"}), json!({"ios": "0.98.1"}), json!({"hub": "0.98.0", "ios": "0.98.1"}), json!({"hub": "0.98.1", "ios": "0.98.0"})] {
+                assert_eq!(client_gate(Some(&gated), &mins(early)).unwrap_err(), WATCH_TOO_SOON);
+            }
+        }
+        // LS-1 section 2: lan_scope
+        let scope = json!({"networks": ["10.0.0.0/8", "192.168.1.0/24", "100.64.0.0/10"], "ttl": 4, "anchors": ["192.168.1.10"]});
+        assert_eq!(check(json!({ "lan_scope": scope.clone() })), "");
+        assert_eq!(check(json!({"lan_scope": {"networks": ["172.16.4.0/22"]}})), "");
+        for refused in [
+            json!({"networks": ["8.8.8.0/24"]}),
+            json!({"networks": ["10.0.0.0/7"]}),
+            json!({"networks": ["172.0.0.0/8"]}),
+            json!({"networks": ["10.0.0.1/8"]}),
+            json!({"networks": ["10.0.0.0/8", "10.0.0.0/8"]}),
+            json!({"networks": ["010.0.0.0/8"]}),
+            json!({"networks": ["10.0.0.0/08"]}),
+            json!({"networks": []}),
+            json!({"networks": ["192.168.1.0/24"], "anchors": ["192.168.2.1"]}),
+            json!({"networks": ["192.168.1.0/24"], "anchors": ["192.168.1.1", "192.168.1.1"]}),
+            json!({"networks": ["10.0.0.0/8"], "ttl": 0}),
+            json!({"networks": ["10.0.0.0/8"], "ttl": 17}),
+            json!({"networks": ["10.0.0.0/8"], "ttl": true}),
+            json!({"networks": ["10.0.0.0/8"], "x": 1}),
+            json!({"ttl": 4}),
+            json!("10.0.0.0/8"),
+        ] {
+            assert_eq!(check(json!({ "lan_scope": refused })), LAN_SCOPE_SHAPE);
+        }
+        // a float cannot be in a signed policy at all (canonical JSON), as in Python
+        assert_eq!(check(json!({"lan_scope": {"networks": ["10.0.0.0/8"], "ttl": 4.0}})),
+                   "only objects, arrays, strings, integers and booleans (no null)");
+        let mut scoped = base.clone();
+        scoped.insert("lan_scope".into(), scope);
+        let with_scope = Value::Object(scoped);
+        assert_eq!(client_gate(Some(&with_scope), &mins(json!({"hub": "0.98.0", "ios": "0.98.0"}))), Ok(()));
+        for early in [json!({}), json!({"hub": "0.98.0", "ios": "0.97.9"}), json!({"hub": "0.97.0", "ios": "0.98.0"})] {
+            assert_eq!(client_gate(Some(&with_scope), &mins(early)).unwrap_err(), LAN_SCOPE_TOO_SOON);
+        }
+    }
+
+    // ---- AI-1: tests/vectors/ai_policy_v1.json of Meeting Hub (copied here as tests/ai_policy_v1.json) ----
+
+    const AI_VECTORS: &str = include_str!("../tests/ai_policy_v1.json");
+
+    fn verdict<T, E: std::fmt::Display>(r: Result<T, E>) -> String {
+        r.err().map(|e| e.to_string()).unwrap_or_else(|| "ok".into())
+    }
+
+    #[test]
+    fn the_ai_policy_vectors_give_the_expected_verdicts() {
+        let doc: Value = serde_json::from_str(AI_VECTORS).unwrap();
+        let root = Cert::from_pem(doc["root_pem"].as_str().unwrap()).unwrap();
+        let sp = doc["signer_policy"].as_object().unwrap();
+        assert!(verify_signer_policy(&root, sp));
+        let terms = signer_terms(sp).unwrap();
+        let now = doc["now"].as_f64().unwrap();
+        let mut seen = 0;
+        for c in doc["policies"].as_array().unwrap() {
+            let t = SignerTerms { enclave: c["enclave"].as_bool().unwrap(), ..terms.clone() };
+            assert_eq!(verdict(check_policy(&c["policy"], &t)), c["expect"].as_str().unwrap(), "policies/{}", c["name"]);
+            seen += 1;
+        }
+        for c in doc["gates"].as_array().unwrap() {
+            let got = verdict(ai_gate(Some(&c["policy"]), c["min_client"].as_object().unwrap()));
+            assert_eq!(got, c["expect"].as_str().unwrap(), "gates/{}", c["name"]);
+            seen += 1;
+        }
+        for c in doc["editions"].as_array().unwrap() {
+            let edition = c["license"].get("edition").and_then(Value::as_str);
+            let got = verdict(ai_edition_gate(c["policy"].as_object().unwrap(), edition));
+            assert_eq!(got, c["expect"].as_str().unwrap(), "editions/{}", c["name"]);
+            seen += 1;
+        }
+        // API-1c 2.3 and 10.6
+        for (key, gate) in [("api_gates", api_app_gate as fn(Option<&Value>, &Obj) -> Result<(), String>), ("local_mcp_gates", local_mcp_gate)] {
+            for c in doc[key].as_array().unwrap() {
+                let got = verdict(gate(Some(&c["policy"]), c["min_client"].as_object().unwrap()));
+                assert_eq!(got, c["expect"].as_str().unwrap(), "{key}/{}", c["name"]);
+                seen += 1;
+            }
+        }
+        for c in doc["maps"].as_array().unwrap() {
+            let policy = c["policy"].as_object().unwrap();
+            let label = pj::s(policy, "label");
+            let got = (|| -> Result<(), PolicyError> {
+                let vm = verify_ai_map(&c["signed"], &root, sp, None, "", now, Some(policy))?;
+                check_ai_map_named(policy, &vm.hash)?;
+                // AiMapPins.apply against a pin of `pinned_seq` with another hash
+                let pinned = c["pinned_seq"].as_i64().unwrap();
+                if pinned > 0 && vm.seq < pinned {
+                    return Err(PolicyError::Refused(format!("{label}'s AI map was rolled back, so it was not used.")));
+                }
+                if pinned > 0 && vm.seq == pinned {
+                    return Err(PolicyError::Refused(format!("{label}'s AI map could not be verified: two different versions were seen.")));
+                }
+                Ok(())
+            })();
+            assert_eq!(verdict(got), c["expect"].as_str().unwrap(), "maps/{}", c["name"]);
+            seen += 1;
+        }
+        for c in doc["sso_ai_groups"].as_array().unwrap() {
+            let org = c["post"].get("org");
+            let policy = c["policies"].as_array().unwrap().iter().filter_map(Value::as_object).find(|p| p.get("org") == org);
+            let stored = c["stored"].as_object().unwrap();
+            let held = |p: &str| stored.get(p).and_then(Value::as_i64).unwrap_or(0);
+            let got = verdict(check_ai_groups(&c["post"], c["caller_serial"].as_str().unwrap(), &terms, policy, &held, c["now"].as_f64().unwrap()));
+            assert_eq!(got, c["expect"].as_str().unwrap(), "sso_ai_groups/{}", c["name"]);
+            seen += 1;
+        }
+        for c in doc["allowed"].as_array().unwrap() {
+            let record = c["record"].as_object().map(|r| AiGroupRecord {
+                principal: c["principal"].as_str().unwrap().into(),
+                listed: r["listed"].as_array().unwrap().iter().map(|g| g.as_str().unwrap().to_string()).collect(),
+                read_at: r["read_at"].as_i64().unwrap(),
+            });
+            let (allowed, read_at) = ai_allowed(
+                c["principal"].as_str().unwrap(),
+                c["policy"].as_object(),
+                c["map"].as_object(),
+                record.as_ref(),
+                c["now"].as_f64().unwrap(),
+                AI_GROUPS_FRESH_S,
+            );
+            assert_eq!(json!({"allowed": allowed, "read_at": read_at}), c["expect"], "allowed/{}", c["name"]);
+            seen += 1;
+        }
+        assert!(seen > 50, "only {seen} cases");
+        assert!(doc["ai_max_bytes"].as_u64().unwrap() < 32 * 1024);
+    }
+
+    #[test]
+    fn api_apps_and_local_mcp_follow_api_1c() {
+        let doc: Value = serde_json::from_str(AI_VECTORS).unwrap();
+        let terms = SignerTerms { enclave: false, ..signer_terms(doc["signer_policy"].as_object().unwrap()).unwrap() };
+        let full = doc["policies"].as_array().unwrap().iter().find(|c| c["name"] == "full").unwrap()["policy"].clone();
+        let api_app = json!({"principal": "helpdesk-api@apps.acme.com", "device": "a3a3a3a3a3a3a3a3", "name": "Helpdesk API",
+                             "type": "api", "scope": "all", "host": "connector.acme.com"});
+        let with = |app: Value| {
+            let mut p = full.clone();
+            p["apps"].as_array_mut().unwrap().push(app);
+            p
+        };
+        // 2.3: the type, no commands, scope all
+        assert_eq!(verdict(check_policy(&with(api_app.clone()), &terms)), "ok");
+        let mut cmds = api_app.clone();
+        cmds["commands"] = json!([]);
+        assert_eq!(verdict(check_policy(&with(cmds), &terms)), API_APP_COMMANDS);
+        let mut rest = api_app.clone();
+        rest["type"] = json!("rest");
+        assert_eq!(verdict(check_policy(&with(rest), &terms)), APP_TYPE_WORDS);
+        let mins = |v: Value| v.as_object().unwrap().clone();
+        let p = with(api_app);
+        assert!(has_api_app(p.as_object().unwrap()) && !has_api_app(full.as_object().unwrap()));
+        assert_eq!(api_app_gate(Some(&p), &mins(json!({"hub": "0.99.0", "ios": "0.98.1"}))).unwrap_err(), API_APP_TOO_SOON);
+        assert!(api_app_gate(Some(&p), &mins(json!({"hub": "0.99.0", "ios": "0.99.0"}))).is_ok());
+        assert!(api_app_gate(Some(&full), &mins(json!({}))).is_ok());
+        // 10.6: ai.local_mcp rows, gate and edition
+        let lm = json!({"enabled": true, "classes": ["public", "internal"], "tools": ["search", "draft_reply"], "send": false});
+        let with_lm = |v: Value| {
+            let mut p = full.clone();
+            p["ai"]["local_mcp"] = v;
+            p
+        };
+        let good = with_lm(lm.clone());
+        assert_eq!(verdict(check_policy(&good, &terms)), "ok");
+        for (bad_lm, words) in [
+            (json!(true), AI_LOCAL_MCP),
+            (json!({"enabled": true, "tools": ["search"], "http": true}), AI_LOCAL_MCP),
+            (json!({"tools": ["search"]}), AI_LOCAL_MCP_ENABLED),
+            (json!({"enabled": true, "tools": ["search"], "classes": ["cui"]}), AI_LOCAL_MCP_CLASSES),
+            (json!({"enabled": true, "tools": ["search"], "classes": ["secret"]}), AI_LOCAL_MCP_CLASSES),
+            (json!({"enabled": true, "tools": []}), AI_LOCAL_MCP_TOOLS),
+            (json!({"enabled": true, "tools": ["search", "search"]}), AI_LOCAL_MCP_TOOLS),
+            (json!({"enabled": true, "tools": ["search"], "send": true}), AI_LOCAL_MCP_SEND),
+            (json!({"enabled": true, "tools": ["send_message"], "send": "no"}), AI_LOCAL_MCP_SEND),
+        ] {
+            assert_eq!(verdict(check_policy(&with_lm(bad_lm.clone()), &terms)), words, "{bad_lm}");
+        }
+        assert_eq!(verdict(check_policy(&with_lm(json!({"enabled": true, "tools": ["send_message"], "send": true})), &terms)), "ok");
+        assert_eq!(local_mcp_gate(Some(&good), &mins(json!({"hub": "0.98.1", "ios": "0.99.0"}))).unwrap_err(), LOCAL_MCP_TOO_SOON);
+        assert!(local_mcp_gate(Some(&good), &mins(json!({"hub": "0.99.0", "ios": "0.99.0"}))).is_ok());
+        assert!(local_mcp_gate(Some(&full), &mins(json!({}))).is_ok());
+        assert_eq!(ai_edition_gate(good.as_object().unwrap(), Some("standard")).unwrap_err(), AI_LOCAL_MCP_STANDARD);
+        assert!(ai_edition_gate(good.as_object().unwrap(), Some("enterprise")).is_ok());
+    }
+
+    #[test]
+    fn the_ai_map_store_keeps_the_newest_and_the_named_map() {
+        let doc: Value = serde_json::from_str(AI_VECTORS).unwrap();
+        let root = Cert::from_pem(doc["root_pem"].as_str().unwrap()).unwrap();
+        let sp = doc["signer_policy"].as_object().unwrap();
+        let now = doc["now"].as_f64().unwrap();
+        let ok: Vec<&Value> = doc["maps"].as_array().unwrap().iter().filter(|c| c["expect"] == "ok").collect();
+        assert!(!ok.is_empty());
+        let mut store = AiMapStore::default();
+        let v = store.accept_at(&ok[0]["signed"], &root, sp, None, "", now, "").unwrap();
+        // the same map again is kept once
+        assert_eq!(store.accept_at(&ok[0]["signed"], &root, sp, None, "", now, "").unwrap().hash, v.hash);
+        assert_eq!(store.get(&v.org, "").map(|m| m.hash.clone()), Some(v.hash.clone()));
+        assert_eq!(store.get(&v.org, &v.hash.to_uppercase()).map(|m| m.seq), Some(v.seq));
+        assert!(store.get(&v.org, &"0".repeat(64)).is_none());
+        assert_eq!(store.persisted(), vec![Value::Object(v.wire.clone())]);
+        assert_eq!(ai_map_hash(v.wire["map"].as_object().unwrap()), v.hash);
+    }
+
+    // ---- SD-1b: tests/vectors/org_storage_v1.json of the add-on (copied here as tests/org_storage_v1.json) ----
+
+    const STORAGE_VECTORS: &str = include_str!("../tests/org_storage_v1.json");
+
+    fn storage_doc() -> Doc {
+        let doc: Value = serde_json::from_str(STORAGE_VECTORS).unwrap();
+        let root = Cert::from_pem(doc["root_pem"].as_str().unwrap()).unwrap();
+        let crl = Crl::from_pem(doc["root_crl_pem"].as_str().unwrap().as_bytes()).unwrap();
+        let now = doc["now"].as_f64().unwrap();
+        Doc { doc, root, crl, now }
+    }
+
+    #[test]
+    fn the_org_storage_vectors_give_the_expected_verdicts() {
+        let d = storage_doc();
+        // the policy's `storage` and `sharing` as a device checks them, the registry cloud check (signer policy v3)
+        // included
+        for case in d.doc["policy_cases"].as_array().unwrap() {
+            let name = case["name"].as_str().unwrap();
+            let terms = signer_terms(case["signer_policy"].as_object().unwrap()).unwrap();
+            let verdict = check_policy(&case["policy"], &terms).err().map(|e| e.to_string()).unwrap_or_else(|| "ok".into());
+            assert_eq!(verdict, case["expect"].as_str().unwrap(), "{name}");
+        }
+        for case in d.doc["gate_cases"].as_array().unwrap() {
+            let verdict = storage_gate(Some(&case["policy"]), case["min_client"].as_object().unwrap()).err().unwrap_or_else(|| "ok".into());
+            assert_eq!(verdict, case["expect"].as_str().unwrap(), "{}", case["name"]);
+        }
+        for case in d.doc["map_cases"].as_array().unwrap() {
+            let sp = case["signer_policy"].as_object().unwrap();
+            assert!(verify_signer_policy(&d.root, sp), "{}", case["name"]);
+            let verdict = match verify_storage_map(&case["signed"], &d.root, sp, Some(&d.crl), "", d.now) {
+                Ok(v) if Some(v.hash.as_str()) == case["map_sha256"].as_str() => "ok".to_string(),
+                Ok(_) => "hash differs".to_string(),
+                Err(e) => e.to_string(),
+            };
+            assert_eq!(verdict, case["expect"].as_str().unwrap(), "{}", case["name"]);
+        }
+    }
+
+    #[test]
+    fn the_map_store_keeps_a_map_once_and_refuses_an_org_without_domains() {
+        let d = storage_doc();
+        let cases = d.doc["map_cases"].as_array().unwrap();
+        let case = |name: &str| cases.iter().find(|c| c["name"] == name).unwrap();
+        let root_signed = case("root_signed");
+        let sp = root_signed["signer_policy"].as_object().unwrap();
+        let mut store = MapStore::default();
+        let v = store.accept_at(&root_signed["signed"], &d.root, sp, Some(&d.crl), "", d.now, "").unwrap();
+        assert_eq!((v.org.as_str(), v.seq, v.signer.as_str()), ("acme", 3, "root"));
+        let inter = case("intermediate_signed");
+        let again = store
+            .accept_at(&inter["signed"], &d.root, inter["signer_policy"].as_object().unwrap(), Some(&d.crl), "", d.now, "")
+            .unwrap();
+        assert_eq!(again.hash, v.hash); // the same map: kept once
+        assert_eq!(store.get("acme", ""), Some(&v.wire));
+        assert_eq!(store.get("acme", &v.hash.to_uppercase()), Some(&v.wire));
+        assert_eq!(store.get("acme", &"0".repeat(64)), None);
+        assert_eq!(store.get("beta", ""), None);
+        assert_eq!(store.persisted(), vec![Value::Object(v.wire.clone())]);
+        let gamma = case("org_without_domains");
+        let e = store.accept_at(&gamma["signed"], &d.root, sp, Some(&d.crl), "", d.now, "").unwrap_err();
+        assert_eq!(e, PolicyError::Refused(DOMAIN_REFUSED.into()));
+        store.prune("acme", "");
+        assert_eq!(store.kept["acme"].len(), 1);
+    }
+
+    #[test]
+    fn labels_origins_and_the_storage_gate() {
+        for (text, words) in [
+            ("Acme SharePoint", ""),
+            ("\u{c9}quipe (Paris) & Co.'s-sites 2", ""),
+            ("Acme\u{202e}NAS", "must not contain Unicode format characters"),
+            ("Acme\u{200b}NAS", "must not contain Unicode format characters"),
+            ("\u{2066}Acme\u{2069}", "must not contain Unicode format characters"),
+            ("\u{feff}Acme", "must not contain Unicode format characters"),
+            ("Acme NAS!", "may hold only letters, digits, spaces and .,()&'-"),
+            ("Acme\tNAS", "may hold only letters, digits, spaces and .,()&'-"),
+            ("", "must be 1 to 64 characters"),
+        ] {
+            let got = check_place_label(&json!(text), "x").err().unwrap_or_default();
+            let want = if words.is_empty() { String::new() } else { format!("x {words}") };
+            assert_eq!(got, want, "{text:?}");
+        }
+        assert_eq!(check_place_label(&json!("N".repeat(64)), "x"), Ok(()));
+        assert!(check_place_label(&json!("N".repeat(65)), "x").is_err());
+        for ok in ["https://s3.example.com", "https://s3.example.com/", "HTTPS://c.acme.internal:9443", "https://[::1]:443"] {
+            assert_eq!(https_origin(&json!(ok), "u"), Ok(()), "{ok}");
+        }
+        for no in ["http://s3.example.com", "https://s3.example.com/a", "https://u@h", "https://h?x=1", "https://h#f", "https://h:0", "https://h:99999", "https://h:x", "https://", "https:h", "s3.example.com"] {
+            assert_eq!(https_origin(&json!(no), "u"), Err("u must be an https:// origin".to_string()), "{no}");
+        }
+        let mins = |v: Value| v.as_object().unwrap().clone();
+        let with_storage = json!({"storage": {}});
+        assert_eq!(storage_gate(Some(&with_storage), &mins(json!({"hub": "0.98.0", "ios": "1.0.0"}))), Ok(()));
+        for early in [json!({}), json!({"hub": "0.98.0"}), json!({"ios": "0.98.0"}), json!({"hub": "0.97.9", "ios": "0.98.0"})] {
+            assert_eq!(storage_gate(Some(&with_storage), &mins(early)).unwrap_err(), STORAGE_TOO_SOON);
+        }
+        assert_eq!(storage_gate(Some(&json!({"seq": 1})), &Obj::new()), Ok(()));
     }
 }

@@ -776,6 +776,8 @@ impl Hub {
             st.dirty = true;
             st.tell(&members, &obj([("type", Value::from("channel_message")), ("message", Value::Object(msg.clone()))]), Some(session));
             st.pu_message(Some(cid.as_str()), None, &msg);
+            // AC-2a 9.2: one chat message relayed.
+            crate::fleet_probe::counters().message(1);
             Ok(msg)
         })();
         drop(st);
@@ -825,6 +827,10 @@ impl Hub {
         if ts > mark {
             st.mark_read(std::slice::from_ref(&who.principal), &cid, ts);
             st.dirty = true;
+            // NT-1: the reader's other sessions clear that conversation's notifications
+            st.tell(std::slice::from_ref(&who.principal), &obj([("type", Value::from("read")), ("conv", Value::from(format!("channel:{cid}")))]), Some(session));
+            drop(st);
+            self.wake();
         }
         Ok(obj([("ok", Value::Bool(true))]))
     }

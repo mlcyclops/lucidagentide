@@ -379,6 +379,8 @@ impl Hub {
             st.meetings.insert(room.clone(), Value::Object(m.clone()));
             st.dirty = true;
             st.tell_meeting(&people_of(&m), "invite", &m, &who.principal, Some(session));
+            // NT-1 section 3.8: each attendee's offline iPhones hear `invite`
+            st.nt_meeting("invite", &m, &people);
             Ok((st.meeting_view(&m), room, people.len()))
         })();
         drop(st);
@@ -484,6 +486,13 @@ impl Hub {
             if !removed.is_empty() {
                 st.tell_meeting(&removed, "cancel", &m, &who.principal, None);
             }
+            // NT-1 section 3.8: added attendees hear `invite`, kept ones `update` when the start or end changed,
+            // removed ones `cancel`
+            st.nt_meeting("invite", &m, &added);
+            if (new_start, new_end) != (old_start, old_end) {
+                st.nt_meeting("update", &m, &staying);
+            }
+            st.nt_meeting("cancel", &m, &removed);
             Ok((st.meeting_view(&m), key, now_in.len(), added.len(), removed.len(), retime))
         })();
         drop(st);
@@ -517,6 +526,8 @@ impl Hub {
             st.meetings.insert(key.clone(), Value::Object(m.clone()));
             st.dirty = true;
             st.tell_meeting(&people_of(&m), "cancel", &m, &who.principal, Some(session));
+            // NT-1 section 3.8: every attendee's offline iPhones hear `cancel`
+            st.nt_meeting("cancel", &m, &people_of(&m));
             Ok((st.meeting_view(&m), Some(key)))
         })();
         drop(st);

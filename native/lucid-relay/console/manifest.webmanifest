@@ -1,0 +1,13 @@
+{
+  "name": "Lucid Admin Console",
+  "short_name": "Admin Console",
+  "id": "/console/",
+  "start_url": "/console/",
+  "scope": "/console/",
+  "display": "standalone",
+  "background_color": "#0a0b0f",
+  "theme_color": "#0f1117",
+  "icons": [
+    { "src": "/console/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

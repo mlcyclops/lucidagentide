@@ -7,7 +7,7 @@
 // email address of anyone else, at any depth.
 
 use crate::meet::{self as m, address_of, http_date, is_client_gone, log_error, log_info, quiet_end, read_head, reason_phrase, send_error, Identity, Settings, Tls, E, R, SERVER_VERSION};
-use crate::meet_hub::{guests, Hub};
+use crate::meet_hub::{guests, wa, Hub};
 use crate::meet_json::{self as pj, obj, Obj};
 use crate::meet_tls::{guest_tls_config, RefusalLog};
 use parking_lot::Mutex;
@@ -28,31 +28,76 @@ const CONNECTIONS_MAX: usize = 256;
 const CONNECTIONS_PER_ADDRESS: usize = 16;
 const HANDSHAKE_TIMEOUT: f64 = 10.0;
 const POLL_TIMEOUT: f64 = 30.0;
-/// The guest page: no inline script or style, nothing from another origin, no framing.
-const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; media-src 'self' blob: mediastream:; connect-src 'self'; font-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'; require-trusted-types-for 'script'";
-const GUEST_DIR: &str = "guest";
 const UNKNOWN: &str = "unknown path";
+const HTML: &str = "text/html; charset=utf-8";
+const JS: &str = "text/javascript; charset=utf-8";
+const CSS: &str = "text/css; charset=utf-8";
+/// The vendored browser LiveKit (WA-1 4.3).
+const LIVEKIT_FILES: [&str; 2] = ["livekit-client.umd.js", "livekit-client.e2ee.worker.js"];
+/// path -> (folder, file, type): every file a page may load, nothing else (WA-1 2.4, 6, 7.3).
+const GUEST_STATIC: [(&str, &str, &str, &str); 9] = [
+    ("/g/", "guest", "index.html", HTML),
+    ("/g/index.html", "guest", "index.html", HTML),
+    ("/g/guest.js", "guest", "guest.js", JS),
+    ("/g/guest-logic.mjs", "guest", "guest-logic.mjs", JS),
+    ("/g/guest.css", "guest", "guest.css", CSS),
+    ("/g/verified", "guest", "verified.html", HTML),
+    ("/g/verified.js", "guest", "verified.js", JS),
+    ("/g/lucid-crypto.js", "web-common", "lucid-crypto.js", JS),
+    ("/g/call-engine.js", "web-common", "call-engine.js", JS),
+];
+pub(crate) const WEB_STATIC: [(&str, &str, &str, &str); 8] = [
+    ("/w/", "web", "index.html", HTML),
+    ("/w/index.html", "web", "index.html", HTML),
+    ("/w/web.js", "web", "web.js", JS),
+    ("/w/web.css", "web", "web.css", CSS),
+    ("/w/sso-done", "web", "sso-done.html", HTML),
+    ("/w/sso-done.js", "web", "sso-done.js", JS),
+    ("/w/lucid-crypto.js", "web-common", "lucid-crypto.js", JS),
+    ("/w/call-engine.js", "web-common", "call-engine.js", JS),
+];
 
 struct Port {
     hub: Arc<Hub>,
     settings: Settings,
     secret: Vec<u8>,
     tls: Arc<ServerConfig>,
-    /// URL path -> (file in the guest folder, its type).
-    statics: Vec<(String, PathBuf, &'static str)>,
+    /// The guest page's CSP: with the media server's and the SSO service's origins.
+    csp: String,
     open: Mutex<HashMap<String, usize>>,
     total: AtomicUsize,
     refusals: RefusalLog,
 }
 
-/// The guest page's folder: `guest` next to the executable, else in the working folder (the relay's folder, as
-/// meet_relay.py serves it from beside itself).
-fn guest_dir() -> PathBuf {
-    let beside = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join(GUEST_DIR)));
+/// The relay's folder (its pages beside it): next to the executable when `guest/index.html` is there, else the
+/// working folder (as meet_relay.py serves them from beside itself).
+fn relay_dir() -> PathBuf {
+    let beside = std::env::current_exe().ok().and_then(|e| e.parent().map(PathBuf::from));
     match beside {
-        Some(d) if d.join("index.html").is_file() => d,
-        _ => PathBuf::from(GUEST_DIR),
+        Some(d) if d.join("guest").join("index.html").is_file() => d,
+        _ => PathBuf::from("."),
     }
+}
+
+/// _static_file: `(file, type)` of an allowed page file (the allow-list, the web client's own `/w/<name>.mjs`, or a
+/// vendored LiveKit file under `<prefix>vendor/livekit/`); None for anything else.
+pub(crate) fn static_file(table: &[(&str, &str, &str, &'static str)], prefix: &str, path: &str) -> Option<(PathBuf, &'static str)> {
+    let dir = relay_dir();
+    if let Some((_, folder, name, ctype)) = table.iter().find(|(p, ..)| *p == path) {
+        return Some((dir.join(folder).join(name), ctype));
+    }
+    let name = path.strip_prefix(prefix).unwrap_or_default();
+    let module = name.strip_suffix(".mjs").is_some_and(|n| !n.is_empty() && n.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-'));
+    if prefix == "/w/" && module {
+        return Some((dir.join("web").join(name), JS));
+    }
+    let file = name.strip_prefix("vendor/livekit/")?;
+    if !LIVEKIT_FILES.contains(&file) {
+        return None;
+    }
+    let folders = [dir.join("vendor").join("livekit"), dir.join("..").join("src").join("vendor").join("livekit")];
+    let found = folders.iter().map(|f| f.join(file)).find(|p| p.is_file());
+    Some((found.unwrap_or_else(|| folders[0].join(file)), JS))
 }
 
 /// start_guest_server: the guest port on its own thread (nothing when `guest_port` is 0).
@@ -62,13 +107,10 @@ pub fn start(settings: &Settings, hub: Arc<Hub>, secret: Vec<u8>) -> Result<(), 
         _ => return Ok(()),
     };
     let tls = guest_tls_config(settings)?;
-    let dir = guest_dir();
-    let statics: Vec<(String, PathBuf, &'static str)> = [("/g/", "index.html", "text/html; charset=utf-8"), ("/g/index.html", "index.html", "text/html; charset=utf-8"), ("/g/guest.js", "guest.js", "text/javascript; charset=utf-8"), ("/g/guest.css", "guest.css", "text/css; charset=utf-8")]
-        .into_iter()
-        .map(|(path, file, ctype)| (path.to_string(), dir.join(file), ctype))
-        .collect();
+    // the guest page reaches the media server and asks the SSO service for its sign-ins
+    let csp = wa::page_csp(&settings.sfu_url, &pj::str_or(Some(&settings.guest_verify_url)));
     let listener = TcpListener::bind((settings.host.as_str(), port)).map_err(|e| format!("cannot listen on {}:{port}: {e}", settings.host))?;
-    let server = Arc::new(Port { hub, settings: settings.clone(), secret, tls, statics, open: Mutex::new(HashMap::new()), total: AtomicUsize::new(0), refusals: RefusalLog::new() });
+    let server = Arc::new(Port { hub, settings: settings.clone(), secret, tls, csp, open: Mutex::new(HashMap::new()), total: AtomicUsize::new(0), refusals: RefusalLog::new() });
     std::thread::Builder::new()
         .name("relay-guest-port".into())
         .spawn(move || {
@@ -153,7 +195,7 @@ fn serve(port: &Port, mut tcp: TcpStream, address: &str) {
 }
 
 /// One answer: its status, the headers the guest page always gets, any extra ones, and the body.
-fn write(w: &mut Tls, status: u16, ctype: &str, cache: &str, extra: &[(&str, String)], body: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write(w: &mut Tls, csp: &str, status: u16, ctype: &str, cache: &str, extra: &[(&str, String)], body: &[u8]) -> std::io::Result<()> {
     let mut head = format!("HTTP/1.1 {status} {}\r\nServer: {SERVER_VERSION} \r\nDate: {}\r\n", reason_phrase(status), http_date());
     let fixed = [
         ("Content-Type", ctype.to_string()),
@@ -166,7 +208,7 @@ fn write(w: &mut Tls, status: u16, ctype: &str, cache: &str, extra: &[(&str, Str
         ("Cross-Origin-Resource-Policy", "same-origin".to_string()),
         ("Strict-Transport-Security", "max-age=31536000".to_string()),
         ("Permissions-Policy", "camera=(self), microphone=(self), display-capture=(), geolocation=(), usb=(), payment=()".to_string()),
-        ("Content-Security-Policy", CSP.to_string()),
+        ("Content-Security-Policy", csp.to_string()),
     ];
     for (k, v) in fixed.iter().map(|(k, v)| (*k, v)).chain(extra.iter().map(|(k, v)| (*k, v))) {
         head.push_str(&format!("{k}: {v}\r\n"));
@@ -178,8 +220,8 @@ fn write(w: &mut Tls, status: u16, ctype: &str, cache: &str, extra: &[(&str, Str
     w.flush()
 }
 
-fn json(w: &mut Tls, status: u16, payload: &Obj, extra: &[(&str, String)]) -> std::io::Result<()> {
-    write(w, status, "application/json", "no-store", extra, pj::dumps(&Value::Object(payload.clone())).as_bytes())
+pub(crate) fn json(w: &mut Tls, csp: &str, status: u16, payload: &Obj, extra: &[(&str, String)]) -> std::io::Result<()> {
+    write(w, csp, status, "application/json", "no-store", extra, pj::dumps(&Value::Object(payload.clone())).as_bytes())
 }
 
 /// One request: Ok(false) when the connection closes after it.
@@ -191,7 +233,7 @@ fn one(port: &Port, reader: &mut BufReader<Tls>, address: &str) -> std::io::Resu
         "GET" | "POST" => {}
         "PUT" | "DELETE" | "PATCH" | "OPTIONS" | "HEAD" => {
             m::drain_unread(reader, &head, false);
-            let _ = json(reader.get_mut(), 405, &obj([("error", Value::from("the guest port takes GET and POST only"))]), &[]);
+            let _ = json(reader.get_mut(), &port.csp, 405, &obj([("error", Value::from("the guest port takes GET and POST only"))]), &[]);
             return Ok(false);
         }
         other => {
@@ -201,28 +243,33 @@ fn one(port: &Port, reader: &mut BufReader<Tls>, address: &str) -> std::io::Resu
     }
     if head.method == "GET" {
         if path == "/g" {
-            let sent = write(reader.get_mut(), 301, "text/plain", "no-store", &[("Location", "/g/".to_string())], b"");
+            let sent = write(reader.get_mut(), &port.csp, 301, "text/plain", "no-store", &[("Location", "/g/".to_string())], b"");
             return Ok(sent.is_ok() && !close);
         }
-        if let Some((_, file, ctype)) = port.statics.iter().find(|(p, ..)| *p == path) {
-            let sent = match std::fs::read(file) {
-                Ok(data) => write(reader.get_mut(), 200, ctype, "no-cache", &[], &data),
-                Err(_) => json(reader.get_mut(), 404, &obj([("error", Value::from(UNKNOWN))]), &[]),
+        if let Some((file, ctype)) = static_file(&GUEST_STATIC, "/g/", &path) {
+            let sent = match std::fs::read(&file) {
+                Ok(data) => write(reader.get_mut(), &port.csp, 200, ctype, "no-cache", &[], &data),
+                Err(_) => json(reader.get_mut(), &port.csp, 404, &obj([("error", Value::from(UNKNOWN))]), &[]),
             };
             return Ok(sent.is_ok() && !close);
         }
     }
-    let known = matches!((head.method.as_str(), path.as_str()), ("GET", "/g/v1/wait" | "/g/v1/events") | ("POST", "/g/v1/knock" | "/g/v1/signal" | "/g/v1/chat" | "/g/v1/stage" | "/g/v1/consent" | "/g/v1/leave"));
+    let known = matches!((head.method.as_str(), path.as_str()), ("GET", "/g/v1/wait" | "/g/v1/events" | "/g/v1/verify" | "/g/v1/chat/devices") | ("POST", "/g/v1/knock" | "/g/v1/signal" | "/g/v1/chat" | "/g/v1/stage" | "/g/v1/consent" | "/g/v1/leave" | "/g/v1/sfu/token" | "/g/v1/e2ee" | "/g/v1/e2ee/keys"));
     if !known {
         let post = head.method == "POST";
         if post {
             m::drain_unread(reader, &head, false);
         }
-        let sent = json(reader.get_mut(), 404, &obj([("error", Value::from(UNKNOWN))]), &[]);
+        let sent = json(reader.get_mut(), &port.csp, 404, &obj([("error", Value::from(UNKNOWN))]), &[]);
         return Ok(sent.is_ok() && !close && !post);
     }
+    // AC-1 2.4 (R42-1): every guest route serves people, so it answers `license-inactive` while service is stopped
+    let refused = port.hub.gate().and_then(|g| g.admits_guest(&head.method, &path).err());
     let mut req = Req { port, head: &head, query: m::parse_query(&query), reader: &mut *reader, address, body_read: false, close: false };
-    let result = std::panic::catch_unwind(AssertUnwindSafe(|| route(&mut req, &path)));
+    let result = match refused {
+        Some(e) => Ok(Err(e)),
+        None => std::panic::catch_unwind(AssertUnwindSafe(|| route(&mut req, &path))),
+    };
     let (body_read, closing) = (req.body_read, req.close);
     close |= closing;
     if m::drain_unread(reader, &head, body_read) {
@@ -235,19 +282,43 @@ fn one(port: &Port, reader: &mut BufReader<Tls>, address: &str) -> std::io::Resu
     let err = |msg: String| obj([("error", Value::from(msg))]);
     let mut extra: Vec<(&str, String)> = Vec::new();
     let (status, payload) = match result {
-        Ok(o) => (200, redact_obj(&o)),
+        Ok(o) => {
+            // what passes as it is: the knock's `email` and `verified` (the guest's own, WA-1 2.6) and the chat devices
+            // (CE-1 binds principals, WA-1 4.4)
+            let keep: &[&str] = match path.as_str() {
+                "/g/v1/knock" => &["email", "verified"],
+                "/g/v1/chat/devices" => &["devices"],
+                _ => &[],
+            };
+            let mut payload = redact_obj(&o);
+            for k in keep {
+                if let Some(v) = o.get(*k) {
+                    payload.insert(k.to_string(), v.clone());
+                }
+            }
+            (200, payload)
+        }
         Err(E::ClientGone) => return Ok(false),
         Err(E::Busy(msg, retry)) => {
             close = true;
             extra.push(("Retry-After", retry.max(1).to_string()));
             (429, err(msg))
         }
-        Err(E::Forbidden(msg)) | Err(E::Held(msg, _)) => {
+        Err(E::Forbidden(msg)) => {
             close = true;
             (403, err(msg))
         }
+        Err(E::Held(msg, info)) => {
+            close = true;
+            let mut o = err(msg);
+            if let Some(code) = info.get("code") {
+                o.insert("code".into(), code.clone());
+            }
+            (403, o)
+        }
         Err(E::Conflict(msg)) | Err(E::ConflictInfo(msg, _)) => (409, err(msg)),
         Err(E::NotFound(msg)) => (404, err(msg)),
+        Err(E::Coded(status, _, msg)) => (status, err(msg)),
         Err(E::Unavailable(msg)) => (501, err(msg)),
         Err(E::Gone(msg)) => (410, err(msg)),
         Err(E::Bad(msg)) => (400, err(msg)),
@@ -261,7 +332,7 @@ fn one(port: &Port, reader: &mut BufReader<Tls>, address: &str) -> std::io::Resu
             (500, err("the relay failed this request".into()))
         }
     };
-    match json(reader.get_mut(), status, &payload, &extra) {
+    match json(reader.get_mut(), &port.csp, status, &payload, &extra) {
         Ok(()) => Ok(!close),
         Err(e) if is_client_gone(&e) => Ok(false),
         Err(e) => Err(e),
@@ -287,6 +358,10 @@ impl Req<'_> {
 
     /// GuestHandler._body: JSON only (a form post from another site never reaches the lobby).
     fn body(&mut self) -> R<Obj> {
+        self.body_max(m::BODY_MAX)
+    }
+
+    fn body_max(&mut self, most: usize) -> R<Obj> {
         let ctype = self.head.header("content-type").unwrap_or_default();
         if ctype.split(';').next().unwrap_or_default().trim().to_lowercase() != "application/json" {
             return m::bad("send JSON (Content-Type: application/json)");
@@ -297,7 +372,7 @@ impl Req<'_> {
             self.body_read = true;
             return Ok(Obj::new());
         }
-        if length as usize > m::BODY_MAX {
+        if length as usize > most {
             return m::bad("request too large");
         }
         let mut raw = vec![0u8; length as usize];
@@ -347,15 +422,35 @@ fn route(req: &mut Req, path: &str) -> R<Obj> {
         }
         "/g/v1/knock" => {
             let b = req.body()?;
-            hub.guests_knock(b.get("token"), b.get("name"), &address)
+            hub.guests_knock(&b, &address)
+        }
+        // WA-1 2.4 step 1: what the link's rules accept and where the SSO service is
+        "/g/v1/verify" => {
+            let t = req.query.iter().find(|(k, _)| k == "t").map(|(_, v)| v.clone()).unwrap_or_default();
+            hub.guests_verify(&t, &address)
+        }
+        // WA-1 4.4: the call's chat keys a guest wraps its sender key to
+        "/g/v1/chat/devices" => hub.guests_chat_devices(&pass, &address),
+        // WA-1 4.3: large calls (an admitted guest with its key and an admission)
+        "/g/v1/sfu/token" => {
+            req.body()?;
+            hub.guests_sfu_token(&pass, &address)
+        }
+        "/g/v1/e2ee" => {
+            let b = req.body()?;
+            hub.guests_e2ee(&pass, &address, b.get("epk"), b.get("sig"))
+        }
+        "/g/v1/e2ee/keys" => {
+            let b = req.body_max(crate::meet_hub::E2EE_BODY_MAX)?;
+            hub.guests_e2ee_keys(&pass, &address, b.get("epoch"), b.get("to"))
         }
         "/g/v1/signal" => {
             let b = req.body()?;
             hub.guests_signal(&pass, &address, b.get("to"), b.get("data").cloned().unwrap_or(Value::Null))
         }
         "/g/v1/chat" => {
-            let b = req.body()?;
-            hub.guests_chat(&pass, &address, b.get("text"))
+            let b = req.body_max(crate::meet_hub::ce::BODY_MAX)?;
+            hub.guests_chat(&pass, &address, &b)
         }
         "/g/v1/stage" => {
             let b = req.body()?;
@@ -429,9 +524,24 @@ fn redact(value: &Value) -> Value {
 }
 
 fn redact_obj(o: &Obj) -> Obj {
+    if o.get("type").and_then(Value::as_str) == Some("chat_keys") && o.get("wraps").is_some_and(Value::is_array) {
+        return o.clone(); // WA-1 4.4: wraps to the guest's own device; CE-1 binds the sender's principal
+    }
+    let caption;
+    let o = if o.get("type").and_then(Value::as_str) == Some("caption") {
+        // WA-1 5.4: a caption keeps only whose speech it is, who captioned it, the name and the text
+        let pick = |k: &str| o.get(k).cloned().unwrap_or(Value::Null);
+        let or_from = |k: &str| o.get(k).filter(|v| pj::truthy(Some(v))).cloned().unwrap_or_else(|| pick("from"));
+        caption = obj([("type", Value::from("caption")), ("seq", pick("seq")), ("id", pick("id")), ("ts", pick("ts")), ("peer", or_from("peer")), ("by", or_from("by")), ("name", pick("name")), ("text", pick("text"))]);
+        &caption
+    } else {
+        o
+    };
+    // a member row's key, dck, verified, admission and rules are for certificate holders only
+    let row = o.contains_key("peer") && o.contains_key("principal");
     let mut out = Obj::new();
     for (k, v) in o {
-        if (k == "lobby" && v.is_array()) || k == "mentions" || k == "cert" || hide(k) != *k {
+        if (row && wa::ROW_KEYS.contains(&k.as_str())) || (k == "lobby" && v.is_array()) || k == "mentions" || k == "cert" || hide(k) != *k {
             continue;
         }
         let value = if VERBATIM.contains(&k.as_str()) {

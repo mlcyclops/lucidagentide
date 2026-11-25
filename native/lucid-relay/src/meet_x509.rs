@@ -13,6 +13,7 @@ const OID_SAN: &[u8] = &[0x55, 0x1d, 0x11];
 const OID_SKI: &[u8] = &[0x55, 0x1d, 0x0e];
 const OID_AKI: &[u8] = &[0x55, 0x1d, 0x23];
 const OID_BC: &[u8] = &[0x55, 0x1d, 0x13];
+const OID_KU: &[u8] = &[0x55, 0x1d, 0x0f];
 const OID_EC_KEY: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01];
 const OID_P256: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07];
 const OID_P384: &[u8] = &[0x2b, 0x81, 0x04, 0x00, 0x22];
@@ -55,6 +56,8 @@ pub struct Names {
     pub subject: Vec<(Vec<u8>, String)>,
     pub emails: Vec<String>,
     pub uris: Vec<String>,
+    /// SAN DNS names (the Admin Console checks its certificate and the relay's against them).
+    pub dns: Vec<String>,
 }
 
 impl Names {
@@ -80,7 +83,7 @@ fn string_value(i: &Item) -> String {
             String::from_utf16_lossy(&units)
         }
         // UniversalString: UTF-32BE
-        0x1c => i.value.chunks(4).filter_map(|c| (c.len() == 4).then(|| u32::from_be_bytes([c[0], c[1], c[2], c[3]]))).filter_map(char::from_u32).collect(),
+        0x1c => i.value.chunks(4).filter(|c| c.len() == 4).map(|c| u32::from_be_bytes([c[0], c[1], c[2], c[3]])).filter_map(char::from_u32).collect(),
         _ => String::from_utf8_lossy(i.value).into_owned(),
     }
 }
@@ -103,6 +106,7 @@ fn parse_san(ext_value: &[u8], names: &mut Names) -> Option<()> {
         match gn.tag {
             0x81 => names.emails.push(text),
             0x86 => names.uris.push(text),
+            0x82 => names.dns.push(text),
             _ => {}
         }
     }
@@ -228,6 +232,10 @@ pub struct Cert {
     pub aki: Option<Vec<u8>>,
     /// BasicConstraints `ca` (false without the extension).
     pub ca: bool,
+    /// BasicConstraints `pathLenConstraint` (None without one).
+    pub path_len: Option<i64>,
+    /// KeyUsage `keyCertSign` (None without the extension).
+    pub key_cert_sign: Option<bool>,
     pub signed: Signed,
 }
 
@@ -249,7 +257,7 @@ impl Cert {
         }
         let mut names = Names::default();
         parse_name(subject.value, &mut names.subject)?;
-        let (mut ski, mut aki, mut ca) = (None, None, false);
+        let (mut ski, mut aki, mut ca, mut path_len, mut key_cert_sign) = (None, None, false, None, None);
         for rest in parts {
             if rest.tag != 0xa3 {
                 continue;
@@ -268,7 +276,12 @@ impl Cert {
                     aki = items(seq.value)?.into_iter().find(|i| i.tag == 0x80).map(|i| i.value.to_vec());
                 } else if oid == OID_BC {
                     let (seq, _) = item(value)?;
-                    ca = items(seq.value)?.first().is_some_and(|b| b.tag == 0x01 && b.value.iter().any(|&x| x != 0));
+                    let parts = items(seq.value)?;
+                    ca = parts.first().is_some_and(|b| b.tag == 0x01 && b.value.iter().any(|&x| x != 0));
+                    path_len = parts.iter().find(|i| i.tag == 0x02).map(|i| i.value.iter().fold(0i64, |n, b| (n << 8) | i64::from(*b)));
+                } else if oid == OID_KU {
+                    let (bits, _) = item(value)?;
+                    key_cert_sign = Some(bits.value.get(1).is_some_and(|b| b & 0x04 != 0));
                 }
             }
         }
@@ -283,6 +296,8 @@ impl Cert {
             ski,
             aki,
             ca,
+            path_len,
+            key_cert_sign,
             signed,
         })
     }
@@ -295,6 +310,32 @@ impl Cert {
     /// verify_directly_issued_by: the issuer's name and its key's signature.
     pub fn issued_by(&self, issuer: &Cert) -> bool {
         self.issuer == issuer.subject && self.signed.verified_by(&issuer.spki)
+    }
+
+    /// Valid at unix time `now`.
+    pub fn valid_at(&self, now: i64) -> bool {
+        self.not_before <= now && now <= self.not_after
+    }
+
+    /// meet_pki.verify_chain: issued by `root` directly, or by one CA of `chain` (pathLen 0, keyCertSign) that the
+    /// root issued and the root's pathLen allows; every certificate valid now.
+    pub fn verify_chain(&self, chain: &[Cert], root: &Cert, now: i64) -> bool {
+        if !self.valid_at(now) || !root.valid_at(now) || !root.ca {
+            return false;
+        }
+        if self.issued_by(root) {
+            return true;
+        }
+        chain.iter().any(|inter| {
+            inter.spki != root.spki
+                && inter.ca
+                && inter.path_len == Some(0)
+                && inter.valid_at(now)
+                && root.path_len.is_none_or(|n| n >= 1)
+                && inter.key_cert_sign == Some(true)
+                && inter.issued_by(root)
+                && self.issued_by(inter)
+        })
     }
 
     /// meet_pki.issued_directly_by_root: the AuthorityKeyIdentifier is the root's SubjectKeyIdentifier (or,

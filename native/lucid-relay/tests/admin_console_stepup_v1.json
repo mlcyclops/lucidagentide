@@ -1,0 +1,2786 @@
+{
+ "version": 1,
+ "contract": "AC-1 revision 4.2",
+ "about": "Section 3.6. challenge = SHA-256(lp(domain, sid_sha256, action, target, canonical_json(params), nonce)); lp writes each part as its byte length (4 bytes, big-endian) then its bytes, UTF-8 for text and raw bytes for sid_sha256 and nonce. canonical_json is CE-1 canonical JSON with null written as null. params is the request body without stepup (approvals.approve: the approval's own params). target is the route's target field, a template of body fields, license.id (the id in the token's payload) or the literal \"-\". The WebAuthn challenge is the 32 digest bytes (base64url on the wire).",
+ "domain": "lucid-console-stepup-v1",
+ "canonical_json": "CE-1 canonical JSON: keys sorted by UTF-8 bytes, no whitespace, integers within 2^53-1, no floats, escapes \\\" \\\\ \\b \\f \\n \\r \\t and \\u00xx (lower-case hex) for the other characters below 0x20, every other character as UTF-8; null as null",
+ "sid_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+ "sid_sha256_hex": "630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd",
+ "nonce_hex": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+ "base": {
+  "action": "admins.remove",
+  "target": "bob@acme.example",
+  "params": {
+   "email": "bob@acme.example",
+   "reason": "Left the company"
+  },
+  "params_canonical": "{\"email\":\"bob@acme.example\",\"reason\":\"Left the company\"}",
+  "preimage_hex": "000000176c756369642d636f6e736f6c652d7374657075702d763100000020630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd0000000d61646d696e732e72656d6f766500000010626f624061636d652e6578616d706c65000000387b22656d61696c223a22626f624061636d652e6578616d706c65222c22726561736f6e223a224c6566742074686520636f6d70616e79227d00000020202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+  "challenge_hex": "f3887c445584cf1583c8cc210e2eee4b14e2591d5ebba60c67abe7a2e319ffe0",
+  "challenge_b64url": "84h8RFWEzxWDyMwhDi7uSxTiWR1eu6YMZ6vnouMZ_-A"
+ },
+ "changed": [
+  {
+   "field": "domain",
+   "value": "lucid-console-stepup-v0",
+   "challenge_hex": "ede59bc95dfd75331247fd44e7a26fac5be57e97f52780900885037b07e9b2f3"
+  },
+  {
+   "field": "sid_sha256",
+   "value": "630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dc",
+   "challenge_hex": "44b4715e330fe4c2e7b8fba9ece612417fc1860d24c8945f828fcab2d412172b"
+  },
+  {
+   "field": "action",
+   "value": "admins.removd",
+   "challenge_hex": "88cd41679a570317c17c92c8cd013d253e2c835a10a84704b35963f2784ca156"
+  },
+  {
+   "field": "target",
+   "value": "bob@acme.exampld",
+   "challenge_hex": "235300f61a43ae1a7cb5701e92052ebaa14842a7432fb6a1b7611ab11d69944d"
+  },
+  {
+   "field": "params",
+   "value": {
+    "email": "bob@acme.example",
+    "reason": "Left the companx"
+   },
+   "challenge_hex": "31665abe4e49b02be4f3fae85fc3b4ad45a66f37ab1cd5bb19d640793ba2ceed"
+  },
+  {
+   "field": "nonce",
+   "value": "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3e",
+   "challenge_hex": "d048dae8f8dedc62b13634a618f42d06642fa0e76f9f78d2b5a728ebe3dfebdf"
+  }
+ ],
+ "moved_byte": {
+  "action": "admins.remov",
+  "target": "ebob@acme.example",
+  "challenge_hex": "c471d3a188b05d376e8c9afa5be5ccb3af2c9771c062d8415e3afa758e4e367d"
+ },
+ "extra": [
+  {
+   "name": "empty params",
+   "action": "passkeys.add",
+   "target": "-",
+   "params": {},
+   "params_canonical": "{}",
+   "preimage_hex": "000000176c756369642d636f6e736f6c652d7374657075702d763100000020630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd0000000c706173736b6579732e616464000000012d000000027b7d00000020202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+   "challenge_hex": "4fab89ed0844abbf1a520260575fb8df5adcf9568d7a84394b4c8c88dd99b523"
+  },
+  {
+   "name": "null, integers, nesting and non-ASCII",
+   "action": "meet.release.set",
+   "target": "0.97.0",
+   "params": {
+    "version": "0.97.0",
+    "ios": null,
+    "notes": "Caf\u00e9 \u00fcber \u5f20",
+    "files": [
+     {
+      "size": 1,
+      "name": "a"
+     },
+     {
+      "size": 9007199254740991,
+      "name": "b"
+     }
+    ],
+    "minimum": {
+     "ios": "0.96.0",
+     "hub": "0.96.0"
+    },
+    "reason": "Line one\nline two\t\"q\""
+   },
+   "params_canonical": "{\"files\":[{\"name\":\"a\",\"size\":1},{\"name\":\"b\",\"size\":9007199254740991}],\"ios\":null,\"minimum\":{\"hub\":\"0.96.0\",\"ios\":\"0.96.0\"},\"notes\":\"Caf\u00e9 \u00fcber \u5f20\",\"reason\":\"Line one\\nline two\\t\\\"q\\\"\",\"version\":\"0.97.0\"}",
+   "preimage_hex": "000000176c756369642d636f6e736f6c652d7374657075702d763100000020630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd000000106d6565742e72656c656173652e73657400000006302e39372e30000000cd7b2266696c6573223a5b7b226e616d65223a2261222c2273697a65223a317d2c7b226e616d65223a2262222c2273697a65223a393030373139393235343734303939317d5d2c22696f73223a6e756c6c2c226d696e696d756d223a7b22687562223a22302e39362e30222c22696f73223a22302e39362e30227d2c226e6f746573223a22436166c3a920c3bc62657220e5bca0222c22726561736f6e223a224c696e65206f6e655c6e6c696e652074776f5c745c22715c22222c2276657273696f6e223a22302e39372e30227d00000020202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+   "challenge_hex": "c37d1251712754d55acb879840acbf3ee06b76f20564385a9518607807defe7b"
+  },
+  {
+   "name": "composite target",
+   "action": "meet.block",
+   "target": "ann@acme.example/d_7f3a19c2",
+   "params": {
+    "principal": "ann@acme.example",
+    "device": "d_7f3a19c2",
+    "hours": 4,
+    "reason": "Phone lost"
+   },
+   "params_canonical": "{\"device\":\"d_7f3a19c2\",\"hours\":4,\"principal\":\"ann@acme.example\",\"reason\":\"Phone lost\"}",
+   "preimage_hex": "000000176c756369642d636f6e736f6c652d7374657075702d763100000020630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd0000000a6d6565742e626c6f636b0000001b616e6e4061636d652e6578616d706c652f645f3766336131396332000000567b22646576696365223a22645f3766336131396332222c22686f757273223a342c227072696e636970616c223a22616e6e4061636d652e6578616d706c65222c22726561736f6e223a2250686f6e65206c6f7374227d00000020202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+   "challenge_hex": "df3e2aa3e890cae97093e511df629a5a2adb7781dc350229cfc453c3b62d11da"
+  },
+  {
+   "name": "approval params",
+   "action": "approvals.approve",
+   "target": "ap_0123456789abcdef",
+   "params": {
+    "email": "bob@acme.example",
+    "reason": "Left the company"
+   },
+   "params_canonical": "{\"email\":\"bob@acme.example\",\"reason\":\"Left the company\"}",
+   "preimage_hex": "000000176c756369642d636f6e736f6c652d7374657075702d763100000020630dcd2966c4336691125448bbb25b4ff412a49c732db2c8abc1b8581bd710dd00000011617070726f76616c732e617070726f76650000001361705f30313233343536373839616263646566000000387b22656d61696c223a22626f624061636d652e6578616d706c65222c22726561736f6e223a224c6566742074686520636f6d70616e79227d00000020202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+   "challenge_hex": "047e857e943861fe075f5a4bcc04c0d37a0051c1fa8a2137f3ae201985fb4824"
+  }
+ ],
+ "ceremony": {
+  "timeout_seconds": 120,
+  "per_session": 4,
+  "uses": 1,
+  "failures": {
+   "missing": {
+    "status": 401,
+    "code": "stepup-needed"
+   },
+   "stale": {
+    "status": 410,
+    "code": "stepup-expired"
+   },
+   "other": {
+    "status": 403,
+    "code": "stepup-failed"
+   }
+  }
+ },
+ "totp_binding": {
+  "action": "admins.suspend",
+  "target": "dave@acme.example",
+  "params": {
+   "email": "dave@acme.example",
+   "reason": "Lost laptop"
+  },
+  "body": {
+   "email": "dave@acme.example",
+   "reason": "Lost laptop",
+   "stepup": {
+    "ceremony": "ce_0123456789abcdef",
+    "totp": "287082"
+   }
+  },
+  "params_canonical": "{\"email\":\"dave@acme.example\",\"reason\":\"Lost laptop\"}",
+  "binding_hex": "da7f70f0c94c413bbc31993837c3686468f2a97b3ceaafc2b63659bc2ac97b77",
+  "code_step": 1,
+  "changed_body": {
+   "params": {
+    "email": "dave@acme.example",
+    "reason": "Lost laptop and phone"
+   },
+   "binding_hex": "37515e645f582f843fa4a02bdb270be7b4b98e51713bd253cf5a6d72905d2fbf",
+   "expect": {
+    "status": 403,
+    "code": "stepup-failed",
+    "code_checked": false,
+    "counts_toward_lockout": false
+   }
+  },
+  "wrong_code": {
+   "expect": {
+    "status": 403,
+    "code": "stepup-failed",
+    "counts_toward_lockout": true
+   }
+  },
+  "reused_step": {
+   "note": "the same step (or an earlier one) used again, for this or any other action, sign-in included",
+   "expect": {
+    "status": 403,
+    "code": "stepup-failed"
+   }
+  },
+  "high_profile": {
+   "expect": {
+    "status": 403,
+    "code": "stepup-failed"
+   },
+   "note": "a totp step-up is never accepted under High"
+  }
+ },
+ "routes": [
+  {
+   "route": "POST /console/api/join",
+   "product": "both",
+   "action": null,
+   "target": null,
+   "params": null,
+   "stepup": "never",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "token"
+    ]
+   ]
+  },
+  {
+   "route": "POST /console/api/register/begin",
+   "product": "both",
+   "action": null,
+   "target": null,
+   "params": null,
+   "stepup": "never",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "token",
+     "kind"
+    ]
+   ],
+   "note": "kind is passkey or security-key"
+  },
+  {
+   "route": "POST /console/api/register/finish",
+   "product": "both",
+   "action": null,
+   "target": null,
+   "params": null,
+   "stepup": "never",
+   "enrollment": false,
+   "body_keys": null,
+   "note": "body unchanged from today"
+  },
+  {
+   "route": "POST /console/api/join/password",
+   "product": "both",
+   "action": null,
+   "target": null,
+   "params": null,
+   "stepup": "never",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "token",
+     "password"
+    ]
+   ]
+  },
+  {
+   "route": "POST /console/api/join/totp/begin",
+   "product": "both",
+   "action": null,
+   "target": null,
+   "params": null,
+   "stepup": "never",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "token"
+    ]
+   ]
+  },
+  {
+   "route": "POST /console/api/join/totp/finish",
+   "product": "both",
+   "action": null,
+   "target": null,
+   "params": null,
+   "stepup": "never",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "token",
+     "enrollment",
+     "code"
+    ]
+   ]
+  },
+  {
+   "route": "POST /console/api/login/begin",
+   "product": "both",
+   "action": null,
+   "target": null,
+   "params": null,
+   "stepup": "never",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "email",
+     "banner"
+    ]
+   ]
+  },
+  {
+   "route": "POST /console/api/login/password",
+   "product": "both",
+   "action": null,
+   "target": null,
+   "params": null,
+   "stepup": "never",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "ceremony",
+     "password"
+    ]
+   ]
+  },
+  {
+   "route": "POST /console/api/login/set-password",
+   "product": "both",
+   "action": null,
+   "target": null,
+   "params": null,
+   "stepup": "never",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "ceremony",
+     "password"
+    ]
+   ]
+  },
+  {
+   "route": "POST /console/api/login/totp",
+   "product": "both",
+   "action": null,
+   "target": null,
+   "params": null,
+   "stepup": "never",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "ceremony",
+     "code"
+    ]
+   ]
+  },
+  {
+   "route": "POST /console/api/login/finish",
+   "product": "both",
+   "action": null,
+   "target": null,
+   "params": null,
+   "stepup": "never",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "ceremony",
+     "credential"
+    ]
+   ]
+  },
+  {
+   "route": "POST /console/api/recover/begin",
+   "product": "both",
+   "action": null,
+   "target": null,
+   "params": null,
+   "stepup": "never",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "email"
+    ]
+   ]
+  },
+  {
+   "route": "POST /console/api/recover/finish",
+   "product": "both",
+   "action": null,
+   "target": null,
+   "params": null,
+   "stepup": "never",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "token",
+     "password"
+    ]
+   ]
+  },
+  {
+   "route": "POST /console/api/logout",
+   "product": "both",
+   "action": null,
+   "target": null,
+   "params": null,
+   "stepup": "never",
+   "enrollment": false,
+   "body_keys": [
+    []
+   ]
+  },
+  {
+   "route": "POST /console/api/stepup/begin",
+   "product": "both",
+   "action": null,
+   "target": null,
+   "params": null,
+   "stepup": "never",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "action",
+     "target",
+     "params"
+    ]
+   ],
+   "note": "answers the ceremony for the action, target and params it names; under High it marks the ceremony enrollment: true for passkeys.add and account.security-key from a session without privileged rights"
+  },
+  {
+   "route": "POST /console/api/settings/links",
+   "product": "both",
+   "action": "settings.links",
+   "target": "-",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "links",
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "links": [
+      {
+       "label": "Meeting Hub console",
+       "url": "https://meet-admin.acme.example/console/"
+      }
+     ],
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "-",
+    "params": {
+     "links": [
+      {
+       "label": "Meeting Hub console",
+       "url": "https://meet-admin.acme.example/console/"
+      }
+     ]
+    },
+    "params_canonical": "{\"links\":[{\"label\":\"Meeting Hub console\",\"url\":\"https://meet-admin.acme.example/console/\"}]}",
+    "challenge_hex": "d331117b6ed61837dc86586948e0fad6d5760f75238e5f2d444e65084c98e0a3"
+   }
+  },
+  {
+   "route": "POST /console/api/settings/profile",
+   "product": "both",
+   "action": "settings.profile",
+   "target": "-",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "profile",
+     "reason",
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "profile": "standard",
+     "reason": "Contractors without security keys",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "-",
+    "params": {
+     "profile": "standard",
+     "reason": "Contractors without security keys"
+    },
+    "params_canonical": "{\"profile\":\"standard\",\"reason\":\"Contractors without security keys\"}",
+    "challenge_hex": "891c2b80ca60a1eea6bccdfc38b8ac6ae4abfe3d7f2805b82d90996346515737"
+   }
+  },
+  {
+   "route": "POST /console/api/settings/two-person",
+   "product": "both",
+   "action": "settings.two-person",
+   "target": "-",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "twoPerson",
+     "reason",
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "twoPerson": "on",
+     "reason": "Three admins now",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "-",
+    "params": {
+     "twoPerson": "on",
+     "reason": "Three admins now"
+    },
+    "params_canonical": "{\"reason\":\"Three admins now\",\"twoPerson\":\"on\"}",
+    "challenge_hex": "deb0b84c8b1108f63a4f1a53ac83354d8f640dda3de483fdfc01e9ba914bf5ac"
+   }
+  },
+  {
+   "route": "POST /console/api/settings/sign-in",
+   "product": "both",
+   "action": "settings.sign-in",
+   "target": "-",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "requirePassword",
+     "idleMinutes",
+     "maxHours",
+     "reason",
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "requirePassword": true,
+     "idleMinutes": 15,
+     "maxHours": 12,
+     "reason": "Policy review",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "-",
+    "params": {
+     "requirePassword": true,
+     "idleMinutes": 15,
+     "maxHours": 12,
+     "reason": "Policy review"
+    },
+    "params_canonical": "{\"idleMinutes\":15,\"maxHours\":12,\"reason\":\"Policy review\",\"requirePassword\":true}",
+    "challenge_hex": "99348955e113cf924544b7d24df7fd51420e71c7b43e75de9ffb81d6406769ad"
+   }
+  },
+  {
+   "route": "POST /console/api/settings/banner",
+   "product": "both",
+   "action": "settings.banner",
+   "target": "-",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "text",
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "text": "Authorized use only.\nActivity is monitored.",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "-",
+    "params": {
+     "text": "Authorized use only.\nActivity is monitored."
+    },
+    "params_canonical": "{\"text\":\"Authorized use only.\\nActivity is monitored.\"}",
+    "challenge_hex": "0f38cdb2bb890e1d847a913911da050939142e3f10dbdc4ec733d52d139f3708"
+   }
+  },
+  {
+   "route": "POST /console/api/settings/aaguids",
+   "product": "both",
+   "action": "settings.aaguids",
+   "target": "-",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "aaguids",
+     "reason",
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "aaguids": [
+      "c5ef55ff-ad9a-4b9f-b580-adebafe026d0"
+     ],
+     "reason": "Only the keys we bought",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "-",
+    "params": {
+     "aaguids": [
+      "c5ef55ff-ad9a-4b9f-b580-adebafe026d0"
+     ],
+     "reason": "Only the keys we bought"
+    },
+    "params_canonical": "{\"aaguids\":[\"c5ef55ff-ad9a-4b9f-b580-adebafe026d0\"],\"reason\":\"Only the keys we bought\"}",
+    "challenge_hex": "ff5e7ac930fff3a19f458486f455fc966a478e88e8ea5c98c8eec1ac1256db40"
+   }
+  },
+  {
+   "route": "POST /console/api/settings/mds",
+   "product": "both",
+   "action": "settings.mds",
+   "target": "-",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "blob",
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "blob": "<the MDS3 JWT>",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "-",
+    "params": {
+     "blob": "<the MDS3 JWT>"
+    },
+    "params_canonical": "{\"blob\":\"<the MDS3 JWT>\"}",
+    "challenge_hex": "11add023558c2ae46b670f4be90a273d9ca1ebbf44e608543e761edead8de3f3"
+   }
+  },
+  {
+   "route": "POST /console/api/settings/email",
+   "product": "both",
+   "action": "settings.email",
+   "target": "-",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "mode",
+     "from",
+     "smtp",
+     "graph",
+     "reason",
+     "stepup"
+    ]
+   ],
+   "note": "secret fields are bound like every other field; an empty one keeps the stored value",
+   "example": {
+    "body": {
+     "mode": "smtp",
+     "from": "console@acme.example",
+     "smtp": {
+      "host": "smtp.acme.example",
+      "port": 587,
+      "tls": "starttls",
+      "username": "console@acme.example",
+      "password": "",
+      "caPem": null
+     },
+     "graph": null,
+     "reason": "New mail server",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "-",
+    "params": {
+     "mode": "smtp",
+     "from": "console@acme.example",
+     "smtp": {
+      "host": "smtp.acme.example",
+      "port": 587,
+      "tls": "starttls",
+      "username": "console@acme.example",
+      "password": "",
+      "caPem": null
+     },
+     "graph": null,
+     "reason": "New mail server"
+    },
+    "params_canonical": "{\"from\":\"console@acme.example\",\"graph\":null,\"mode\":\"smtp\",\"reason\":\"New mail server\",\"smtp\":{\"caPem\":null,\"host\":\"smtp.acme.example\",\"password\":\"\",\"port\":587,\"tls\":\"starttls\",\"username\":\"console@acme.example\"}}",
+    "challenge_hex": "dfed6e4a54cd51a0bc293178c35833d2f8eb1f53fa4f4f4fdeb0a14f7f25049a"
+   }
+  },
+  {
+   "route": "POST /console/api/settings/email/test",
+   "product": "both",
+   "action": "settings.email-test",
+   "target": null,
+   "params": null,
+   "stepup": "never",
+   "enrollment": false,
+   "body_keys": [
+    []
+   ]
+  },
+  {
+   "route": "POST /console/api/settings/license-request-to",
+   "product": "both",
+   "action": "settings.license-request-to",
+   "target": "-",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "address",
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "address": "licenses@publisher.example",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "-",
+    "params": {
+     "address": "licenses@publisher.example"
+    },
+    "params_canonical": "{\"address\":\"licenses@publisher.example\"}",
+    "challenge_hex": "76c6977dbe9dc1627a1d6ae17a81929cb8c3fead208c9ab42029e0696421c67a"
+   }
+  },
+  {
+   "route": "POST /console/api/admins/invite",
+   "product": "both",
+   "action": "admins.invite",
+   "target": "email",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "email",
+     "role",
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "email": "erin@acme.example",
+     "role": "viewer",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "erin@acme.example",
+    "params": {
+     "email": "erin@acme.example",
+     "role": "viewer"
+    },
+    "params_canonical": "{\"email\":\"erin@acme.example\",\"role\":\"viewer\"}",
+    "challenge_hex": "aa99f2a61d8312fd9a63ec7ec37443c04fc1af0cd17640682e3b9287e8cb8b51"
+   }
+  },
+  {
+   "route": "POST /console/api/admins/approve-join",
+   "product": "both",
+   "action": "admins.approve-join",
+   "target": "email",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "email",
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "email": "erin@acme.example",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "erin@acme.example",
+    "params": {
+     "email": "erin@acme.example"
+    },
+    "params_canonical": "{\"email\":\"erin@acme.example\"}",
+    "challenge_hex": "f50b06f3640d15de70e72c70482e22c702ccb7d1315c6d7edeac8ceff6cfe464"
+   }
+  },
+  {
+   "route": "POST /console/api/admins/approve-passkey",
+   "product": "both",
+   "action": "admins.approve-passkey",
+   "target": "email",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "email",
+     "hint",
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "email": "bob@acme.example",
+     "hint": "9f86d081884c7d65",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "bob@acme.example",
+    "params": {
+     "email": "bob@acme.example",
+     "hint": "9f86d081884c7d65"
+    },
+    "params_canonical": "{\"email\":\"bob@acme.example\",\"hint\":\"9f86d081884c7d65\"}",
+    "challenge_hex": "c30bb5b2c2d3faaf6217a9a25668995c5d4b98cc2f7383b5737268fa4bbaf472"
+   }
+  },
+  {
+   "route": "POST /console/api/admins/role",
+   "product": "both",
+   "action": "admins.role",
+   "target": "email",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "email",
+     "role",
+     "reason",
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "email": "erin@acme.example",
+     "role": "admin",
+     "reason": "Runs the night shift",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "erin@acme.example",
+    "params": {
+     "email": "erin@acme.example",
+     "role": "admin",
+     "reason": "Runs the night shift"
+    },
+    "params_canonical": "{\"email\":\"erin@acme.example\",\"reason\":\"Runs the night shift\",\"role\":\"admin\"}",
+    "challenge_hex": "dcc8508fb4167ee00aa4cb0c3886fe905125fd2d3aa275e32e40f42a54108220"
+   }
+  },
+  {
+   "route": "POST /console/api/admins/remove",
+   "product": "both",
+   "action": "admins.remove",
+   "target": "email",
+   "params": "body",
+   "stepup": "not-for-waiting-joiner",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "email",
+     "reason",
+     "stepup"
+    ],
+    [
+     "email"
+    ]
+   ],
+   "note": "{email} alone discards a waiting joiner, with no step-up",
+   "example": {
+    "body": {
+     "email": "bob@acme.example",
+     "reason": "Left the company",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "bob@acme.example",
+    "params": {
+     "email": "bob@acme.example",
+     "reason": "Left the company"
+    },
+    "params_canonical": "{\"email\":\"bob@acme.example\",\"reason\":\"Left the company\"}",
+    "challenge_hex": "f3887c445584cf1583c8cc210e2eee4b14e2591d5ebba60c67abe7a2e319ffe0"
+   }
+  },
+  {
+   "route": "POST /console/api/admins/suspend",
+   "product": "both",
+   "action": "admins.suspend",
+   "target": "email",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "email",
+     "reason",
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "email": "dave@acme.example",
+     "reason": "Lost laptop",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "dave@acme.example",
+    "params": {
+     "email": "dave@acme.example",
+     "reason": "Lost laptop"
+    },
+    "params_canonical": "{\"email\":\"dave@acme.example\",\"reason\":\"Lost laptop\"}",
+    "challenge_hex": "da7f70f0c94c413bbc31993837c3686468f2a97b3ceaafc2b63659bc2ac97b77"
+   }
+  },
+  {
+   "route": "POST /console/api/admins/unsuspend",
+   "product": "both",
+   "action": "admins.unsuspend",
+   "target": "email",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "email",
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "email": "dave@acme.example",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "dave@acme.example",
+    "params": {
+     "email": "dave@acme.example"
+    },
+    "params_canonical": "{\"email\":\"dave@acme.example\"}",
+    "challenge_hex": "24602987a6e8745b8a980373e6e9e9e81f22e34f2f15f83fb52c34bb5d25a6e5"
+   }
+  },
+  {
+   "route": "POST /console/api/admins/reset-sign-in",
+   "product": "both",
+   "action": "admins.reset-sign-in",
+   "target": "email",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "email",
+     "reason",
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "email": "dave@acme.example",
+     "reason": "Lost every key",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "dave@acme.example",
+    "params": {
+     "email": "dave@acme.example",
+     "reason": "Lost every key"
+    },
+    "params_canonical": "{\"email\":\"dave@acme.example\",\"reason\":\"Lost every key\"}",
+    "challenge_hex": "90e7b2e0489956ce20ec7653f2b976c84b62fbd6242ea6c934edb3340aac72dd"
+   }
+  },
+  {
+   "route": "POST /console/api/invites/revoke",
+   "product": "both",
+   "action": "invites.revoke",
+   "target": "email",
+   "params": null,
+   "stepup": "never",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "email"
+    ]
+   ]
+  },
+  {
+   "route": "POST /console/api/invites/resend",
+   "product": "both",
+   "action": "invites.resend",
+   "target": "email",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "email",
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "email": "erin@acme.example",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "erin@acme.example",
+    "params": {
+     "email": "erin@acme.example"
+    },
+    "params_canonical": "{\"email\":\"erin@acme.example\"}",
+    "challenge_hex": "5203c3a0b9a63cbba2a5f22ce99e41d78b655e6192cd9296893fe2fdc5c11b2f"
+   }
+  },
+  {
+   "route": "POST /console/api/sessions/end",
+   "product": "both",
+   "action": "sessions.end",
+   "target": "id_hint",
+   "params": null,
+   "stepup": "never",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "id_hint"
+    ]
+   ]
+  },
+  {
+   "route": "POST /console/api/sessions/end-all",
+   "product": "both",
+   "action": "sessions.end-all",
+   "target": "email",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "email",
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "email": "bob@acme.example",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "bob@acme.example",
+    "params": {
+     "email": "bob@acme.example"
+    },
+    "params_canonical": "{\"email\":\"bob@acme.example\"}",
+    "challenge_hex": "30ab3fcf63e25b42ce2d257c423cac6faa7da277c496df9b28534ac000dff247"
+   }
+  },
+  {
+   "route": "POST /console/api/passkeys/add/begin",
+   "product": "both",
+   "action": "passkeys.add",
+   "target": "-",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": true,
+   "body_keys": [
+    [
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "-",
+    "params": {},
+    "params_canonical": "{}",
+    "challenge_hex": "4fab89ed0844abbf1a520260575fb8df5adcf9568d7a84394b4c8c88dd99b523"
+   }
+  },
+  {
+   "route": "POST /console/api/passkeys/add/finish",
+   "product": "both",
+   "action": null,
+   "target": null,
+   "params": null,
+   "stepup": "never",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "ceremony",
+     "credential",
+     "label"
+    ]
+   ],
+   "note": "finishes the registration that add/begin opened after its step-up"
+  },
+  {
+   "route": "POST /console/api/passkeys/confirm",
+   "product": "both",
+   "action": "passkeys.confirm",
+   "target": "hint",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "hint",
+     "stepup"
+    ]
+   ],
+   "note": "the step-up uses another of the caller's working passkeys",
+   "example": {
+    "body": {
+     "hint": "3fc9b689459d738f",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "3fc9b689459d738f",
+    "params": {
+     "hint": "3fc9b689459d738f"
+    },
+    "params_canonical": "{\"hint\":\"3fc9b689459d738f\"}",
+    "challenge_hex": "5b13128c5e018f4a0bc75dc2cee9ce54ecc822fe14e952cd541ac46457ef7128"
+   }
+  },
+  {
+   "route": "POST /console/api/passkeys/remove",
+   "product": "both",
+   "action": "passkeys.remove",
+   "target": "hint",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "hint",
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "hint": "3fc9b689459d738f",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "3fc9b689459d738f",
+    "params": {
+     "hint": "3fc9b689459d738f"
+    },
+    "params_canonical": "{\"hint\":\"3fc9b689459d738f\"}",
+    "challenge_hex": "22a49cb97f8ceceabfec25ef8053e5c1db2816d602d2b6779170553cbee7681d"
+   }
+  },
+  {
+   "route": "POST /console/api/passkeys/rename",
+   "product": "both",
+   "action": "passkeys.rename",
+   "target": "hint",
+   "params": null,
+   "stepup": "never",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "hint",
+     "label"
+    ]
+   ]
+  },
+  {
+   "route": "POST /console/api/account/security-key/begin",
+   "product": "both",
+   "action": "account.security-key",
+   "target": "-",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": true,
+   "body_keys": [
+    [
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "-",
+    "params": {},
+    "params_canonical": "{}",
+    "challenge_hex": "ac5ce38d86fd6219e704d376b1dab32931948e53f0db750e6544237cb7b25097"
+   }
+  },
+  {
+   "route": "POST /console/api/account/security-key/finish",
+   "product": "both",
+   "action": null,
+   "target": null,
+   "params": null,
+   "stepup": "never",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "ceremony",
+     "credential",
+     "label"
+    ]
+   ],
+   "note": "finishes the registration that security-key/begin opened after its step-up"
+  },
+  {
+   "route": "POST /console/api/account/password",
+   "product": "both",
+   "action": "account.password",
+   "target": "-",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "current",
+     "password",
+     "stepup"
+    ]
+   ],
+   "note": "current is \"\" when the account has no password",
+   "example": {
+    "body": {
+     "current": "",
+     "password": "correct horse battery staple",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "-",
+    "params": {
+     "current": "",
+     "password": "correct horse battery staple"
+    },
+    "params_canonical": "{\"current\":\"\",\"password\":\"correct horse battery staple\"}",
+    "challenge_hex": "396b69fcc925ea9fbea41839bc6e8d2b0284601edd7cdedb25fa1abf0f0b3029"
+   }
+  },
+  {
+   "route": "POST /console/api/account/totp/begin",
+   "product": "both",
+   "action": "account.totp",
+   "target": "-",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "-",
+    "params": {},
+    "params_canonical": "{}",
+    "challenge_hex": "7d63213725f31f50a15c823f9a667476e0dd05a860ec87c5594a916a34141ab8"
+   }
+  },
+  {
+   "route": "POST /console/api/account/totp/finish",
+   "product": "both",
+   "action": null,
+   "target": null,
+   "params": null,
+   "stepup": "never",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "enrollment",
+     "code"
+    ]
+   ],
+   "note": "finishes the enrollment that totp/begin opened after its step-up"
+  },
+  {
+   "route": "POST /console/api/account/totp/remove",
+   "product": "both",
+   "action": "account.totp-remove",
+   "target": "-",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "-",
+    "params": {},
+    "params_canonical": "{}",
+    "challenge_hex": "8d51ef11ee46417587211bb79e996e1ec9f7ade484df258235e0a12b18014dc2"
+   }
+  },
+  {
+   "route": "POST /console/api/account/mail",
+   "product": "both",
+   "action": "account.mail",
+   "target": null,
+   "params": null,
+   "stepup": "never",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "kinds"
+    ]
+   ]
+  },
+  {
+   "route": "POST /console/api/approvals/approve",
+   "product": "both",
+   "action": "approvals.approve",
+   "target": "id",
+   "params": "approval",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "id",
+     "stepup"
+    ]
+   ],
+   "note": "params are the approval's own params (3.7), not the body",
+   "example": {
+    "body": {
+     "id": "ap_0123456789abcdef",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "ap_0123456789abcdef",
+    "params": {
+     "email": "bob@acme.example",
+     "reason": "Left the company"
+    },
+    "params_canonical": "{\"email\":\"bob@acme.example\",\"reason\":\"Left the company\"}",
+    "challenge_hex": "047e857e943861fe075f5a4bcc04c0d37a0051c1fa8a2137f3ae201985fb4824"
+   }
+  },
+  {
+   "route": "POST /console/api/approvals/refuse",
+   "product": "both",
+   "action": "approvals.refuse",
+   "target": "id",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "id",
+     "reason",
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "id": "ap_0123456789abcdef",
+     "reason": "Bob is staying",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "ap_0123456789abcdef",
+    "params": {
+     "id": "ap_0123456789abcdef",
+     "reason": "Bob is staying"
+    },
+    "params_canonical": "{\"id\":\"ap_0123456789abcdef\",\"reason\":\"Bob is staying\"}",
+    "challenge_hex": "8742d8dc6e598c9bdb91f7e96f8a8e5cd439d0f70e59e641d43682c8a75e50a0"
+   }
+  },
+  {
+   "route": "POST /console/api/approvals/cancel",
+   "product": "both",
+   "action": "approvals.cancel",
+   "target": "id",
+   "params": null,
+   "stepup": "never",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "id"
+    ]
+   ]
+  },
+  {
+   "route": "POST /console/api/requests/new",
+   "product": "both",
+   "action": "requests.new",
+   "target": null,
+   "params": null,
+   "stepup": "never",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "kind",
+     "target",
+     "reason"
+    ]
+   ]
+  },
+  {
+   "route": "POST /console/api/requests/cancel",
+   "product": "both",
+   "action": "requests.cancel",
+   "target": "id",
+   "params": "body",
+   "stepup": "for-another-admins-request",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "id"
+    ],
+    [
+     "id",
+     "stepup"
+    ]
+   ],
+   "note": "{id} alone cancels the caller's own request",
+   "example": {
+    "body": {
+     "id": "rq_0123456789abcdef",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "rq_0123456789abcdef",
+    "params": {
+     "id": "rq_0123456789abcdef"
+    },
+    "params_canonical": "{\"id\":\"rq_0123456789abcdef\"}",
+    "challenge_hex": "0aeb730b1420cd5bb6e85e4b1025d9798623a76e306ed2f0c27534e3719a8253"
+   }
+  },
+  {
+   "route": "POST /console/api/audit/export",
+   "product": "both",
+   "action": "audit.export",
+   "target": "{from}-{to}",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "from",
+     "to",
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "from": 1,
+     "to": 500,
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "1-500",
+    "params": {
+     "from": 1,
+     "to": 500
+    },
+    "params_canonical": "{\"from\":1,\"to\":500}",
+    "challenge_hex": "f4513302eb0bcfcaf812fbec5423cd178fde1e9adaf97524d2605851fbf7b7ce"
+   }
+  },
+  {
+   "route": "POST /console/api/audit/restart",
+   "product": "both",
+   "action": "audit.restart",
+   "target": "-",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "stepup"
+    ]
+   ],
+   "note": "section 6, \"A broken chain\": appends the entry that starts the new chain",
+   "example": {
+    "body": {
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "-",
+    "params": {},
+    "params_canonical": "{}",
+    "challenge_hex": "16c7998a425d9bb6690a79b4c59bbda88cd1d2ccffcd07c47790389a183ebc12"
+   }
+  },
+  {
+   "route": "POST /console/api/logs/export",
+   "product": "both",
+   "action": "logs.export",
+   "target": "source",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "source",
+     "cat",
+     "level",
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "source": "relay",
+     "cat": "security",
+     "level": "warn",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "relay",
+    "params": {
+     "source": "relay",
+     "cat": "security",
+     "level": "warn"
+    },
+    "params_canonical": "{\"cat\":\"security\",\"level\":\"warn\",\"source\":\"relay\"}",
+    "challenge_hex": "302d396b203689cda102dd58b7e7031b4269b127280f755b6dfe759acbf0a460"
+   }
+  },
+  {
+   "route": "POST /console/api/license/install",
+   "product": "both",
+   "action": "license.install",
+   "target": "license.id",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "license",
+     "reason",
+     "stepup"
+    ]
+   ],
+   "note": "the target is the id inside the token's payload (l_ and 16 hex), read by the page before step-up and by the relay from the body",
+   "example": {
+    "body": {
+     "license": "<the armored or bare license token>",
+     "reason": "Renewal for 2027",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "l_0123456789abcdef",
+    "params": {
+     "license": "<the armored or bare license token>",
+     "reason": "Renewal for 2027"
+    },
+    "params_canonical": "{\"license\":\"<the armored or bare license token>\",\"reason\":\"Renewal for 2027\"}",
+    "challenge_hex": "04a8d1b3b6f55834a54e1685087b38e6654db375f487fafae6b3ef4e12f57b57"
+   }
+  },
+  {
+   "route": "POST /console/api/spokes/crl",
+   "product": "spokes",
+   "action": "spokes.crl",
+   "target": "-",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "crl",
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "crl": "<the root-signed CRL as POST /v1/crl takes it>",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "-",
+    "params": {
+     "crl": "<the root-signed CRL as POST /v1/crl takes it>"
+    },
+    "params_canonical": "{\"crl\":\"<the root-signed CRL as POST /v1/crl takes it>\"}",
+    "challenge_hex": "c09ca8dcbb45ccbd37e18309701ffd0489fc00f8cedecd48a48c28dc252432a5"
+   }
+  },
+  {
+   "route": "POST /console/api/spokes/directory",
+   "product": "spokes",
+   "action": "spokes.directory",
+   "target": "-",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "directory",
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "directory": "<the root-signed directory as POST /v1/directory takes it>",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "-",
+    "params": {
+     "directory": "<the root-signed directory as POST /v1/directory takes it>"
+    },
+    "params_canonical": "{\"directory\":\"<the root-signed directory as POST /v1/directory takes it>\"}",
+    "challenge_hex": "62f28758273f34e0115e6faabd5b2bbe78a672a882d2d5d8f33de2c6b48282b4"
+   }
+  },
+  {
+   "route": "POST /console/api/spokes/block",
+   "product": "spokes",
+   "action": "spokes.block",
+   "target": "node",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "node",
+     "hours",
+     "reason",
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "node": "n_0123456789abcdef0123456789abcdef",
+     "hours": 2,
+     "reason": "Sending junk",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "n_0123456789abcdef0123456789abcdef",
+    "params": {
+     "node": "n_0123456789abcdef0123456789abcdef",
+     "hours": 2,
+     "reason": "Sending junk"
+    },
+    "params_canonical": "{\"hours\":2,\"node\":\"n_0123456789abcdef0123456789abcdef\",\"reason\":\"Sending junk\"}",
+    "challenge_hex": "dd985f340e438f88e8c30056177992ff06eeac033eaf757baf0fd9958eb93341"
+   }
+  },
+  {
+   "route": "POST /console/api/spokes/unblock",
+   "product": "spokes",
+   "action": "spokes.unblock",
+   "target": "node",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "node",
+     "reason",
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "node": "n_0123456789abcdef0123456789abcdef",
+     "reason": "Fixed",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "n_0123456789abcdef0123456789abcdef",
+    "params": {
+     "node": "n_0123456789abcdef0123456789abcdef",
+     "reason": "Fixed"
+    },
+    "params_canonical": "{\"node\":\"n_0123456789abcdef0123456789abcdef\",\"reason\":\"Fixed\"}",
+    "challenge_hex": "335c567aef2237bad23841a239bd9bfef9bd0b78f4b59cf7dd2679c93082e056"
+   }
+  },
+  {
+   "route": "POST /console/api/meet/seats/pick",
+   "product": "meet",
+   "action": "meet.seats.pick",
+   "target": "principal",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "principal",
+     "pick",
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "principal": "zoe@acme.example",
+     "pick": true,
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "zoe@acme.example",
+    "params": {
+     "principal": "zoe@acme.example",
+     "pick": true
+    },
+    "params_canonical": "{\"pick\":true,\"principal\":\"zoe@acme.example\"}",
+    "challenge_hex": "bbba491693b872cd90a68bbe07ee11cfc196b3affa64991626d2c3becc77ce99"
+   }
+  },
+  {
+   "route": "POST /console/api/meet/seats/request",
+   "product": "meet",
+   "action": "meet.seats.request",
+   "target": null,
+   "params": null,
+   "stepup": "never",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "wanted"
+    ]
+   ]
+  },
+  {
+   "route": "POST /console/api/meet/clock/confirm",
+   "product": "meet",
+   "action": "meet.clock.confirm",
+   "target": "-",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "browserTime",
+     "reason",
+     "stepup"
+    ]
+   ],
+   "note": "the contract names no target for this route; it binds \"-\" as the settings routes do",
+   "example": {
+    "body": {
+     "browserTime": 1794900000123,
+     "reason": "NTP fixed after the outage",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "-",
+    "params": {
+     "browserTime": 1794900000123,
+     "reason": "NTP fixed after the outage"
+    },
+    "params_canonical": "{\"browserTime\":1794900000123,\"reason\":\"NTP fixed after the outage\"}",
+    "challenge_hex": "79412ecebdd545888392701710de403cdbcc45fce332649f82505aa2bd6e0d03"
+   }
+  },
+  {
+   "route": "POST /console/api/meet/organizations",
+   "product": "meet",
+   "action": "meet.org.set",
+   "target": "principal",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "principal",
+     "id",
+     "label",
+     "reason",
+     "stepup"
+    ],
+    [
+     "principal",
+     "remove",
+     "reason",
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "principal": "ann@acme.example",
+     "id": "acme",
+     "label": "Acme",
+     "reason": "New hire",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "ann@acme.example",
+    "params": {
+     "principal": "ann@acme.example",
+     "id": "acme",
+     "label": "Acme",
+     "reason": "New hire"
+    },
+    "params_canonical": "{\"id\":\"acme\",\"label\":\"Acme\",\"principal\":\"ann@acme.example\",\"reason\":\"New hire\"}",
+    "challenge_hex": "a9af2affc49e2a947fd2f5fe7545407983140939a774c1ea72bf55609c372623"
+   }
+  },
+  {
+   "route": "POST /console/api/meet/crl",
+   "product": "meet",
+   "action": "meet.crl",
+   "target": "-",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "crl_pem",
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "crl_pem": "-----BEGIN X509 CRL-----\nMIIB\n-----END X509 CRL-----\n",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "-",
+    "params": {
+     "crl_pem": "-----BEGIN X509 CRL-----\nMIIB\n-----END X509 CRL-----\n"
+    },
+    "params_canonical": "{\"crl_pem\":\"-----BEGIN X509 CRL-----\\nMIIB\\n-----END X509 CRL-----\\n\"}",
+    "challenge_hex": "487cadfa7dda602a2cc9dcd5bf6cd018ff4365dff388a07cad563488ab9a7d84"
+   }
+  },
+  {
+   "route": "POST /console/api/meet/block",
+   "product": "meet",
+   "action": "meet.block",
+   "target": "{principal}/{device}",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "principal",
+     "device",
+     "hours",
+     "reason",
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "principal": "ann@acme.example",
+     "device": "d_7f3a19c2",
+     "hours": 4,
+     "reason": "Phone lost",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "ann@acme.example/d_7f3a19c2",
+    "params": {
+     "principal": "ann@acme.example",
+     "device": "d_7f3a19c2",
+     "hours": 4,
+     "reason": "Phone lost"
+    },
+    "params_canonical": "{\"device\":\"d_7f3a19c2\",\"hours\":4,\"principal\":\"ann@acme.example\",\"reason\":\"Phone lost\"}",
+    "challenge_hex": "df3e2aa3e890cae97093e511df629a5a2adb7781dc350229cfc453c3b62d11da"
+   }
+  },
+  {
+   "route": "POST /console/api/meet/unblock",
+   "product": "meet",
+   "action": "meet.unblock",
+   "target": "{principal}/{device}",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "principal",
+     "device",
+     "reason",
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "principal": "ann@acme.example",
+     "device": "d_7f3a19c2",
+     "reason": "Phone found",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "ann@acme.example/d_7f3a19c2",
+    "params": {
+     "principal": "ann@acme.example",
+     "device": "d_7f3a19c2",
+     "reason": "Phone found"
+    },
+    "params_canonical": "{\"device\":\"d_7f3a19c2\",\"principal\":\"ann@acme.example\",\"reason\":\"Phone found\"}",
+    "challenge_hex": "0c6000b1d97781ae23f8f7929f490e7dc321814736f59f5d9b798e80ec892326"
+   }
+  },
+  {
+   "route": "POST /console/api/meet/bridge",
+   "product": "meet",
+   "action": "meet.bridge.set",
+   "target": "org",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "org",
+     "policy",
+     "reason",
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "org": "acme",
+     "policy": {
+      "slack": false,
+      "teams": false
+     },
+     "reason": "Pausing bridges",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "acme",
+    "params": {
+     "org": "acme",
+     "policy": {
+      "slack": false,
+      "teams": false
+     },
+     "reason": "Pausing bridges"
+    },
+    "params_canonical": "{\"org\":\"acme\",\"policy\":{\"slack\":false,\"teams\":false},\"reason\":\"Pausing bridges\"}",
+    "challenge_hex": "d6fd00de7ef68b486e6b3d57d09752be314744310dc172dbcaaecfb2f243091b"
+   }
+  },
+  {
+   "route": "POST /console/api/meet/holds",
+   "product": "meet",
+   "action": "meet.holds.place",
+   "target": "-",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "on",
+     "principals",
+     "reason",
+     "stepup"
+    ],
+    [
+     "on",
+     "cids",
+     "reason",
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "on": "people",
+     "principals": [
+      "ann@acme.example",
+      "bob@acme.example"
+     ],
+     "reason": "Case 2026-114",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "-",
+    "params": {
+     "on": "people",
+     "principals": [
+      "ann@acme.example",
+      "bob@acme.example"
+     ],
+     "reason": "Case 2026-114"
+    },
+    "params_canonical": "{\"on\":\"people\",\"principals\":[\"ann@acme.example\",\"bob@acme.example\"],\"reason\":\"Case 2026-114\"}",
+    "challenge_hex": "3e7d9bb34ca1930681f536a857ad3e5380f1e1d712bca99e6e8fddf15a0d9bbd"
+   }
+  },
+  {
+   "route": "POST /console/api/meet/holds/release",
+   "product": "meet",
+   "action": "meet.holds.release",
+   "target": "id",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "id",
+     "reason",
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "id": "h_0123456789abcdef",
+     "reason": "Case closed",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "h_0123456789abcdef",
+    "params": {
+     "id": "h_0123456789abcdef",
+     "reason": "Case closed"
+    },
+    "params_canonical": "{\"id\":\"h_0123456789abcdef\",\"reason\":\"Case closed\"}",
+    "challenge_hex": "7acd2bc08dffae4e3cd4587aeb1d94e7d470ceeb64bf401d9ca6824e8fa8268c"
+   }
+  },
+  {
+   "route": "POST /console/api/meet/support/answer",
+   "product": "meet",
+   "action": "meet.support.answer",
+   "target": "id",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "id",
+     "text",
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "id": "q_0123456789abcdef",
+     "text": "Restart the Hub, then join again.",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "q_0123456789abcdef",
+    "params": {
+     "id": "q_0123456789abcdef",
+     "text": "Restart the Hub, then join again."
+    },
+    "params_canonical": "{\"id\":\"q_0123456789abcdef\",\"text\":\"Restart the Hub, then join again.\"}",
+    "challenge_hex": "d5f313238e9ce89857b3e6071c145d23acb1b0f23749de88abfeef38593600ec"
+   }
+  },
+  {
+   "route": "POST /console/api/meet/support/close",
+   "product": "meet",
+   "action": "meet.support.close",
+   "target": "id",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "id",
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "id": "q_0123456789abcdef",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "q_0123456789abcdef",
+    "params": {
+     "id": "q_0123456789abcdef"
+    },
+    "params_canonical": "{\"id\":\"q_0123456789abcdef\"}",
+    "challenge_hex": "60688733dc7a0cb4f826611368e6fa41e03cf895ab05954b07315e310fa2b291"
+   }
+  },
+  {
+   "route": "POST /console/api/meet/release",
+   "product": "meet",
+   "action": "meet.release.set",
+   "target": "version",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "version",
+     "files",
+     "ios",
+     "notes",
+     "minimum",
+     "reason",
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "version": "0.97.0",
+     "files": [
+      {
+       "name": "LucidMeetingHub-0.97.0-setup.exe",
+       "sha256": "abababababababababababababababababababababababababababababababab",
+       "size": 187654321
+      }
+     ],
+     "ios": "0.97.0",
+     "notes": "Admin Console for caf\u00e9 owners",
+     "minimum": {
+      "hub": "0.96.0",
+      "ios": "0.96.0"
+     },
+     "reason": "Monthly release",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "0.97.0",
+    "params": {
+     "version": "0.97.0",
+     "files": [
+      {
+       "name": "LucidMeetingHub-0.97.0-setup.exe",
+       "sha256": "abababababababababababababababababababababababababababababababab",
+       "size": 187654321
+      }
+     ],
+     "ios": "0.97.0",
+     "notes": "Admin Console for caf\u00e9 owners",
+     "minimum": {
+      "hub": "0.96.0",
+      "ios": "0.96.0"
+     },
+     "reason": "Monthly release"
+    },
+    "params_canonical": "{\"files\":[{\"name\":\"LucidMeetingHub-0.97.0-setup.exe\",\"sha256\":\"abababababababababababababababababababababababababababababababab\",\"size\":187654321}],\"ios\":\"0.97.0\",\"minimum\":{\"hub\":\"0.96.0\",\"ios\":\"0.96.0\"},\"notes\":\"Admin Console for caf\u00e9 owners\",\"reason\":\"Monthly release\",\"version\":\"0.97.0\"}",
+    "challenge_hex": "ac6c31d23ce161e6d7d00f27576df1ba0110dc2ba10d93d14a08ce0e9247c3e6"
+   }
+  },
+  {
+   "route": "POST /console/api/meet/files/start",
+   "product": "meet",
+   "action": "meet.files.start",
+   "target": "-",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "-",
+    "params": {},
+    "params_canonical": "{}",
+    "challenge_hex": "a5130205f8bdc2d7346f4bc40de1faadf71f5c4297a12991427b792f0b6db54d"
+   }
+  }
+ ]
+}

@@ -4,16 +4,24 @@
 // string is the one the Bun relay logs.
 
 use crate::codec::{as_object, exact_keys, is_int, num_is, parse_json, sha256_hex, str_of, unb64u, utf16_len, utf8_lossy};
-use crate::der::{ecdsa_verify, p256_from_spki, p256_spki_der, parse_spki, P256Key, PublicKey};
+use crate::der::{ecdsa_verify, p256_from_spki, p256_spki_der, P256Key};
+use crate::idp::{
+    anchors_of, check_renewed_leaf, idp_claim_problem, idp_map_problem, lowering_anchored, read_org_rules, read_rules_lowering, renewal_shape_problem, rules_words, Anchors,
+    LeafRefusal, TOKEN_LIMITS_LEAF, TOKEN_LIMITS_MAP, TOKEN_LIMITS_OTHER,
+};
+use crate::presence::{presence_kind_enabled, presence_public_key_ok, presence_words};
 use serde_json::{Map, Value};
 use std::collections::HashSet;
 
 pub const ROLES: [&str; 2] = ["hub", "spoke"];
 pub const SCOPES: [&str; 3] = ["recall", "drive", "approve"];
 pub const CLASSIFICATIONS: [&str; 3] = ["private", "shareable", "cui"];
-pub const DELEGATE_POWERS: [&str; 4] = ["users", "spokes", "custody", "enroll"];
-const PRESENCE_KINDS: [&str; 3] = ["password", "windows-hello", "macos-secure-enclave"];
-const CLOCK_SKEW_SEC: i64 = 120;
+/// idp-renew (ID-1 5.5): the renewal authority, which renews IdP-bound hub certificates a day at a time and signs
+/// nothing else; exclusive.
+pub const DELEGATE_POWERS: [&str; 5] = ["users", "spokes", "custody", "enroll", "idp-renew"];
+pub(crate) const CLOCK_SKEW_SEC: i64 = 120;
+/// IdP-bound certificates last at most 24 hours (5.5).
+pub(crate) const IDP_CERT_MAX_SEC: i64 = 86_400;
 const MAX_DELEGATED_CERT_DAYS: i64 = 30;
 const MAX_DELEGATION_DAYS: i64 = 90;
 const ENROLL_MAX_CERT_DAYS: i64 = 7;
@@ -21,8 +29,10 @@ const MAX_ENROLL_DELEGATION_DAYS: i64 = 30;
 const MAX_DIRECTORY_TOKEN: usize = 64 * 1024;
 const MAX_DIRECTORY_RELAYS: usize = 32;
 pub const LOOPBACK_HOSTS: [&str; 3] = ["127.0.0.1", "localhost", "[::1]"];
-const CERT_KEYS: [&str; 17] = [
-    "v", "typ", "serial", "root", "node", "role", "label", "spki", "scopes", "iat", "exp", "user", "classification", "region", "issuer", "delegation", "presence",
+/// `idp` and `renewal` (ID-1 5.1) are read only with G-ENGINE (verify_cert refuses them otherwise).
+const CERT_KEYS: [&str; 19] = [
+    "v", "typ", "serial", "root", "node", "role", "label", "spki", "scopes", "iat", "exp", "user", "classification", "region", "issuer", "delegation", "presence", "idp",
+    "renewal",
 ];
 
 // ── The patterns identity.ts checks with regular expressions ─────────────────────────────────────────────────
@@ -145,7 +155,7 @@ pub struct NodeCert {
 }
 
 #[derive(Clone, Debug)]
-struct Limits {
+pub(crate) struct Limits {
     max_days: i64,
     roles: Option<Vec<String>>,
     scopes: Option<Vec<String>>,
@@ -157,10 +167,10 @@ struct Limits {
 }
 
 #[derive(Clone, Debug)]
-struct Delegation {
+pub(crate) struct Delegation {
     serial: String,
     id: String,
-    may: Vec<String>,
+    pub(crate) may: Vec<String>,
     limits: Limits,
     iat: i64,
     exp: i64,
@@ -174,7 +184,7 @@ fn distinct(list: &[String]) -> bool {
     list.iter().collect::<HashSet<_>>().len() == list.len()
 }
 
-fn user_problem(v: &Value) -> Option<String> {
+pub(crate) fn user_problem(v: &Value) -> Option<String> {
     let Some(u) = as_object(v).filter(|u| exact_keys(u, &["id", "email", "name", "clearances"], &["id", "email"])) else {
         return Some("a user claim is { id, email, name?, clearances? }".into());
     };
@@ -199,22 +209,6 @@ fn user_problem(v: &Value) -> Option<String> {
 fn user_claim(v: &Value) -> Option<UserClaim> {
     let u = v.as_object()?;
     Some(UserClaim { id: str_of(u.get("id"))?.into(), email: str_of(u.get("email"))?.into(), clearances: strings(u.get("clearances")) })
-}
-
-/// presence.ts presencePublicKey, as a yes or no.
-fn presence_ok(v: &Value) -> bool {
-    let Some(o) = as_object(v).filter(|o| exact_keys(o, &["kind", "spki"], &["kind", "spki"])) else { return false };
-    let Some(kind) = str_of(o.get("kind")).filter(|k| PRESENCE_KINDS.contains(k)) else { return false };
-    let Some(spki) = str_of(o.get("spki")) else { return false };
-    if !(40..=1200).contains(&spki.len()) || !spki.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-') {
-        return false;
-    }
-    match (kind, unb64u(spki).as_deref().and_then(parse_spki)) {
-        ("windows-hello", Some(PublicKey::Rsa { bits })) => bits >= 2048,
-        ("windows-hello", _) => false,
-        (_, Some(PublicKey::P256(_))) => true,
-        _ => false,
-    }
 }
 
 const LIMIT_LISTS: [&str; 6] = ["roles", "scopes", "emailDomains", "users", "regions", "classifications"];
@@ -259,10 +253,14 @@ fn powers_problem(may: Option<&Value>, limits: &Map<String, Value>) -> Option<St
     let Some(may) = list else { return Some(format!("may must be a non-empty list from {}", DELEGATE_POWERS.join(", "))) };
     let enroll = may.iter().any(|m| m == "enroll");
     let roles = strings(limits.get("roles")).unwrap_or_default();
+    let max_days = is_int(limits.get("maxDays")).unwrap_or(0);
+    // ID-1 5.5: the renewal authority's power is exclusive, a day at a time, for hubs only.
+    if may.iter().any(|m| m == "idp-renew") && (may.len() != 1 || max_days != 1 || roles.iter().any(|r| r != "hub")) {
+        return Some("the idp-renew power is exclusive (no other power), with maxDays 1 and roles only hub".into());
+    }
     if enroll && (may.iter().any(|m| m == "users") || limits.contains_key("scopes") || roles.iter().any(|r| r != "spoke")) {
         return Some("a delegation with the enroll power certifies spokes only: no users power, no scopes, roles only spoke".into());
     }
-    let max_days = is_int(limits.get("maxDays")).unwrap_or(0);
     if enroll && (!limits.contains_key("labelPrefix") || max_days > ENROLL_MAX_CERT_DAYS) {
         return Some(format!("a delegation with the enroll power needs a labelPrefix and maxDays of at most {ENROLL_MAX_CERT_DAYS}"));
     }
@@ -337,11 +335,27 @@ fn spoke_outside_delegation(d: &Delegation, c: &NodeCert) -> Option<String> {
     None
 }
 
-fn leaf_problem(d: &Delegation, c: &NodeCert) -> Option<String> {
+/// Why a delegate may not sign this certificate, or None. `signed_in`: the certificate carries `idp` or `renewal`.
+pub(crate) fn leaf_problem(d: &Delegation, c: &NodeCert, signed_in: bool) -> Option<String> {
     let l = &d.limits;
     let may = |p: &str| d.may.iter().any(|m| m == p);
-    if c.role == "hub" && !may("users") {
+    if c.role == "hub" && !may("users") && !may("idp-renew") {
         return Some("this delegation may not certify hubs (no users power)".into());
+    }
+    // API-1d 4.2 (identity.ts `leafProblem`): a service hub only from a users delegate whose limits allow hubs, and never
+    // with approve. Judged by the fail-closed rule of 5.2 (every `apps.` domain): a certificate verifier holds no
+    // relay directory, so both readers refuse the same certificates.
+    if is_service_hub(c, None) {
+        if !may("users") || l.roles.as_ref().is_some_and(|r| !r.iter().any(|x| x == "hub")) {
+            return Some("only a delegation with the users power and role hub may certify a service hub".into());
+        }
+        if c.scopes.iter().any(|s| s == "approve") {
+            return Some("a delegate never certifies a service hub with the approve scope".into());
+        }
+    }
+    // ID-1 5.5: a users delegate never signs sign-in evidence, and the renewal authority signs nothing without it.
+    if signed_in != may("idp-renew") {
+        return Some("only the renewal authority (idp-renew) signs renewed sign-in certificates, and it signs nothing else".into());
     }
     if c.role == "spoke" && !may("spokes") && !may("enroll") {
         return Some("this delegation may not certify spokes".into());
@@ -397,31 +411,391 @@ fn leaf_problem(d: &Delegation, c: &NodeCert) -> Option<String> {
     }
 }
 
-/// A verified certificate and its public key.
+/// A verified certificate and its public key. `valid_until` (seconds): until when a cache may reuse this verdict
+/// (ID-1 5.5 "Cache"); the caller still checks the certificate's own `exp` on every use.
 pub struct CertOk {
     pub cert: NodeCert,
     pub key: P256Key,
+    pub valid_until: i64,
 }
 
-/// The CRL fields the store keeps.
+/// A refusal: the reason (the words) and, when it is one of the 6.9 cases, its audit event.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Refusal {
+    pub reason: String,
+    pub event: Option<&'static str>,
+}
+
+impl Refusal {
+    pub fn new(reason: impl Into<String>) -> Refusal {
+        Refusal { reason: reason.into(), event: None }
+    }
+
+    pub fn with(event: &'static str, reason: impl Into<String>) -> Refusal {
+        Refusal { reason: reason.into(), event: Some(event) }
+    }
+}
+
+impl From<LeafRefusal> for Refusal {
+    fn from(r: LeafRefusal) -> Refusal {
+        Refusal { reason: r.reason, event: Some(r.event) }
+    }
+}
+
+/// The CRL fields the store keeps. `anchors`: ID-1 5.4, None for a CRL without them.
+#[derive(Clone)]
 struct HeldCrl {
     version: i64,
     next_update: Option<i64>,
+    anchors: Option<Anchors>,
 }
 
-/// The root public key and the newest CRL seen.
+/// A CRL-anchored item as accepted: its token and payload.
+#[derive(Clone)]
+pub(crate) struct Item {
+    pub(crate) token: String,
+    pub(crate) payload: Map<String, Value>,
+}
+
+const ITEMS_DISABLED: &str = "this Lucid release does not accept org identity rules yet (release gate G-ENGINE)";
+const MAP_TOO_LARGE: &str = "this identity map is larger than Lucid accepts; nothing signed";
+const TOKEN_TOO_LARGE: &str = "this certificate is larger than Lucid accepts; nothing signed";
+
+/// A CRL that passed every check, ready to be held.
+struct CheckedCrl {
+    held: HeldCrl,
+    body: String,
+    serials: Vec<String>,
+}
+
+// ── ID-1 5.4 and 5.5 (identity.ts): the CRL bundle and the relay header limits ───────────────────────────────
+
+/// The legacy relay `Authorization` form carries the certificate itself; longer ones register (5.5).
+pub const LEGACY_HEADER_CERT_MAX: usize = 8_192;
+/// A certificate token at most (a renewed sign-in leaf, TOKEN_LIMITS.leaf).
+pub const LEAF_TOKEN_MAX: usize = 65_536;
+/// A CRL bundle (5.4): 8,192 + 59,392 + 38,912 + 38,912 + 200 bytes of keys and punctuation.
+pub const MAX_BUNDLE_BYTES: usize = 145_608;
+/// How long past its nextUpdate a CRL still counts as fresh.
+pub const CRL_GRACE_SEC: i64 = 3 * 86_400;
+/// The bundle items beside the CRL (identity.ts BUNDLE_FILES): body key and state-directory file.
+pub const BUNDLE_ITEMS: [(&str, &str); 3] = [("idpMap", "idp-map"), ("orgRules", "org-rules"), ("rulesLowering", "rules-lowering")];
+
+/// A bundle body (identity.ts parseBundle): exact keys, string items, at most MAX_BUNDLE_BYTES as JSON. The pre-ID-1
+/// `{crl}` is a bundle. `items` holds the present items in BUNDLE_ITEMS order.
+pub struct Bundle {
+    pub crl: String,
+    pub items: Vec<(&'static str, String)>,
+}
+
+pub fn parse_bundle(v: Option<&Value>) -> Option<Bundle> {
+    let o = v?.as_object()?;
+    const KEYS: [&str; 4] = ["crl", "idpMap", "orgRules", "rulesLowering"];
+    if !exact_keys(o, &KEYS, &["crl"]) || !o.values().all(Value::is_string) || crate::codec::stringify(v?).len() > MAX_BUNDLE_BYTES {
+        return None;
+    }
+    let items = BUNDLE_ITEMS.iter().filter_map(|(k, _)| str_of(o.get(*k)).map(|s| (*k, s.to_owned()))).collect();
+    Some(Bundle { crl: str_of(o.get("crl"))?.to_owned(), items })
+}
+
+/// Decision 34 and the relay's legacy header (5.5): is this a renewed (`idp-renew`) leaf? Read without verifying.
+pub fn is_renewed_leaf(token: &str) -> bool {
+    peek_compact(token).is_some_and(|p| str_of(p.get("typ")) == Some("lucid-node-cert") && p.contains_key("renewal"))
+}
+
+/// The root public key, the newest CRL seen and (ID-1 5.4) the identity map, org rules and rules lowering it anchors.
+///
+/// `gates`: the release gates this build holds `verified` (contract 2.12). The relay starts with RELAY_GATES, empty
+/// until G-RUST is verified: then, as identity.ts without G-ENGINE, a CRL carrying the anchor fields is malformed, a
+/// bundle carrying items is refused, and a certificate carrying `idp` or `renewal` is malformed.
+#[derive(Clone)]
 pub struct TrustStore {
     root: P256Key,
     pub root_id: String,
+    /// The organization's name in the 6.9 words; display only.
+    pub org_name: String,
+    gates: Vec<String>,
     crl: Option<HeldCrl>,
     crl_token: Option<String>,
+    /// The held CRL's payload part: an equal version with another body is the two-versions alarm (5.4).
+    crl_body: Option<String>,
     revoked: HashSet<String>,
+    // Each item is kept as accepted; the accessors hand one out only while it matches the anchors of the CRL held
+    // now, so a newer CRL naming other items leaves them "not held" (fail closed).
+    map: Option<Item>,
+    rules: Option<Item>,
+    lowering: Option<Item>,
+    /// Two different signed items with one version were seen: enforcement of new rules stops (5.4 alarm).
+    conflict: bool,
+    /// API-1 3.5: the held relay directory's `cert_grace_hours` (0: none): a node certificate past `exp` passes until
+    /// `exp + hours * 3600`, never when revoked.
+    cert_grace_hours: i64,
 }
 
 impl TrustStore {
     pub fn new(root: P256Key) -> TrustStore {
         let root_id = node_id_of(&p256_spki_der(&root));
-        TrustStore { root, root_id, crl: None, crl_token: None, revoked: HashSet::new() }
+        TrustStore {
+            root,
+            root_id,
+            org_name: "Your organization".into(),
+            gates: crate::meet_org_policy::RELAY_GATES.iter().map(|g| (*g).to_owned()).collect(),
+            crl: None,
+            crl_token: None,
+            crl_body: None,
+            revoked: HashSet::new(),
+            map: None,
+            rules: None,
+            lowering: None,
+            conflict: false,
+            cert_grace_hours: 0,
+        }
+    }
+
+    /// API-1 3.5: the grace of the relay directory held now (`DirectoryHolder::cert_grace_hours`).
+    pub fn set_cert_grace_hours(&mut self, hours: i64) {
+        self.cert_grace_hours = hours;
+    }
+
+    /// API-1 3.5 (identity.ts `pastGrace`): the instant a node certificate's raw `exp` is compared with (`exp <= it`
+    /// is expired): `now` without a grace, else `now - hours * 3600 - 1`, so the certificate lives while
+    /// `now <= exp + hours * 3600`. Revocation is checked apart and never has a grace.
+    pub fn grace_now(&self, now: i64) -> i64 {
+        if self.cert_grace_hours == 0 {
+            now
+        } else {
+            now.saturating_sub(self.cert_grace_hours * 3600 + 1)
+        }
+    }
+
+    /// API-1 3.5: a node certificate ending at `exp` is past its effective end at `now`.
+    pub fn past_grace(&self, exp: i64, now: i64) -> bool {
+        exp <= self.grace_now(now)
+    }
+
+    /// The verified release gates (tests and vectors only; the relay runs with RELAY_GATES).
+    #[cfg(test)]
+    pub fn set_gates(&mut self, gates: &[&str]) {
+        self.gates = gates.iter().map(|g| (*g).to_owned()).collect();
+    }
+
+    /// Whether this release gate is held `verified`.
+    pub fn gate(&self, name: &str) -> bool {
+        self.gates.iter().any(|g| g == name)
+    }
+
+    pub(crate) fn gates(&self) -> &[String] {
+        &self.gates
+    }
+
+    /// The held CRL's nextUpdate (seconds), or None for none held or a legacy CRL without one.
+    pub fn crl_next_update(&self) -> Option<i64> {
+        self.crl.as_ref().and_then(|c| c.next_update)
+    }
+
+    /// RS-CRL-01: the held CRL is past its nextUpdate plus the grace. A legacy CRL (no nextUpdate) never is.
+    pub fn crl_stale(&self, now: i64) -> bool {
+        self.crl_next_update().is_some_and(|n| now > n + CRL_GRACE_SEC)
+    }
+
+    /// The held CRL's anchors (5.4), or None for none held or a CRL without them.
+    pub(crate) fn crl_anchors(&self) -> Option<&Anchors> {
+        self.crl.as_ref().and_then(|c| c.anchors.as_ref())
+    }
+
+    pub(crate) fn rules_conflict(&self) -> bool {
+        self.conflict
+    }
+
+    /// The held identity map, only while it is the one the held CRL anchors.
+    pub(crate) fn idp_map(&self) -> Option<&Item> {
+        let (a, m) = (self.crl_anchors()?, self.map.as_ref()?);
+        (is_int(m.payload.get("version")) == Some(a.idp_map_version) && sha256_hex(m.token.as_bytes()) == a.idp_map_sha256).then_some(m)
+    }
+
+    /// The held ordinary rules token, only while the held CRL's rules anchor names it.
+    pub(crate) fn org_rules(&self) -> Option<&Item> {
+        let (a, r) = (self.crl_anchors()?, self.rules.as_ref()?);
+        (is_int(r.payload.get("version")) == Some(a.org_rules_version) && sha256_hex(r.token.as_bytes()) == a.org_rules_sha256).then_some(r)
+    }
+
+    /// The held lowering wire, only while the held CRL anchors it, pending or settled (3.8).
+    pub(crate) fn rules_lowering(&self) -> Option<&Item> {
+        let (a, w) = (self.crl_anchors()?, self.lowering.as_ref()?);
+        lowering_anchored(a, &sha256_hex(w.token.as_bytes()), &w.payload).map(|_| w)
+    }
+
+    /// What the held CRL anchors that this store does not hold.
+    fn missing_items(&self) -> Vec<&'static str> {
+        let Some(a) = self.crl_anchors() else { return Vec::new() };
+        let mut out = Vec::new();
+        if a.idp_map_version != 0 && self.idp_map().is_none() {
+            out.push("idpMap");
+        }
+        let lowering_sha = self.rules_lowering().map(|w| sha256_hex(w.token.as_bytes())).unwrap_or_default();
+        // The rules anchor names either an ordinary token or a settled lowering wire; "orgRules" means its carrier.
+        if a.org_rules_version != 0 && self.org_rules().is_none() && lowering_sha != a.org_rules_sha256 {
+            out.push("orgRules");
+        }
+        if a.org_rules_pending_version != 0 && lowering_sha != a.org_rules_pending_sha256 {
+            out.push("rulesLowering");
+        }
+        out
+    }
+
+    /// The held CRL and the held items it anchors: what GET /v1/crl answers and what the relay persists, or None.
+    pub fn bundle(&self) -> Option<Value> {
+        let crl = self.crl_token.as_deref()?;
+        let mut o = Map::new();
+        o.insert("crl".into(), Value::from(crl));
+        for (key, item) in [("idpMap", self.idp_map()), ("orgRules", self.org_rules()), ("rulesLowering", self.rules_lowering())] {
+            if let Some(i) = item {
+                o.insert(key.into(), Value::from(i.token.as_str()));
+            }
+        }
+        Some(Value::Object(o))
+    }
+
+    /// The key a relay caches a verdict under (5.5 "Cache"): the CRL version, the anchored rules carriers and map, and
+    /// which of them are held (so adopting a missing item also changes it).
+    pub fn cache_key(&self) -> String {
+        let a = self.crl_anchors();
+        let held = format!(
+            "{}{}{}",
+            if self.idp_map().is_some() { "m" } else { "" },
+            if self.org_rules().is_some() { "r" } else { "" },
+            if self.rules_lowering().is_some() { "l" } else { "" }
+        );
+        let rules = a.map(|a| format!("{}/{}", a.org_rules_sha256, a.org_rules_pending_sha256)).unwrap_or_default();
+        format!("{}:{rules}:{}:{held}", self.crl_version(), a.map(|a| a.idp_map_sha256.as_str()).unwrap_or_default())
+    }
+
+    /// The 5.4 acceptance rule for a versioned item against its CRL anchor: Ok(changed).
+    fn anchored(&mut self, what: &str, version: i64, token: &str, anchor_version: i64, anchor_sha: &str, held: Option<&str>) -> Result<bool, Refusal> {
+        if anchor_version == 0 {
+            return Err(Refusal::with("rs_rules_missing", format!("the held revocation list names no {what}")));
+        }
+        if version < anchor_version {
+            return Err(Refusal::new(format!("{what} version {version} is older than version {anchor_version}, which the revocation list names")));
+        }
+        if version > anchor_version {
+            return Err(Refusal::new(format!("{what} version {version} is not named by the held revocation list (version {anchor_version})")));
+        }
+        if sha256_hex(token.as_bytes()) != anchor_sha {
+            self.conflict = true;
+            return Err(Refusal::with("rs_rules_conflict", rules_words::conflict(&self.org_name)));
+        }
+        Ok(held != Some(token))
+    }
+
+    /// ID-1 5.4: the root-signed identity map, accepted only when its version and SHA-256 are the held CRL's anchors.
+    pub fn accept_idp_map(&mut self, token: &str) -> Result<bool, Refusal> {
+        if !self.gate("G-ENGINE") {
+            return Err(Refusal::new(ITEMS_DISABLED));
+        }
+        if utf16_len(token) > TOKEN_LIMITS_MAP {
+            return Err(Refusal::with("rs_map_too_large", MAP_TOO_LARGE));
+        }
+        let tv = Value::from(token);
+        let Some(p) = open_compact(Some(&tv), &self.root, TOKEN_LIMITS_MAP) else { return Err(Refusal::new("the identity map is not signed by this root")) };
+        if let Some(problem) = idp_map_problem(&p, &self.root_id) {
+            return Err(Refusal::new(format!("malformed identity map: {problem}")));
+        }
+        let (av, asha) = self.crl_anchors().map_or((0, String::new()), |a| (a.idp_map_version, a.idp_map_sha256.clone()));
+        let held = self.map.as_ref().map(|m| m.token.clone());
+        let changed = self.anchored("identity map", is_int(p.get("version")).unwrap_or(0), token, av, &asha, held.as_deref())?;
+        if changed {
+            self.map = Some(Item { token: token.to_owned(), payload: p });
+        }
+        Ok(changed)
+    }
+
+    /// ID-1 5.4: the ordinary `lucid-org-rules` token, under the same anchor rule.
+    pub fn accept_org_rules(&mut self, token: &str) -> Result<bool, Refusal> {
+        if !self.gate("G-ENGINE") {
+            return Err(Refusal::new(ITEMS_DISABLED));
+        }
+        let Some(p) = read_org_rules(token, &self.root, &self.root_id) else {
+            return Err(Refusal::new("the org rules are not signed by this root, too large or malformed"));
+        };
+        let (av, asha) = self.crl_anchors().map_or((0, String::new()), |a| (a.org_rules_version, a.org_rules_sha256.clone()));
+        let held = self.rules.as_ref().map(|r| r.token.clone());
+        let changed = self.anchored("org rules", is_int(p.get("version")).unwrap_or(0), token, av, &asha, held.as_deref())?;
+        if changed {
+            self.rules = Some(Item { token: token.to_owned(), payload: p });
+        }
+        Ok(changed)
+    }
+
+    /// ID-1 3.8: the lowering wire, accepted only when the held CRL anchors it as pending or as the settled carrier.
+    pub fn accept_rules_lowering(&mut self, wire: &str) -> Result<bool, Refusal> {
+        if !self.gate("G-ENGINE") {
+            return Err(Refusal::new(ITEMS_DISABLED));
+        }
+        let Some(p) = read_rules_lowering(wire, &self.root, &self.root_id) else {
+            return Err(Refusal::new("the lowering is not signed by this root, too large or malformed"));
+        };
+        let sha = sha256_hex(wire.as_bytes());
+        let next = is_int(p.get("next_rules_version")).unwrap_or(0);
+        if let Some(a) = self.crl_anchors() {
+            if lowering_anchored(a, &sha, &p).is_some() {
+                if self.lowering.as_ref().is_some_and(|w| w.token == wire) {
+                    return Ok(false);
+                }
+                self.lowering = Some(Item { token: wire.to_owned(), payload: p });
+                return Ok(true);
+            }
+            if (a.org_rules_pending_version != 0 && next == a.org_rules_pending_version) || next == a.org_rules_version {
+                self.conflict = true;
+                return Err(Refusal::with("rs_rules_conflict", rules_words::conflict(&self.org_name)));
+            }
+        }
+        Err(Refusal::with("rs_lowering_unanchored", rules_words::unanchored(&self.org_name)))
+    }
+
+    /// ID-1 5.4: a whole bundle, all or nothing: the CRL first (newer or equal), then every item against that CRL's
+    /// anchors. With anchors the bundle must carry what they name; without anchors it carries nothing else. Nothing
+    /// held changes on a refusal (except the conflict alarm, which stays raised).
+    pub fn accept_bundle(&mut self, b: &Bundle) -> Result<bool, Refusal> {
+        let mut stage = self.clone();
+        let mut changed = match stage.accept_crl_checked(&b.crl) {
+            Ok(c) => c,
+            Err(r) => {
+                self.conflict |= stage.conflict;
+                return Err(r);
+            }
+        };
+        let item = |k: &str| b.items.iter().find(|(name, _)| *name == k).map(|(_, t)| t.as_str());
+        match stage.crl_anchors().cloned() {
+            None if !b.items.is_empty() => return Err(Refusal::new("the bundle carries items its revocation list does not name")),
+            None => {}
+            Some(a) => {
+                if a.idp_map_version != 0 && item("idpMap").is_none() {
+                    return Err(Refusal::with("rs_rules_missing", "the bundle lacks the identity map its revocation list names"));
+                }
+                for key in ["idpMap", "orgRules", "rulesLowering"] {
+                    let Some(t) = item(key) else { continue };
+                    let r = match key {
+                        "idpMap" => stage.accept_idp_map(t),
+                        "orgRules" => stage.accept_org_rules(t),
+                        _ => stage.accept_rules_lowering(t),
+                    };
+                    match r {
+                        Ok(c) => changed |= c,
+                        Err(r) => {
+                            self.conflict |= stage.conflict;
+                            return Err(r);
+                        }
+                    }
+                }
+                let missing = stage.missing_items();
+                if !missing.is_empty() {
+                    return Err(Refusal::with("rs_rules_missing", format!("the bundle lacks {} its revocation list names", missing.join(" and "))));
+                }
+            }
+        }
+        *self = stage;
+        Ok(changed)
     }
 
     pub fn root_key(&self) -> &P256Key {
@@ -448,10 +822,43 @@ impl TrustStore {
     /// Take a CRL only if the root signed it and it is NEWER than the one held; once a held list carries a
     /// nextUpdate, a newer one without it is refused. Ok(changed) or Err(reason).
     pub fn accept_crl(&mut self, token: &str) -> Result<bool, String> {
+        self.accept_crl_checked(token).map_err(|r| r.reason)
+    }
+
+    /// accept_crl with the refusal's 6.9 event; the two-versions alarm raises the conflict flag (the held one stays).
+    pub fn accept_crl_checked(&mut self, token: &str) -> Result<bool, Refusal> {
+        match self.check_crl(token) {
+            Ok(checked) => Ok(self.hold_crl(token, checked)),
+            Err(r) => {
+                if r.event == Some("rs_rules_conflict") {
+                    self.conflict = true;
+                }
+                Err(r)
+            }
+        }
+    }
+
+    /// Hold a CRL check_crl passed (None: the one held already); Ok(changed).
+    fn hold_crl(&mut self, token: &str, checked: Option<CheckedCrl>) -> bool {
+        let Some(c) = checked else { return false };
+        self.crl = Some(c.held);
+        self.crl_token = Some(token.to_owned());
+        self.crl_body = Some(c.body);
+        self.revoked = c.serials.into_iter().collect();
+        true
+    }
+
+    /// Every acceptCrl check without holding anything: Ok(None) for the CRL held already. ID-1 5.4: an equal version
+    /// with another body is the two-versions alarm and the held one stays.
+    fn check_crl(&self, token: &str) -> Result<Option<CheckedCrl>, Refusal> {
         let tv = Value::String(token.to_owned());
-        let Some(p) = open_compact(Some(&tv), &self.root, 8192) else { return Err("CRL is not signed by this root".into()) };
-        let malformed = || Err("malformed CRL".to_string());
-        if !exact_keys(&p, &["v", "typ", "root", "version", "serials", "iat", "nextUpdate"], &["v", "typ", "root", "version", "serials", "iat"])
+        let Some(p) = open_compact(Some(&tv), &self.root, TOKEN_LIMITS_OTHER) else { return Err(Refusal::new("CRL is not signed by this root")) };
+        let malformed = || Err(Refusal::new("malformed CRL"));
+        const KEYS: [&str; 15] = [
+            "v", "typ", "root", "version", "serials", "iat", "nextUpdate", "org_rules_version", "org_rules_sha256", "idp_map_version", "idp_map_sha256",
+            "org_rules_pending_sha256", "org_rules_pending_version", "org_rules_pending_effective_at", "org_rules_pending_exp",
+        ];
+        if !exact_keys(&p, &KEYS, &["v", "typ", "root", "version", "serials", "iat"])
             || !num_is(p.get("v"), 1.0)
             || str_of(p.get("typ")) != Some("lucid-crl")
             || str_of(p.get("root")) != Some(self.root_id.as_str())
@@ -467,20 +874,27 @@ impl TrustStore {
                 _ => return malformed(),
             },
         };
+        // ID-1 5.4: the anchor fields are read only with G-ENGINE, all eight or none, and only beside a nextUpdate.
+        let anchors = match anchors_of(&p) {
+            Ok(None) => None,
+            Ok(Some(a)) if self.gate("G-ENGINE") && next_update.is_some() => Some(a),
+            _ => return malformed(),
+        };
         let held = self.crl_version();
         if version < held {
-            return Err(format!("CRL version {version} is older than {held}"));
+            return Err(Refusal::new(format!("CRL version {version} is older than {held}")));
         }
+        let body = token.split('.').next().unwrap_or("").to_owned();
         if version == held {
-            return Ok(false);
+            if self.crl_body.as_deref().is_none_or(|b| b == body) {
+                return Ok(None);
+            }
+            return Err(Refusal::with("rs_rules_conflict", format!("two different revocation lists carry version {version}; the one held stays. Tell the root holder.")));
         }
         if next_update.is_none() && self.crl.as_ref().is_some_and(|c| c.next_update.is_some()) {
-            return Err(format!("CRL version {version} has no nextUpdate, and this node already holds one that expires"));
+            return Err(Refusal::new(format!("CRL version {version} has no nextUpdate, and this node already holds one that expires")));
         }
-        self.crl = Some(HeldCrl { version, next_update });
-        self.crl_token = Some(token.to_owned());
-        self.revoked = serials.into_iter().collect();
-        Ok(true)
+        Ok(Some(CheckedCrl { held: HeldCrl { version, next_update, anchors }, body, serials }))
     }
 
     fn verify_delegation(&self, token: Option<&Value>, now: i64) -> Result<(Delegation, P256Key), String> {
@@ -508,9 +922,16 @@ impl TrustStore {
     /// A certificate is good only when this root (or a delegation this root signed) signed it, it is in date, its
     /// key hashes to its node id, and its serial is not revoked.
     pub fn verify_cert(&self, token: Option<&Value>, now: i64) -> Result<CertOk, String> {
-        let malformed = || Err("malformed certificate".to_string());
+        self.check_cert(token, now).map_err(|r| r.reason)
+    }
+
+    /// verify_cert with the refusal's 6.9 event. ID-1 5.5: a leaf an `idp-renew` delegate signed passes only the nine
+    /// checks of check_renewed_leaf, against the map and rules this store holds.
+    pub fn check_cert(&self, token: Option<&Value>, now: i64) -> Result<CertOk, Refusal> {
+        let malformed = || Err(Refusal::new("malformed certificate"));
+        let org = self.org_name.as_str();
         let mut del = None;
-        let p = match open_compact(token, &self.root, 8192) {
+        let p = match open_compact(token, &self.root, TOKEN_LIMITS_OTHER) {
             Some(p) => {
                 if p.contains_key("issuer") || p.contains_key("delegation") {
                     return malformed();
@@ -518,14 +939,36 @@ impl TrustStore {
                 p
             }
             None => {
-                let peek = token.and_then(Value::as_str).and_then(peek_compact);
+                // Not root-signed: it may be a leaf a delegate signed, carrying its root-signed delegation.
+                let text = token.and_then(Value::as_str);
+                let peek = text.and_then(peek_compact);
                 let Some(peek) = peek.filter(|p| p.get("issuer").is_some_and(Value::is_string) && p.get("delegation").is_some_and(Value::is_string)) else {
-                    return Err("certificate is not signed by this root".into());
+                    return Err(Refusal::new("certificate is not signed by this root"));
                 };
-                let (d, key) = self.verify_delegation(peek.get("delegation"), now).map_err(|r| format!("certificate issuer: {r}"))?;
-                let Some(p) = open_compact(token, &key, 8192) else { return Err("certificate is not signed by its delegation's key".into()) };
+                // ID-1 5.5: a leaf carrying sign-in evidence is refused with the 6.9 words, whatever is wrong with its issuer.
+                let signed_in = (peek.contains_key("idp") || peek.contains_key("renewal")) && self.gate("G-ENGINE");
+                let (d, key) = match self.verify_delegation(peek.get("delegation"), now) {
+                    Ok(dk) => dk,
+                    Err(r) if !signed_in => return Err(Refusal::new(format!("certificate issuer: {r}"))),
+                    Err(_) => {
+                        let may = str_of(peek.get("delegation")).and_then(peek_compact).and_then(|d| d.get("may").cloned());
+                        let only_renew = may.as_ref().and_then(Value::as_array).is_some_and(|m| m.len() == 1 && m[0].as_str() == Some("idp-renew"));
+                        let event = if may.as_ref().is_some_and(Value::is_array) && !only_renew { "rs_renewal_wrong_power" } else { "rs_renewal_bad" };
+                        return Err(crate::idp::leaf_refusal(event, org, "").into());
+                    }
+                };
+                let renewing = d.may.iter().any(|m| m == "idp-renew");
+                // A users (or any other) delegate never signs sign-in evidence: say so before anything else about the leaf.
+                if signed_in && !renewing {
+                    return Err(crate::idp::leaf_refusal("rs_renewal_wrong_power", org, "").into());
+                }
+                let limit = if renewing { TOKEN_LIMITS_LEAF } else { TOKEN_LIMITS_OTHER };
+                if text.is_some_and(|t| utf16_len(t) > limit) {
+                    return Err(Refusal::with("rs_token_too_large", TOKEN_TOO_LARGE));
+                }
+                let Some(p) = open_compact(token, &key, limit) else { return Err(Refusal::new("certificate is not signed by its delegation's key")) };
                 if str_of(p.get("issuer")) != Some(d.id.as_str()) {
-                    return Err("certificate names another issuer than its delegation".into());
+                    return Err(Refusal::new("certificate names another issuer than its delegation"));
                 }
                 del = Some(d);
                 p
@@ -533,6 +976,32 @@ impl TrustStore {
         };
         if !exact_keys(&p, &CERT_KEYS, &CERT_KEYS[..11]) || !num_is(p.get("v"), 1.0) || str_of(p.get("typ")) != Some("lucid-node-cert") {
             return malformed();
+        }
+        // ID-1: the new certificate keys exist only behind G-ENGINE (5.6); without it such a certificate is malformed.
+        let signed_in = p.contains_key("idp") || p.contains_key("renewal");
+        if signed_in && !self.gate("G-ENGINE") {
+            return malformed();
+        }
+        if let Some(idp) = p.get("idp") {
+            if str_of(p.get("role")) != Some("hub") || idp_claim_problem(idp).is_some() {
+                return malformed();
+            }
+        }
+        if let Some(r) = p.get("renewal") {
+            if del.is_none() || renewal_shape_problem(r).is_some() {
+                return if del.is_some() { Err(crate::idp::leaf_refusal("rs_renewal_bad", org, "").into()) } else { malformed() };
+            }
+        }
+        if del.is_none() && p.contains_key("idp") {
+            if let (Some(iat), Some(exp)) = (is_int(p.get("iat")), is_int(p.get("exp"))) {
+                if exp - iat > IDP_CERT_MAX_SEC {
+                    return Err(Refusal::new("malformed certificate: a sign-in certificate lasts at most 24 hours"));
+                }
+            }
+        }
+        let kind = p.get("presence").and_then(Value::as_object).and_then(|o| str_of(o.get("kind")));
+        if matches!(kind, Some("piv" | "fido2")) && !presence_kind_enabled(kind.unwrap_or_default(), &self.gates) {
+            return Err(Refusal::with("rs_kind_disabled", presence_words("rs_kind_disabled", Some(org), None)));
         }
         if str_of(p.get("root")) != Some(self.root_id.as_str()) || !str_of(p.get("serial")).is_some_and(is_serial) || !str_of(p.get("node")).is_some_and(is_node_id) {
             return malformed();
@@ -560,25 +1029,26 @@ impl TrustStore {
             }
         }
         if let Some(pr) = p.get("presence") {
-            if role != "hub" || !presence_ok(pr) {
+            if role != "hub" || !presence_public_key_ok(pr, &self.gates) {
                 return malformed();
             }
         }
         if iat > now + CLOCK_SKEW_SEC {
-            return Err("certificate is not valid yet".into());
+            return Err(Refusal::new("certificate is not valid yet"));
         }
-        if exp <= now {
-            return Err("certificate expired".into());
+        // API-1 3.5: inside the directory's grace an expired certificate passes (the revocation check below still runs)
+        if self.past_grace(exp, now) {
+            return Err(Refusal::new("certificate expired"));
         }
         let serial = str_of(p.get("serial")).unwrap_or_default().to_owned();
         if self.revoked.contains(&serial) {
-            return Err("certificate revoked".into());
+            return Err(Refusal::new("certificate revoked"));
         }
         let node = str_of(p.get("node")).unwrap_or_default().to_owned();
         let spki = str_of(p.get("spki"));
         let key = spki.and_then(import_public_spki);
         let Some(key) = key.filter(|_| node_id_of(&unb64u(spki.unwrap_or("")).unwrap_or_default()) == node) else {
-            return Err("certificate key does not match its node id".into());
+            return Err(Refusal::new("certificate key does not match its node id"));
         };
         let cert = NodeCert {
             serial,
@@ -592,12 +1062,20 @@ impl TrustStore {
             classification: str_of(p.get("classification")).map(str::to_owned),
             region: str_of(p.get("region")).map(str::to_owned),
         };
-        if let Some(d) = &del {
-            if let Some(outside) = leaf_problem(d, &cert) {
-                return Err(format!("certificate is outside its delegation: {outside}"));
+        // The cache bound (5.5 "Cache"): the leaf's own end and the CRL's staleness, then the evidence's for a renewed leaf.
+        let mut valid_until = self.crl_next_update().map_or(cert.exp, |n| cert.exp.min(n + CRL_GRACE_SEC));
+        match &del {
+            // The nine 5.5 checks (they include the delegation limits, as check 1).
+            Some(d) if d.may.iter().any(|m| m == "idp-renew") => valid_until = valid_until.min(check_renewed_leaf(self, &cert, &p, d, now)?),
+            // Every verifier re-checks the limits, so a delegate that skips its own checks still cannot exceed them.
+            Some(d) => {
+                if let Some(outside) = leaf_problem(d, &cert, signed_in) {
+                    return Err(Refusal::new(format!("certificate is outside its delegation: {outside}")));
+                }
             }
+            None => {}
         }
-        Ok(CertOk { cert, key })
+        Ok(CertOk { cert, key, valid_until })
     }
 }
 
@@ -648,7 +1126,9 @@ fn origin_only(url: &str) -> Option<(&str, &str)> {
 }
 
 fn relay_entry_ok(v: &Value) -> bool {
-    let Some(e) = as_object(v).filter(|e| exact_keys(e, &["url", "region", "priority", "ca", "spki"], &["url", "region", "priority"])) else { return false };
+    // API-1d 5.8: optional `api`, only ever `true` (a spokes relay bound to the org that enforces 5.3); absent means not.
+    // 5.8 as amended (review W5b finding 7): optional `relay`, the relay's id (is_directory_relay_id), required with `api`.
+    let Some(e) = as_object(v).filter(|e| exact_keys(e, &["url", "region", "priority", "ca", "spki", "api", "relay"], &["url", "region", "priority"])) else { return false };
     let Some(url) = str_of(e.get("url")) else { return false };
     let Some((scheme, host)) = origin_only(url) else { return false };
     if scheme == "http" && !LOOPBACK_HOSTS.contains(&host) {
@@ -667,7 +1147,39 @@ fn relay_entry_ok(v: &Value) -> bool {
             return false;
         }
     }
-    true
+    if e.get("api").is_some_and(|a| a != &Value::Bool(true)) {
+        return false;
+    }
+    match e.get("relay") {
+        None => e.get("api").is_none(),
+        Some(r) => r.as_str().is_some_and(is_directory_relay_id),
+    }
+}
+
+/// API-1d 5.8 as amended (identity.ts `RELAY_ID_RE`): a directory entry's `relay`, `r_` and 1 to 62 of A-Z, a-z,
+/// 0-9, `.`, `_` and `-`.
+fn is_directory_relay_id(s: &str) -> bool {
+    s.strip_prefix("r_").is_some_and(|t| (1..=62).contains(&t.len()) && t.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b'-')))
+}
+
+/// API-1d 5.8 (identity.ts `orgDomainsProblem`): a directory's `org_domains` is 1 to MAX_ORG_DOMAINS distinct
+/// lower-case DNS names (DOMAIN_RE); None when it is not.
+fn org_domains_of(v: &Value) -> Option<Vec<String>> {
+    strings(Some(v)).filter(|d| (1..=MAX_ORG_DOMAINS).contains(&d.len()) && distinct(d) && d.iter().all(|x| is_domain(x)))
+}
+
+/// API-1d 5.2 (identity.ts `isServiceHubEmail`): an email is a service hub's (an app principal's) when its domain
+/// (after the last `@`, lower case) is `apps.<d>` for a `d` in `org_domains`, the held directory's `org_domains`.
+/// Without them (None: no held directory carries the field) every domain starting with `apps.` counts (fail closed).
+pub fn is_service_hub_email(email: &str, org_domains: Option<&[String]>) -> bool {
+    let domain = email[email.rfind('@').map_or(0, |i| i + 1)..].to_lowercase();
+    let Some(d) = domain.strip_prefix("apps.") else { return false };
+    org_domains.is_none_or(|list| list.iter().any(|x| x == d))
+}
+
+/// API-1d 5.2 (identity.ts `isServiceHub`): a hub certificate naming a user whose email is a service hub email.
+pub fn is_service_hub(cert: &NodeCert, org_domains: Option<&[String]>) -> bool {
+    cert.role == "hub" && cert.user.as_ref().is_some_and(|u| is_service_hub_email(&u.email, org_domains))
 }
 
 /// The newest relay directory seen.
@@ -676,9 +1188,24 @@ pub struct DirectoryHolder {
     version: i64,
     token: Option<String>,
     urls: Vec<String>,
+    cert_grace_hours: i64,
+    /// API-1d 5.8: the held directory's `org_domains`; None when it carries none (the fail-closed rule of 5.2).
+    org_domains: Option<Vec<String>>,
+    /// API-1d 5.8: the urls of the held directory's entries marked `api: true`, in directory order.
+    api_relays: Vec<String>,
 }
 
+/// API-1 3.5 (D15): the most a relay directory's `cert_grace_hours` may give.
+pub const CERT_GRACE_MAX_HOURS: i64 = 168;
+/// API-1d 5.8 (identity.ts MAX_ORG_DOMAINS): the most domains a relay directory's `org_domains` lists.
+pub const MAX_ORG_DOMAINS: usize = 16;
+
 impl DirectoryHolder {
+    /// API-1 3.5: the held directory's `cert_grace_hours` (0 when it carries none).
+    pub fn cert_grace_hours(&self) -> i64 {
+        self.cert_grace_hours
+    }
+
     pub fn version(&self) -> i64 {
         self.version
     }
@@ -692,13 +1219,40 @@ impl DirectoryHolder {
         &self.urls
     }
 
+    /// API-1d 5.2: the held directory's `org_domains`; None with none held or none set (the fail-closed rule).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn org_domains(&self) -> Option<Vec<String>> {
+        self.org_domains.clone()
+    }
+
+    /// API-1d 5.8: the urls of the held directory's relays marked `api: true`, in directory order.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn api_relays(&self) -> Vec<String> {
+        self.api_relays.clone()
+    }
+
     /// Take a directory only if this root signed it, it is in date, and it is not older than the one held.
     pub fn accept(&mut self, trust: &TrustStore, token: &str, now: i64) -> Result<bool, String> {
         let tv = Value::String(token.to_owned());
         let Some(p) = open_compact(Some(&tv), trust.root_key(), MAX_DIRECTORY_TOKEN) else { return Err("relay directory is not signed by this root".into()) };
         let malformed = || Err("malformed relay directory".to_string());
         let keys = ["v", "typ", "root", "version", "relays", "iat", "exp"];
-        if !exact_keys(&p, &keys, &keys) || !num_is(p.get("v"), 1.0) || str_of(p.get("typ")) != Some("lucid-relay-directory") || str_of(p.get("root")) != Some(trust.root_id.as_str()) {
+        // API-1 3.5: optional `cert_grace_hours`, an integer 1 to 168 (absent: 0)
+        // API-1d 5.8: optional `org_domains`, 1 to 16 distinct lower-case DNS names (absent: the fail-closed rule)
+        let allowed = ["v", "typ", "root", "version", "relays", "iat", "exp", "cert_grace_hours", "org_domains"];
+        let grace = match p.get("cert_grace_hours") {
+            None => Some(0),
+            Some(h) => is_int(Some(h)).filter(|h| (1..=CERT_GRACE_MAX_HOURS).contains(h)),
+        };
+        let Some(grace) = grace else { return malformed() };
+        let org_domains = match p.get("org_domains") {
+            None => None,
+            Some(d) => match org_domains_of(d) {
+                Some(list) => Some(list),
+                None => return malformed(),
+            },
+        };
+        if !exact_keys(&p, &allowed, &keys) || !num_is(p.get("v"), 1.0) || str_of(p.get("typ")) != Some("lucid-relay-directory") || str_of(p.get("root")) != Some(trust.root_id.as_str()) {
             return malformed();
         }
         let (Some(version), Some(iat), Some(exp)) = (is_int(p.get("version")), is_int(p.get("iat")), is_int(p.get("exp"))) else { return malformed() };
@@ -708,6 +1262,11 @@ impl DirectoryHolder {
         let Some(relays) = p.get("relays").and_then(Value::as_array).filter(|r| (1..=MAX_DIRECTORY_RELAYS).contains(&r.len()) && r.iter().all(relay_entry_ok)) else {
             return malformed();
         };
+        // 5.8 as amended: two entries never name one relay id
+        let ids: Vec<&str> = relays.iter().filter_map(|r| str_of(r.get("relay"))).collect();
+        if ids.iter().enumerate().any(|(i, id)| ids[..i].contains(id)) {
+            return malformed();
+        }
         if iat > now + CLOCK_SKEW_SEC {
             return Err("relay directory is not valid yet".into());
         }
@@ -723,6 +1282,9 @@ impl DirectoryHolder {
         self.version = version;
         self.token = Some(token.to_owned());
         self.urls = relays.iter().filter_map(|r| str_of(r.get("url")).map(str::to_owned)).collect();
+        self.cert_grace_hours = grace;
+        self.api_relays = relays.iter().filter(|r| r.get("api").is_some()).filter_map(|r| str_of(r.get("url")).map(str::to_owned)).collect();
+        self.org_domains = org_domains;
         Ok(true)
     }
 }
@@ -746,6 +1308,89 @@ mod tests {
         assert!(!is_node_id("n_0123456789ABCDEF0123456789abcdef"));
     }
 
+    mod grace {
+        use super::super::*;
+        use crate::codec::{b64u, stringify};
+        use p256::ecdsa::signature::Signer;
+        use p256::ecdsa::{Signature, SigningKey};
+        use serde_json::json;
+
+        const NOW: i64 = 1_800_000_000;
+        const HOUR: i64 = 3600;
+
+        fn compact(key: &SigningKey, payload: &Value) -> String {
+            let body = stringify(payload);
+            let sig: Signature = key.sign(body.as_bytes());
+            format!("{}.{}", b64u(body.as_bytes()), b64u(sig.to_der().as_bytes()))
+        }
+
+        fn root() -> SigningKey {
+            SigningKey::from_slice(&[7; 32]).unwrap()
+        }
+
+        fn root_id(root: &SigningKey) -> String {
+            node_id_of(&p256_spki_der(&root.verifying_key().into()))
+        }
+
+        fn directory(root: &SigningKey, version: i64, grace: Option<Value>) -> String {
+            let mut p = json!({
+                "v": 1, "typ": "lucid-relay-directory", "root": root_id(root), "version": version,
+                "relays": [{ "url": "https://relay.example.com", "region": "eu", "priority": 1 }], "iat": NOW - 60, "exp": NOW + 86_400,
+            });
+            if let Some(g) = grace {
+                p["cert_grace_hours"] = g;
+            }
+            compact(root, &p)
+        }
+
+        /// A spoke certificate with serial 0x11 that expired at `exp`.
+        fn cert(root: &SigningKey, exp: i64) -> Value {
+            let key = SigningKey::from_slice(&[9; 32]).unwrap();
+            let spki = p256_spki_der(&key.verifying_key().into());
+            let p = json!({
+                "v": 1, "typ": "lucid-node-cert", "serial": format!("{:032x}", 0x11), "root": root_id(root), "node": node_id_of(&spki),
+                "role": "spoke", "label": "Desk", "spki": b64u(&spki), "scopes": [], "iat": exp - 30 * 86_400, "exp": exp,
+            });
+            Value::String(compact(root, &p))
+        }
+
+        /// API-1 3.5: `cert_grace_hours` is optional, an integer 1 to 168; anything else is a malformed directory.
+        #[test]
+        fn api1_the_directory_carries_an_optional_cert_grace() {
+            let root = root();
+            let trust = TrustStore::new(root.verifying_key().into());
+            let mut held = DirectoryHolder::default();
+            assert_eq!(held.accept(&trust, &directory(&root, 1, None), NOW), Ok(true));
+            assert_eq!(held.cert_grace_hours(), 0);
+            assert_eq!(held.accept(&trust, &directory(&root, 2, Some(json!(24))), NOW), Ok(true));
+            assert_eq!(held.cert_grace_hours(), 24);
+            assert_eq!(held.accept(&trust, &directory(&root, 3, Some(json!(168))), NOW), Ok(true));
+            assert_eq!(held.cert_grace_hours(), 168);
+            for bad in [json!(0), json!(169), json!(1.5), json!(-1), json!("24"), Value::Null] {
+                assert_eq!(held.accept(&trust, &directory(&root, 4, Some(bad.clone())), NOW), Err("malformed relay directory".to_string()), "{bad}");
+            }
+            assert_eq!(held.cert_grace_hours(), 168);
+            assert_eq!(held.accept(&trust, &directory(&root, 5, None), NOW), Ok(true));
+            assert_eq!(held.cert_grace_hours(), 0);
+        }
+
+        /// API-1 3.5: a node certificate past `exp` passes inside the directory's grace, never past it, never revoked,
+        /// and grace 0 refuses exactly as before.
+        #[test]
+        fn api1_a_node_certificate_passes_inside_the_directory_grace_only() {
+            let root = root();
+            let mut trust = TrustStore::new(root.verifying_key().into());
+            let expired = cert(&root, NOW - 2 * HOUR);
+            assert_eq!(trust.verify_cert(Some(&expired), NOW).err().as_deref(), Some("certificate expired"));
+            trust.set_cert_grace_hours(24);
+            assert!(trust.verify_cert(Some(&expired), NOW).is_ok());
+            assert_eq!(trust.verify_cert(Some(&cert(&root, NOW - 25 * HOUR)), NOW).err().as_deref(), Some("certificate expired"));
+            let crl = compact(&root, &json!({ "v": 1, "typ": "lucid-crl", "root": root_id(&root), "version": 1, "serials": [format!("{:032x}", 0x11)], "iat": NOW - 60 }));
+            assert_eq!(trust.accept_crl(&crl), Ok(true));
+            assert_eq!(trust.verify_cert(Some(&expired), NOW).err().as_deref(), Some("certificate revoked"));
+        }
+    }
+
     #[test]
     fn relay_urls_must_be_bare_origins() {
         for good in ["https://relay-eu.example", "https://own.relay.example:8443", "http://127.0.0.1:9", "https://[2001:db8::1]:8443", "https://10.0.0.5"] {
@@ -753,6 +1398,147 @@ mod tests {
         }
         for bad in ["https://relay.example/", "https://Relay.example", "https://relay.example:443", "https://relay.example:08443", "https://010.0.0.5", "ftp://relay.example", "https://"] {
             assert!(origin_only(bad).is_none(), "{bad}");
+        }
+    }
+
+    mod spokes {
+        use super::super::*;
+        use serde_json::json;
+
+        /// API-1d 5.2 and 5.8: the add-on's shared vectors (test/vectors/spokes_directory_v1.json): each directory
+        /// accepted at `now` by a fresh holder trusting `root`, and the service hub rule for each email.
+        #[test]
+        fn api1d_directory_readers_match_the_addon_vectors() {
+            let file: Value = serde_json::from_str(include_str!("../tests/spokes_directory_v1.json")).unwrap();
+            let now = file["now"].as_i64().unwrap();
+            let root = import_public_spki(file["root"]["spki"].as_str().unwrap()).unwrap();
+            let trust = TrustStore::new(root);
+            assert_eq!(trust.root_id, file["root"]["id"].as_str().unwrap());
+            let dirs = file["directories"].as_array().unwrap();
+            assert!(!dirs.is_empty());
+            for d in dirs {
+                let (name, expect) = (d["name"].as_str().unwrap(), &d["expect"]);
+                let mut held = DirectoryHolder::default();
+                let got = held.accept(&trust, d["token"].as_str().unwrap(), now);
+                if expect["ok"] == json!(true) {
+                    assert_eq!(got, Ok(true), "{name}");
+                    let domains = serde_json::from_value::<Option<Vec<String>>>(expect["org_domains"].clone()).unwrap();
+                    assert_eq!(held.org_domains(), domains, "{name}");
+                    let api = serde_json::from_value::<Vec<String>>(expect["api_relays"].clone()).unwrap();
+                    assert_eq!(held.api_relays(), api, "{name}");
+                } else {
+                    assert_eq!(got, Err(expect["reason"].as_str().unwrap().to_owned()), "{name}");
+                    assert_eq!(held.version(), 0, "{name}");
+                    assert_eq!(held.org_domains(), None, "{name}");
+                    assert!(held.api_relays().is_empty(), "{name}");
+                }
+            }
+            let emails = file["emails"].as_array().unwrap();
+            assert!(!emails.is_empty());
+            for e in emails {
+                let email = e["email"].as_str().unwrap();
+                let domains = serde_json::from_value::<Option<Vec<String>>>(e["org_domains"].clone()).unwrap();
+                assert_eq!(is_service_hub_email(email, domains.as_deref()), e["service"].as_bool().unwrap(), "{email} under {}", e["org_domains"]);
+            }
+        }
+
+        /// API-1d 5.8: `relays[].api` is only ever `true`, and (as amended, review W5b finding 7) an api entry names
+        /// its relay id.
+        #[test]
+        fn api1d_a_relay_entry_marks_api_only_with_true() {
+            let entry = |api: Option<Value>, relay: Option<Value>| {
+                let mut e = json!({ "url": "https://relay.example", "region": "eu", "priority": 0 });
+                if let Some(a) = api {
+                    e["api"] = a;
+                }
+                if let Some(r) = relay {
+                    e["relay"] = r;
+                }
+                relay_entry_ok(&e)
+            };
+            assert!(entry(None, None));
+            assert!(entry(Some(json!(true)), Some(json!("r_21"))));
+            assert!(entry(None, Some(json!("r_spokes-us.1"))));
+            assert!(!entry(Some(json!(true)), None), "an api entry without its relay id");
+            for bad in [json!(false), json!(1), json!("true"), Value::Null, json!([true])] {
+                assert!(!entry(Some(bad.clone()), Some(json!("r_21"))), "{bad}");
+            }
+            let long = format!("r_{}", "a".repeat(63));
+            for bad in [json!("21"), json!("r_"), json!("r_a b"), json!("R_21"), json!(21), Value::Null, json!(long)] {
+                assert!(!entry(Some(json!(true)), Some(bad.clone())), "{bad}");
+            }
+            assert!(entry(Some(json!(true)), Some(json!(format!("r_{}", "a".repeat(62))))));
+        }
+
+        fn cert(role: &str, email: Option<&str>, scopes: &[&str]) -> NodeCert {
+            NodeCert {
+                serial: format!("{:032x}", 0x21),
+                node: format!("n_{:032x}", 0x22),
+                role: role.into(),
+                label: "Build hub".into(),
+                scopes: scopes.iter().map(|s| (*s).to_owned()).collect(),
+                iat: 1_000,
+                exp: 1_000 + 86_400,
+                user: email.map(|e| UserClaim { id: user_id_of(e), email: e.into(), clearances: None }),
+                classification: None,
+                region: None,
+            }
+        }
+
+        fn delegation(may: &[&str], roles: Option<&[&str]>) -> Delegation {
+            Delegation {
+                serial: format!("{:032x}", 0x31),
+                id: format!("n_{:032x}", 0x32),
+                may: may.iter().map(|s| (*s).to_owned()).collect(),
+                limits: Limits {
+                    max_days: 30,
+                    roles: roles.map(|r| r.iter().map(|s| (*s).to_owned()).collect()),
+                    scopes: None,
+                    label_prefix: None,
+                    email_domains: None,
+                    users: None,
+                    classifications: None,
+                    regions: None,
+                },
+                iat: 0,
+                exp: 10 * 86_400,
+            }
+        }
+
+        /// API-1d 5.2: a service hub is a hub whose user email is at an `apps.` domain (fail closed without
+        /// `org_domains`, else `apps.<d>` for a listed `d`).
+        #[test]
+        fn api1d_a_service_hub_is_a_hub_with_an_app_principal() {
+            let domains = ["acme.example".to_owned()];
+            let domains = Some(&domains[..]);
+            assert!(is_service_hub(&cert("hub", Some("build@apps.acme.example"), &[]), None));
+            assert!(is_service_hub(&cert("hub", Some("build@apps.acme.example"), &[]), domains));
+            assert!(is_service_hub(&cert("hub", Some("build@apps.other.example"), &[]), None));
+            assert!(!is_service_hub(&cert("hub", Some("build@apps.other.example"), &[]), domains));
+            assert!(!is_service_hub(&cert("hub", Some("ann@acme.example"), &[]), None));
+            assert!(!is_service_hub(&cert("hub", None, &[]), None));
+            assert!(!is_service_hub(&cert("spoke", None, &[]), None));
+            assert!(is_service_hub_email("apps.acme.example", None), "no @: the whole value is the domain, as identity.ts reads it (fail closed)");
+            assert!(is_service_hub_email("x@y@APPS.acme.example", None));
+        }
+
+        /// API-1d 4.2: a delegate signs a service hub only with the users power and limits allowing role hub, never
+        /// with approve; a human hub is judged as before.
+        #[test]
+        fn api1d_a_delegate_signs_a_service_hub_only_with_users_and_role_hub() {
+            let service = cert("hub", Some("build@apps.acme.example"), &["recall", "drive"]);
+            let human = cert("hub", Some("ann@acme.example"), &["recall", "drive", "approve"]);
+            let need_users = Some("only a delegation with the users power and role hub may certify a service hub".to_owned());
+            assert_eq!(leaf_problem(&delegation(&["users"], None), &service, false), None);
+            assert_eq!(leaf_problem(&delegation(&["users"], Some(&["hub"])), &service, false), None);
+            assert_eq!(leaf_problem(&delegation(&["users", "spokes"], Some(&["spoke", "hub"])), &service, false), None);
+            assert_eq!(leaf_problem(&delegation(&["users"], Some(&["spoke"])), &service, false), need_users);
+            assert_eq!(leaf_problem(&delegation(&["idp-renew"], Some(&["hub"])), &service, false), need_users);
+            assert_eq!(leaf_problem(&delegation(&["spokes"], None), &service, false), Some("this delegation may not certify hubs (no users power)".to_owned()));
+            let approving = cert("hub", Some("build@apps.acme.example"), &["recall", "drive", "approve"]);
+            assert_eq!(leaf_problem(&delegation(&["users"], None), &approving, false), Some("a delegate never certifies a service hub with the approve scope".to_owned()));
+            assert_eq!(leaf_problem(&delegation(&["users"], None), &human, false), None);
+            assert_eq!(leaf_problem(&delegation(&["users"], Some(&["spoke"])), &human, false), Some("this delegation certifies only spoke".to_owned()));
         }
     }
 }

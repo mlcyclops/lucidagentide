@@ -1,0 +1,436 @@
+{
+ "version": 1,
+ "contract": "NT-1 revision 4, section 7.3",
+ "limits": {
+  "desktop": 140,
+  "ios": 300,
+  "ellipsis": "..."
+ },
+ "clean": [
+  {
+   "name": "bidi_override",
+   "input": "Ann\u202eLee",
+   "output": "AnnLee"
+  },
+  {
+   "name": "isolates",
+   "input": "\u2066Ann\u2069 Lee",
+   "output": "Ann Lee"
+  },
+  {
+   "name": "marks",
+   "input": "\u200eAnn\u200f\u061c",
+   "output": "Ann"
+  },
+  {
+   "name": "zero_width",
+   "input": "A\u200bn\u200cn\u200d\u2060\ufeff",
+   "output": "Ann"
+  },
+  {
+   "name": "c0_keeps_tab_newline",
+   "input": "a\u0000b\tc\nd\u001f",
+   "output": "ab\tc\nd"
+  },
+  {
+   "name": "nonchars",
+   "input": "x\ufffey\uffff",
+   "output": "xy"
+  },
+  {
+   "name": "xml_injection_text_kept",
+   "input": "\"><action activationType=\"protocol\" arguments=\"ms-settings:\">",
+   "output": "\"><action activationType=\"protocol\" arguments=\"ms-settings:\">"
+  }
+ ],
+ "name_fallback": [
+  {
+   "name": "empty_after_cleaning",
+   "input": "\u200b\u202e",
+   "principal": "ben@acme.test",
+   "output": "ben@acme.test"
+  },
+  {
+   "name": "kept",
+   "input": "Ben\u200b Brown",
+   "principal": "ben@acme.test",
+   "output": "Ben Brown"
+  }
+ ],
+ "preview": [
+  {
+   "name": "text",
+   "me": "ann@acme.test",
+   "payload": {
+    "t": "Can you review the deck before 3?",
+    "m": []
+   },
+   "mention": false,
+   "desktop": "Can you review the deck before 3?",
+   "ios": "Can you review the deck before 3?"
+  },
+  {
+   "name": "whitespace",
+   "me": "ann@acme.test",
+   "payload": {
+    "t": "Line one\n\n  line two\tend  ",
+    "m": []
+   },
+   "mention": false,
+   "desktop": "Line one line two end",
+   "ios": "Line one line two end"
+  },
+  {
+   "name": "bidi_and_zero_width",
+   "me": "ann@acme.test",
+   "payload": {
+    "t": "Pay\u202e now\u200b please\u2066\u2069",
+    "m": []
+   },
+   "mention": false,
+   "desktop": "Pay now please",
+   "ios": "Pay now please"
+  },
+  {
+   "name": "c0_controls",
+   "me": "ann@acme.test",
+   "payload": {
+    "t": "bell\u0001 here\u0007\ufffe",
+    "m": []
+   },
+   "mention": false,
+   "desktop": "bell here",
+   "ios": "bell here"
+  },
+  {
+   "name": "mention_me",
+   "me": "ann@acme.test",
+   "payload": {
+    "t": "@Ann Archer can you join?",
+    "m": [
+     "ann@acme.test"
+    ]
+   },
+   "mention": true,
+   "desktop": "@Ann Archer can you join?",
+   "ios": "@Ann Archer can you join?"
+  },
+  {
+   "name": "mention_other",
+   "me": "ann@acme.test",
+   "payload": {
+    "t": "@Ben Brown can you join?",
+    "m": [
+     "ben@acme.test"
+    ]
+   },
+   "mention": false,
+   "desktop": "@Ben Brown can you join?",
+   "ios": "@Ben Brown can you join?"
+  },
+  {
+   "name": "forwarded",
+   "me": "ann@acme.test",
+   "payload": {
+    "t": "Lunch at noon",
+    "m": [],
+    "fw": {
+     "n": "Cat Cole",
+     "c": "#design",
+     "ts": 1794000000000,
+     "k": "channel"
+    }
+   },
+   "mention": false,
+   "desktop": "Forwarded: Lunch at noon",
+   "ios": "Forwarded: Lunch at noon"
+  },
+  {
+   "name": "long",
+   "me": "ann@acme.test",
+   "payload": {
+    "t": "alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha",
+    "m": []
+   },
+   "mention": false,
+   "desktop": "alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha...",
+   "ios": "alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha..."
+  },
+  {
+   "name": "exactly_140",
+   "me": "ann@acme.test",
+   "payload": {
+    "t": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "m": []
+   },
+   "mention": false,
+   "desktop": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+   "ios": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+  },
+  {
+   "name": "one_word_too_long",
+   "me": "ann@acme.test",
+   "payload": {
+    "t": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "m": []
+   },
+   "mention": false,
+   "desktop": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc...",
+   "ios": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc..."
+  },
+  {
+   "name": "text_wins_over_files",
+   "me": "ann@acme.test",
+   "payload": {
+    "t": "see attached",
+    "m": [],
+    "f": [
+     {
+      "fid": "ffffffffffffffffffffffffffffffff",
+      "id": "11111111111111111111111111111111",
+      "name": "a.pdf",
+      "mime": "application/pdf",
+      "size": 1000,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+     }
+    ]
+   },
+   "mention": false,
+   "desktop": "see attached",
+   "ios": "see attached"
+  },
+  {
+   "name": "voice_clip",
+   "me": "ann@acme.test",
+   "payload": {
+    "t": "",
+    "m": [],
+    "f": [
+     {
+      "fid": "ffffffffffffffffffffffffffffffff",
+      "id": "11111111111111111111111111111111",
+      "name": "clip.m4a",
+      "mime": "audio/mp4",
+      "size": 1000,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "clip": {
+       "k": "a",
+       "d": 4000,
+       "w": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+      }
+     }
+    ]
+   },
+   "mention": false,
+   "desktop": "Sent a voice clip",
+   "ios": "Sent a voice clip"
+  },
+  {
+   "name": "video_clip",
+   "me": "ann@acme.test",
+   "payload": {
+    "t": "",
+    "m": [],
+    "f": [
+     {
+      "fid": "ffffffffffffffffffffffffffffffff",
+      "id": "11111111111111111111111111111111",
+      "name": "clip.mp4",
+      "mime": "video/mp4",
+      "size": 1000,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "clip": {
+       "k": "v",
+       "d": 4000,
+       "w": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=="
+      }
+     }
+    ]
+   },
+   "mention": false,
+   "desktop": "Sent a video clip",
+   "ios": "Sent a video clip"
+  },
+  {
+   "name": "photo",
+   "me": "ann@acme.test",
+   "payload": {
+    "t": "",
+    "m": [],
+    "f": [
+     {
+      "fid": "ffffffffffffffffffffffffffffffff",
+      "id": "11111111111111111111111111111111",
+      "name": "IMG_0001.png",
+      "mime": "image/png",
+      "size": 1000,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+     }
+    ]
+   },
+   "mention": false,
+   "desktop": "Sent a photo",
+   "ios": "Sent a photo"
+  },
+  {
+   "name": "file",
+   "me": "ann@acme.test",
+   "payload": {
+    "t": "",
+    "m": [],
+    "f": [
+     {
+      "fid": "ffffffffffffffffffffffffffffffff",
+      "id": "11111111111111111111111111111111",
+      "name": "Q3 plan.pdf",
+      "mime": "application/pdf",
+      "size": 1000,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+     }
+    ]
+   },
+   "mention": false,
+   "desktop": "Sent a file: Q3 plan.pdf",
+   "ios": "Sent a file: Q3 plan.pdf"
+  },
+  {
+   "name": "file_name_bidi",
+   "me": "ann@acme.test",
+   "payload": {
+    "t": "",
+    "m": [],
+    "f": [
+     {
+      "fid": "ffffffffffffffffffffffffffffffff",
+      "id": "11111111111111111111111111111111",
+      "name": "invoice\u202etxt.exe",
+      "mime": "application/octet-stream",
+      "size": 1000,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+     }
+    ]
+   },
+   "mention": false,
+   "desktop": "Sent a file: invoicetxt.exe",
+   "ios": "Sent a file: invoicetxt.exe"
+  },
+  {
+   "name": "three_files",
+   "me": "ann@acme.test",
+   "payload": {
+    "t": "",
+    "m": [],
+    "f": [
+     {
+      "fid": "ffffffffffffffffffffffffffffffff",
+      "id": "11111111111111111111111111111111",
+      "name": "a.pdf",
+      "mime": "application/pdf",
+      "size": 1000,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+     },
+     {
+      "fid": "ffffffffffffffffffffffffffffffff",
+      "id": "11111111111111111111111111111111",
+      "name": "b.png",
+      "mime": "image/png",
+      "size": 1000,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+     },
+     {
+      "fid": "ffffffffffffffffffffffffffffffff",
+      "id": "11111111111111111111111111111111",
+      "name": "c.txt",
+      "mime": "text/plain",
+      "size": 1000,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+     }
+    ]
+   },
+   "mention": false,
+   "desktop": "Sent 3 files",
+   "ios": "Sent 3 files"
+  },
+  {
+   "name": "whitespace_text_photo",
+   "me": "ann@acme.test",
+   "payload": {
+    "t": "   ",
+    "m": [],
+    "f": [
+     {
+      "fid": "ffffffffffffffffffffffffffffffff",
+      "id": "11111111111111111111111111111111",
+      "name": "IMG_0002.jpg",
+      "mime": "image/jpeg",
+      "size": 1000,
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+     }
+    ]
+   },
+   "mention": false,
+   "desktop": "Sent a photo",
+   "ios": "Sent a photo"
+  },
+  {
+   "name": "poll",
+   "me": "ann@acme.test",
+   "payload": {
+    "t": "",
+    "m": [],
+    "poll": {
+     "question": "Where should we eat?",
+     "options": [
+      {
+       "id": "1",
+       "text": "Tacos"
+      },
+      {
+       "id": "2",
+       "text": "Pho"
+      }
+     ],
+     "multiple": false
+    }
+   },
+   "mention": false,
+   "desktop": "Started a poll: Where should we eat?",
+   "ios": "Started a poll: Where should we eat?"
+  },
+  {
+   "name": "zero_width_only",
+   "me": "ann@acme.test",
+   "payload": {
+    "t": "\u200b\ufeff",
+    "m": []
+   },
+   "mention": false,
+   "desktop": "Sent a message",
+   "ios": "Sent a message"
+  },
+  {
+   "name": "unknown_newer_payload",
+   "me": "ann@acme.test",
+   "payload": {
+    "t": "",
+    "m": [],
+    "x": {
+     "new": 1
+    }
+   },
+   "mention": false,
+   "desktop": "Sent a message",
+   "ios": "Sent a message"
+  }
+ ]
+}

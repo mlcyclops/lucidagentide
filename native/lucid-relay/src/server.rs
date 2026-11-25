@@ -4,14 +4,15 @@
 // (CONN_LIMITS: one past the cap is dropped unread) and a TLS handshake has its own deadline.
 
 use crate::codec::{js_number, now_ms, utf8_lossy};
-use crate::console::{ConsoleReply, ConsoleRequest, MARKER_HEADER};
+use crate::console::{Console, ConsoleReply, ConsoleRequest, ACTIVITY_HEADER, MARKER_HEADER};
+use std::path::{Path, PathBuf};
 use crate::license::SEAT_HEADER;
 use crate::log::{Fields, Logger};
-use crate::relay::{json_reply, refuse, Dialed, HostCheck, Reply, Request, State, BODY_BYTES};
+use crate::relay::{json_reply, refuse, Dialed, HostCheck, Reply, Request, State, BODY_BYTES, REGISTER_BODY_BYTES, REGISTER_PATH};
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
-use hyper::header::{AUTHORIZATION, CACHE_CONTROL, CONNECTION, CONTENT_LENGTH, CONTENT_TYPE, COOKIE, HOST, ORIGIN};
+use hyper::header::{AUTHORIZATION, CACHE_CONTROL, CONNECTION, CONTENT_LENGTH, CONTENT_TYPE, COOKIE, HOST, ORIGIN, USER_AGENT};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::Response;
@@ -19,7 +20,7 @@ use hyper_util::rt::{TokioIo, TokioTimer};
 use parking_lot::Mutex;
 use serde_json::json;
 use std::convert::Infallible;
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
@@ -28,7 +29,8 @@ use tokio_rustls::server::TlsStream;
 use tokio_rustls::TlsAcceptor;
 
 pub struct Relay {
-    pub state: Mutex<State>,
+    /// Shared with the console's Remote Spokes section (console_spokes.rs), which holds it weakly.
+    pub state: Arc<Mutex<State>>,
     pub logger: Arc<Logger>,
     pub hosts: HostCheck,
     pub tls: bool,
@@ -138,9 +140,33 @@ pub fn dialed_of(host_header: &str, tls: bool) -> Dialed {
 
 const X_FORWARDED_FOR: &str = "x-forwarded-for";
 
-/// The address a TLS front appended to X-Forwarded-For: the last entry (the ones before it are the caller's word).
-fn forwarded_ip(header: &str) -> Option<IpAddr> {
-    header.rsplit(',').next()?.trim().parse().ok()
+/// A route's place in the Remote Spokes license gate (AC-1 2.4, R42-1).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Gate {
+    /// Refused with 503 `license-inactive` while service is stopped.
+    Service,
+    /// Answers in every license state, so an admin can fix it.
+    Exempt,
+}
+
+/// The routes that keep answering while service is stopped: CRL reads and uploads (revocation), the console's request
+/// list for admin hubs, and the AC-2a channel's endorsement routes. `/healthz` and `/console/` are let through before
+/// the gate. Every other route, a route missing here included, is `service`.
+pub const EXEMPT_ROUTES: [(&str, &str); 6] = [
+    ("GET", "/v1/crl"),
+    ("POST", "/v1/crl"),
+    ("GET", "/v1/console/requests"),
+    ("GET", "/v1/console/where"),
+    ("GET", "/v1/console/fleet-bootstrap"),
+    ("POST", "/v1/console/fleet-endorse"),
+];
+
+pub fn license_gate_of(method: &str, path: &str) -> Gate {
+    if EXEMPT_ROUTES.iter().any(|(m, p)| *m == method && *p == path) {
+        Gate::Exempt
+    } else {
+        Gate::Service
+    }
 }
 
 fn to_response(r: Reply) -> Response<Full<Bytes>> {
@@ -186,7 +212,7 @@ async fn handle(relay: Arc<Relay>, req: hyper::Request<Incoming>, peer: SocketAd
     // The control panel (src/console.rs, ADR-A094) answers under /console/ when it is on, before the license gate: an
     // admin must see an expired license there. When it is off these paths are relay routes like any other.
     let console = if pathname == "/console" || pathname.starts_with("/console/") { relay.state.lock().console() } else { None };
-    if console.is_none() {
+    if console.is_none() && license_gate_of(&method, &pathname) == Gate::Service {
         let gate = relay.state.lock().license_gate(t, &where_);
         match gate {
             Err(_) => return internal_error(),
@@ -196,8 +222,12 @@ async fn handle(relay: Arc<Relay>, req: hyper::Request<Incoming>, peer: SocketAd
     }
     // The body limit holds while the body streams in (RS-RELAY-02): a declared length over it is refused unread, and
     // a chunked body is read frame by frame and cut at the limit, never buffered whole.
+    // A registration has its own, smaller limit (ID-1 contract 5.5): one certificate and its wrapper.
+    let cap = if pathname == REGISTER_PATH && method == "POST" { REGISTER_BODY_BYTES } else { BODY_BYTES };
     let declared = parts.headers.get(CONTENT_LENGTH).and_then(|v| v.to_str().ok()).map(js_number).unwrap_or(0.0);
-    let mut over = if declared > BODY_BYTES as f64 { declared as usize } else { 0 };
+    // The console's MDS3 upload takes up to 16 MiB (AC-1 3.5); the console checks each route's own limit after this.
+    let cap = if console.is_some() && pathname == "/console/api/settings/mds" { crate::console::MDS_BODY_MAX.max(BODY_BYTES) } else { cap };
+    let mut over = if declared > cap as f64 { declared as usize } else { 0 };
     let mut text = String::new();
     if over == 0 && method != "GET" {
         let mut body = body;
@@ -221,7 +251,7 @@ async fn handle(relay: Arc<Relay>, req: hyper::Request<Incoming>, peer: SocketAd
                 Some(Ok(frame)) => {
                     if let Ok(data) = frame.into_data() {
                         size += data.len();
-                        if size > BODY_BYTES {
+                        if size > cap {
                             over = size;
                             break;
                         }
@@ -235,7 +265,7 @@ async fn handle(relay: Arc<Relay>, req: hyper::Request<Incoming>, peer: SocketAd
         }
     }
     if over > 0 {
-        let f = where_.clone().with("bytes", over).with("capBytes", BODY_BYTES);
+        let f = where_.clone().with("bytes", over).with("capBytes", cap);
         let mut r = refuse(&relay.logger, 413, "too large", "request.too-large", &f);
         r.close = true; // the rest of a cut body is never read: the connection goes with it
         return to_response(r);
@@ -251,10 +281,11 @@ async fn handle(relay: Arc<Relay>, req: hyper::Request<Incoming>, peer: SocketAd
         let origin = header(ORIGIN);
         let marker = parts.headers.get(MARKER_HEADER).map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned());
         let content_type = header(CONTENT_TYPE).unwrap_or_default();
-        // The sign-in limit counts per caller: behind the TLS front (its public host set), the caller is the address
-        // the front appended to X-Forwarded-For, not the front itself.
-        let forwarded = if behind_tls { parts.headers.get_all(X_FORWARDED_FOR).iter().last().and_then(|v| v.to_str().ok()).and_then(forwarded_ip) } else { None };
-        let ip = forwarded.unwrap_or_else(|| peer.ip()).to_string();
+        // AC-1 3.1 (H5): the console reads the source itself. Behind a TLS front it reads X-Forwarded-For only from a
+        // peer in --console-trusted-fronts; every header value goes over, in order.
+        let forwarded: Vec<String> = parts.headers.get_all(X_FORWARDED_FOR).iter().map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned()).collect();
+        let activity = parts.headers.get(ACTIVITY_HEADER).is_some_and(|v| v.as_bytes() == b"1");
+        let user_agent = header(USER_AGENT).unwrap_or_default();
         let r = ConsoleRequest {
             method: &method,
             pathname: &pathname,
@@ -262,19 +293,22 @@ async fn handle(relay: Arc<Relay>, req: hyper::Request<Incoming>, peer: SocketAd
             cookie: &cookie,
             origin: origin.as_deref(),
             marker: marker.as_deref(),
+            activity,
             content_type: &content_type,
-            ip: &ip,
+            user_agent: &user_agent,
+            peer: peer.ip(),
+            forwarded: &forwarded,
             body: &text,
             dialed: &dialed,
             host_ok,
         };
-        return console_response(console.http(&r, t, || relay.state.lock().console_status(now_ms())));
+        return console_response(console.http(&r, t));
     }
     let authorization = header(AUTHORIZATION).unwrap_or_default();
     // F2 (ADR-A100): a hub's license seat; only a licensed relay reads it.
     let seat = parts.headers.get(SEAT_HEADER).map(|v| String::from_utf8_lossy(v.as_bytes()).into_owned());
     let request = Request { method: &method, pathname: &pathname, path: &path, authorization: &authorization, seat: seat.as_deref(), dialed: &dialed, body: &text, where_: &where_ };
-    let reply = relay.state.lock().serve(&request, t, host_ok);
+    let reply = relay.state.lock().serve_from(&request, Some(peer.ip()), t, host_ok);
     match reply {
         Ok(r) => to_response(r),
         Err(_) => internal_error(),
@@ -283,6 +317,12 @@ async fn handle(relay: Arc<Relay>, req: hyper::Request<Incoming>, peer: SocketAd
 
 /// TLS for the relay's own certificate and key (PEM).
 pub fn tls_acceptor(cert_pem: &str, key_pem: &str) -> Result<TlsAcceptor, String> {
+    Ok(TlsAcceptor::from(tls_config(cert_pem, key_pem)?))
+}
+
+/// The server configuration of the relay's own certificate and key (PEM), no client certificates: the main port's,
+/// and the API listener's on a spokes relay (API-1d 6.3).
+pub fn tls_config(cert_pem: &str, key_pem: &str) -> Result<Arc<rustls::ServerConfig>, String> {
     let certs = rustls_pemfile::certs(&mut cert_pem.as_bytes()).collect::<Result<Vec<_>, _>>().map_err(|e| format!("the TLS certificate does not read: {e}"))?;
     if certs.is_empty() {
         return Err("the TLS certificate does not read: no CERTIFICATE block".into());
@@ -297,7 +337,7 @@ pub fn tls_acceptor(cert_pem: &str, key_pem: &str) -> Result<TlsAcceptor, String
         .with_single_cert(certs, key)
         .map_err(|e| format!("the TLS certificate and key do not fit: {e}"))?;
     cfg.alpn_protocols = vec![b"http/1.1".to_vec()];
-    Ok(TlsAcceptor::from(Arc::new(cfg)))
+    Ok(Arc::new(cfg))
 }
 
 #[cfg(feature = "fips")]
@@ -343,6 +383,373 @@ pub async fn tls_within(acceptor: &TlsAcceptor, stream: TcpStream, limit: Durati
     tokio::time::timeout(limit, acceptor.accept(stream)).await.ok()?.ok()
 }
 
+// ── AC-2a: the Lucid Admin Console link of a relay (2.1, 2.2, 5.7) ──────────────────────────────────────────────
+
+/// 2.4: held by a running relay for its whole life, so the offline `fleet` commands refuse while it runs.
+pub const FLEET_LOCK: &str = "fleet.lock";
+/// 13.4 `cli.fleet-running`.
+pub const CLI_FLEET_RUNNING: &str = "Stop the relay first, or use its Admin Console.";
+/// 13.4 `cli.with-console-both`.
+pub const CLI_WITH_CONSOLE_BOTH: &str = "A relay that runs the console role does not also run its own console: drop --console or console_port.";
+/// 13.4 `cli.with-console-high`.
+pub const CLI_WITH_CONSOLE_HIGH: &str = "Under the High profile the console and the relay must run as two services with separate accounts. Drop --with-console or with_console.";
+
+/// An exclusive advisory lock on `fleet.lock`; the operating system lets it go when the process ends.
+pub struct FleetLock {
+    _file: std::fs::File,
+}
+
+#[cfg(unix)]
+mod flock {
+    use std::os::raw::c_int;
+    extern "C" {
+        pub fn flock(fd: c_int, operation: c_int) -> c_int;
+    }
+    pub const LOCK_EX: c_int = 2;
+    pub const LOCK_NB: c_int = 4;
+}
+
+/// Take `fleet.lock` in `dir` (creating the folder), or say why not: CLI_FLEET_RUNNING while another process holds it.
+pub fn fleet_lock(dir: &Path) -> Result<FleetLock, String> {
+    let _ = crate::store::make_dir(dir);
+    let path = dir.join(FLEET_LOCK);
+    let mut o = std::fs::OpenOptions::new();
+    o.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        o.mode(0o600);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        // No sharing: a second open, by any process, fails while this handle lives.
+        o.share_mode(0);
+    }
+    let file = match o.open(&path) {
+        Ok(f) => f,
+        Err(e) if e.raw_os_error() == Some(32) || e.raw_os_error() == Some(33) => return Err(CLI_FLEET_RUNNING.into()),
+        Err(e) => return Err(format!("cannot open {}: {e}", path.display())),
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        // SAFETY: flock on a file descriptor this function owns; no memory is shared with the call.
+        let r = unsafe { flock::flock(file.as_raw_fd(), flock::LOCK_EX | flock::LOCK_NB) };
+        if r != 0 {
+            return Err(CLI_FLEET_RUNNING.into());
+        }
+    }
+    Ok(FleetLock { _file: file })
+}
+
+/// 2.2 start checks, before anything is opened: `with_console` (the console role in this process) is refused under
+/// High; under High the state folder must be open only to this service's account and the administrators (F18).
+pub fn high_start_checks(state_dir: Option<&Path>, high: bool, with_console: bool) -> Result<(), String> {
+    if !high {
+        return Ok(());
+    }
+    if with_console {
+        return Err(CLI_WITH_CONSOLE_HIGH.into());
+    }
+    match state_dir {
+        Some(dir) => crate::console_seal::check_state_acl(dir, crate::console_seal::SealIdentity::Relay),
+        None => Ok(()),
+    }
+}
+
+// ── AC-2b-D 6.4: the profile lock, then the apply before the listeners (both products) ──────────────────────
+
+/// 2.4, 6.4: the root-owned lock a High install writes (one line `high`; only `uninstall --purge` removes it).
+pub const MEET_PROFILE_LOCK: &str = "/etc/lucid-meet/profile.lock";
+pub const SPOKES_PROFILE_LOCK: &str = "/etc/lucid-relay/profile.lock";
+/// 6.4: the exit status the units' `RestartPreventExitStatus=78` (Docker: the entrypoint wrapper) stops on.
+pub const EXIT_CONFIG: i32 = 78;
+/// 2.4, 6.4 (R4-L5): the relay's own record `{at, configured}` of its last refusal under `profile.lock` (0600; never
+/// in `fleet-local.json`); deleted when the attention item is dismissed.
+pub const PROFILE_LOCK_REFUSED_FILE: &str = "profile-lock-refused.json";
+/// A start refused before any port opens: the words for stderr and the exit status.
+#[derive(Debug, PartialEq, Eq)]
+pub struct StartRefused {
+    pub status: i32,
+    pub words: String,
+}
+
+impl StartRefused {
+    /// Refused for its configuration (6.4): exit 78, so the unit does not restart it.
+    pub fn config(words: impl Into<String>) -> StartRefused {
+        StartRefused { status: EXIT_CONFIG, words: words.into() }
+    }
+
+    pub fn exit(self) -> ! {
+        eprintln!("{}", self.words);
+        std::process::exit(self.status)
+    }
+}
+
+/// 6.4 (R3-M2): whether `profile.lock` is present. Only "not found" is absent: anything at the path, followed or not,
+/// whoever owns it, whatever it holds and whoever may write it, counts as present (a lock that is not a root-owned
+/// regular file writable by no one else holding `high` still locks).
+pub fn profile_lock_present(lock: &Path) -> bool {
+    match std::fs::symlink_metadata(lock) {
+        Ok(_) => true,
+        Err(e) => e.kind() != std::io::ErrorKind::NotFound,
+    }
+}
+
+/// 6.4 (R3-M2, D15), first at every start: while `profile.lock` is present the relay runs only as High. `configured`
+/// is `console_profile` (Meeting Hub) or `--console-profile` (Remote Spokes), None when missing. Anything but `high`
+/// is refused: `fleet.profile-locked` `{configured: "standard" or "missing"}` in the relay's own audit chain and its
+/// security log (error), the refusal in `<state>/profile-lock-refused.json`, and `cli.profile-locked` with exit 78.
+/// Ok(true) when the lock is present and the configuration says high: the relay's console then treats `government`
+/// as true (`console_settings::set_profile_locked`, before any console opens). `t` in ms.
+pub fn profile_lock_start(lock: &Path, configured: Option<&str>, state_dir: Option<&Path>, logger: &Logger, t: i64) -> Result<bool, StartRefused> {
+    if !profile_lock_present(lock) {
+        return Ok(false);
+    }
+    let configured = match configured.map(str::trim).filter(|c| !c.is_empty()) {
+        Some("high") => {
+            crate::console_settings::set_profile_locked(true);
+            return Ok(true);
+        }
+        Some("standard") => "standard",
+        _ => "missing",
+    };
+    logger.security("fleet.profile-locked", &Fields::new().with("configured", configured), crate::log::Level::Error);
+    if let Some(dir) = state_dir {
+        let (mut audit, _) = crate::console_audit::Audit::open(dir, t);
+        let mut r = crate::console_audit::Record::new("relay", "fleet.profile-locked", "refused");
+        r.detail = json!({ "configured": configured });
+        if let Err(e) = audit.append(t, &r) {
+            logger.ops("audit.append-failed", &Fields::new().with("why", e), crate::log::Level::Error);
+        }
+        let record = json!({ "at": t, "configured": configured }).to_string();
+        if let Err(e) = crate::store::write_private(&dir.join(PROFILE_LOCK_REFUSED_FILE), record.as_bytes()) {
+            logger.ops("fleet.profile-locked", &Fields::new().with("why", e.to_string()), crate::log::Level::Error);
+        }
+    }
+    Err(StartRefused::config(crate::fleet_wire::cli_words("cli.profile-locked").replace("<lock path>", &lock.display().to_string()).replace("<configured>", configured)))
+}
+
+/// 6.4: the attention item `profile-lock-refused` (`{date (ms), configured}`), raised at every start that passes after
+/// a refusal until a relay admin or the operator dismisses it; None without a refusal on record.
+pub fn profile_lock_attention(state_dir: &Path) -> Option<serde_json::Value> {
+    let v: serde_json::Value = serde_json::from_slice(&std::fs::read(state_dir.join(PROFILE_LOCK_REFUSED_FILE)).ok()?).ok()?;
+    let at = v.get("at").and_then(serde_json::Value::as_i64)?;
+    let configured = v.get("configured").and_then(serde_json::Value::as_str).filter(|c| matches!(*c, "standard" | "missing"))?;
+    Some(json!({ "kind": "profile-lock-refused", "severity": "bad", "args": { "date": at, "configured": configured }, "go": "#/overview" }))
+}
+
+/// 6.4: dismissing `profile-lock-refused` deletes the record; false when there was none.
+pub fn dismiss_profile_lock_refused(state_dir: &Path) -> bool {
+    std::fs::remove_file(state_dir.join(PROFILE_LOCK_REFUSED_FILE)).is_ok()
+}
+
+/// `fleet.lock` taken by the start before the apply (6.4), handed to `fleet_open` for the process's life.
+static START_LOCK: std::sync::Mutex<Option<(PathBuf, FleetLock)>> = std::sync::Mutex::new(None);
+
+/// 6.4: take `fleet.lock` in `dir` now and keep it for `fleet_open`; already held for `dir` is fine.
+pub fn hold_fleet_lock(dir: &Path) -> Result<(), String> {
+    let mut held = START_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    if held.as_ref().is_some_and(|(d, _)| d == dir) {
+        return Ok(());
+    }
+    *held = Some((dir.to_path_buf(), fleet_lock(dir)?));
+    Ok(())
+}
+
+/// The lock `hold_fleet_lock` took for `dir`, else a new one.
+fn take_fleet_lock(dir: &Path) -> Result<FleetLock, String> {
+    let taken = {
+        let mut held = START_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        match held.take() {
+            Some((d, lock)) if d == dir => Some(lock),
+            other => {
+                *held = other;
+                None
+            }
+        }
+    };
+    match taken {
+        Some(lock) => Ok(lock),
+        None => fleet_lock(dir),
+    }
+}
+
+/// What the start applies before its listeners (6.4).
+pub struct BeforeListeners<'a> {
+    pub product: crate::license::Product,
+    pub state_dir: &'a Path,
+    pub logger: Arc<Logger>,
+    pub proxy: Option<String>,
+    pub local: crate::fleet_agent::LocalDeploy,
+}
+
+/// 6.4: `fleet.lock` (kept for `fleet_open`), then a waiting handoff applied before the relay reads its TLS files,
+/// `client_ca`, CRL, `--root` or license, under its own identity (AC-2a decision 5). The apply re-checks the local
+/// rules and has 60 s; a failed apply is logged by it (`fleet.enroll-failed`) and the start goes on. A headless
+/// console carries the apply and is closed before the relay opens its own. True when a handoff was applied.
+pub fn apply_before_listeners(b: BeforeListeners) -> Result<bool, String> {
+    hold_fleet_lock(b.state_dir)?;
+    if !crate::fleet_agent::has_handoff(b.state_dir) {
+        return Ok(false);
+    }
+    // 7.3 freshness before the headless console seals and writes its audit log into the same folder
+    let fresh = crate::fleet_agent::is_fresh(b.state_dir);
+    let console = crate::console::open_headless(b.product, b.state_dir, b.logger.clone())?;
+    let applied = crate::fleet_agent::apply_before_listeners(&console, b.product, b.state_dir, &b.logger, b.proxy.as_deref(), &b.local, fresh);
+    drop(console);
+    Ok(applied.unwrap_or(false))
+}
+
+/// What Remote Spokes gives `spokes_start` (main.rs, from its flags and environment as given).
+pub struct SpokesStart<'a> {
+    /// `--state` or LUCID_RELAY_STATE.
+    pub state_dir: Option<&'a Path>,
+    /// `--console-profile` or LUCID_RELAY_CONSOLE_PROFILE.
+    pub profile: Option<&'a str>,
+    /// `--root` or LUCID_RELAY_ROOT_PUB: a file or the PEM itself.
+    pub root: Option<&'a str>,
+    /// `--license` or LUCID_RELAY_LICENSE: a file or the armored text.
+    pub license: Option<&'a str>,
+    pub logger: Arc<Logger>,
+    /// SPOKES_PROFILE_LOCK (tests give another path).
+    pub lock_path: &'a Path,
+}
+
+/// 6.4 for Remote Spokes, before main.rs reads `--root`, the TLS files or the license: the profile lock first; then
+/// `fleet.lock` and a waiting handoff applied; then a `--root` that names a file must exist (else exit 78,
+/// `cli.deploy-no-root`). Ok(true) when the host holds `profile.lock` (the relay is High whatever else says).
+pub fn spokes_start(s: SpokesStart) -> Result<bool, StartRefused> {
+    let locked = profile_lock_start(s.lock_path, s.profile, s.state_dir, &s.logger, now_ms())?;
+    let high = locked || s.profile.map(str::trim) == Some("high");
+    let armored = |v: &str| v.trim_start().starts_with("-----BEGIN");
+    let root_path = s.root.filter(|r| !r.trim().is_empty() && !armored(*r)).map(PathBuf::from);
+    if let Some(dir) = s.state_dir {
+        let license_path = s.license.filter(|l| !l.trim().is_empty() && !armored(*l)).map(PathBuf::from).unwrap_or_else(|| dir.join(crate::relay::DEFAULT_LICENSE_FILE));
+        let license_in_force = s.license.is_some_and(armored) || std::fs::metadata(&license_path).is_ok_and(|m| m.len() > 0);
+        let local = crate::fleet_agent::LocalDeploy { high, fleet_pki: false, client_ca: None, root_path: root_path.clone(), license_path: Some(license_path), license_in_force, admins: Vec::new() };
+        let proxy = std::env::var("LUCID_RELAY_FLEET_PROXY").ok().filter(|p| !p.is_empty());
+        apply_before_listeners(BeforeListeners { product: crate::license::Product::Spokes, state_dir: dir, logger: s.logger.clone(), proxy, local }).map_err(|words| StartRefused { status: 1, words })?;
+    }
+    if root_path.as_ref().is_some_and(|p| !p.exists()) {
+        return Err(StartRefused::config(crate::fleet_wire::cli_words("cli.deploy-no-root")));
+    }
+    Ok(locked)
+}
+
+/// What `fleet_start` needs (main.rs, Remote Spokes).
+pub struct FleetStart {
+    pub state_dir: Option<PathBuf>,
+    /// The relay's own console when `--console 1`.
+    pub console: Option<Arc<Console>>,
+    pub relay: Arc<Relay>,
+    pub logger: Arc<Logger>,
+    /// API-1d 6.3: `--api-listen` or LUCID_RELAY_API_LISTEN, and the relay's own TLS certificate and key (PEM) the
+    /// listener serves with.
+    pub api_listen: Option<String>,
+    pub tls: Option<(String, String)>,
+}
+
+/// The running link: keep it for the process's life (it holds `fleet.lock`, the agent and the headless console).
+pub struct Fleet {
+    _lock: FleetLock,
+    _agent: Option<Arc<crate::fleet_agent::Agent>>,
+    _headless: Option<Arc<Console>>,
+}
+
+/// What a relay of either product opens for the Lucid Admin Console at start (2.1, 5.7, invariant 22): `fleet.lock`
+/// always (with a state folder); then, when enrolled (fleet.json) or holding a handoff, the headless console (unless
+/// its own console is on) and the agent; with only its own console on, the agent for an in-process Join. With none of
+/// these nothing else is opened, written or dialed. `attach` gives the headless console its product section.
+pub struct FleetOpen<'a> {
+    pub product: crate::license::Product,
+    pub state_dir: &'a Path,
+    pub console: Option<Arc<Console>>,
+    pub logger: Arc<Logger>,
+    pub proxy: Option<String>,
+    pub attach: &'a dyn Fn(&Arc<Console>),
+}
+
+/// The pieces `fleet_open` started, and the closures the main ports read (`where`, requests).
+pub struct FleetOpened {
+    pub lock: FleetLock,
+    pub agent: Option<Arc<crate::fleet_agent::Agent>>,
+    pub headless: Option<Arc<Console>>,
+}
+
+pub fn fleet_open(o: FleetOpen) -> Result<FleetOpened, String> {
+    // 6.4: the lock the start took before its apply, else a new one
+    let lock = take_fleet_lock(o.state_dir)?;
+    let link = crate::fleet_agent::read_link(o.state_dir, &o.logger);
+    let handoff = crate::fleet_agent::has_handoff(o.state_dir);
+    if link.is_none() && !handoff && o.console.is_none() {
+        return Ok(FleetOpened { lock, agent: None, headless: None });
+    }
+    let headless = match &o.console {
+        Some(_) => None,
+        None => {
+            let c = crate::console::open_headless(o.product, o.state_dir, o.logger.clone())?;
+            (o.attach)(&c);
+            Some(c)
+        }
+    };
+    let console = o.console.clone().or_else(|| headless.clone()).ok_or("no console for the fleet agent")?;
+    let cfg = crate::fleet_agent::AgentConfig {
+        product: o.product,
+        state_dir: o.state_dir.to_path_buf(),
+        link,
+        console,
+        logger: o.logger.clone(),
+        proxy: o.proxy,
+        version: env!("CARGO_PKG_VERSION").to_owned(),
+    };
+    let agent = crate::fleet_agent::start(cfg)?;
+    Ok(FleetOpened { lock, agent: Some(agent), headless })
+}
+
+/// Remote Spokes (main.rs, right after attaching the console's section): `fleet_open`, then the relay's main ports
+/// learn the link (`/v1/console/where`, `/v1/console/requests`, the 3.9 endorsement routes). None without `--state`.
+pub fn fleet_start(cfg: FleetStart) -> Result<Option<Fleet>, String> {
+    let Some(dir) = cfg.state_dir.clone() else { return Ok(None) };
+    // API-1d 2.4, 5.3, 6.3: the spokes relay's API side, registered before the agent dials (its first `api-orgs`)
+    let tls = cfg.tls.as_ref().map(|(cert, key)| tls_config(cert, key)).transpose()?;
+    let api = crate::spokes_api::start(crate::spokes_api::Start { dir: &dir, state: &cfg.relay.state, logger: cfg.logger.clone(), api_listen: cfg.api_listen.as_deref(), tls })?;
+    let weak = Arc::downgrade(&cfg.relay.state);
+    let attach = move |c: &Arc<Console>| c.attach(crate::console_spokes::section(weak.clone()));
+    let opened = fleet_open(FleetOpen {
+        product: crate::license::Product::Spokes,
+        state_dir: &dir,
+        console: cfg.console.clone(),
+        logger: cfg.logger.clone(),
+        proxy: std::env::var("LUCID_RELAY_FLEET_PROXY").ok().filter(|p| !p.is_empty()),
+        attach: &attach,
+    })?;
+    // API-1 9.1: the relay's chains seal their keys in the console book of the link
+    if let Some(book) = cfg.console.clone().or_else(|| opened.headless.clone()) {
+        api.set_vault(book);
+    }
+    if let Some(agent) = &opened.agent {
+        let book = cfg.console.clone().or_else(|| opened.headless.clone()).ok_or("no console for the fleet link")?;
+        cfg.relay.state.lock().set_fleet(fleet_link(agent.clone(), book, &dir));
+    }
+    // 9.1: the product values of the metrics snapshot.
+    let weak = Arc::downgrade(&cfg.relay.state);
+    crate::fleet_probe::set_product_source(Box::new(move |t| weak.upgrade().map(|s| s.lock().fleet_metrics(t)).unwrap_or_default()));
+    Ok(Some(Fleet { _lock: opened.lock, _agent: opened.agent, _headless: opened.headless }))
+}
+
+/// The main ports' view of the link: the console origin while linked, the book, the roster's active admins.
+pub fn fleet_link(agent: Arc<crate::fleet_agent::Agent>, book: Arc<Console>, dir: &Path) -> crate::relay::FleetLink {
+    let roster_dir = dir.to_path_buf();
+    crate::relay::FleetLink {
+        managed_by: Box::new(move || agent.managed_by()),
+        book,
+        admins: Box::new(move || crate::fleet_trust::active_admin_emails(&roster_dir)),
+        state_dir: dir.to_path_buf(),
+    }
+}
+
 /// Accept connections until the process stops.
 pub async fn run(listener: TcpListener, relay: Arc<Relay>, acceptor: Option<TlsAcceptor>, limits: ConnLimits) {
     let slots = Arc::new(Semaphore::new(limits.connections));
@@ -363,6 +770,8 @@ pub async fn run(listener: TcpListener, relay: Arc<Relay>, acceptor: Option<TlsA
         let acceptor = acceptor.clone();
         tokio::spawn(async move {
             let _permit = permit;
+            // AC-2a 9.1 `conn_open`: counted while the connection lives.
+            let _open = crate::fleet_probe::counters().conn_open();
             let svc = service_fn(move |req| {
                 let relay = relay.clone();
                 async move { Ok::<_, Infallible>(handle(relay, req, peer, limits.body).await) }
@@ -386,6 +795,94 @@ pub async fn run(listener: TcpListener, relay: Arc<Relay>, acceptor: Option<TlsA
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_license_gate_table_names_every_exempt_route_and_refuses_the_rest() {
+        for (m, p) in EXEMPT_ROUTES {
+            assert_eq!(license_gate_of(m, p), Gate::Exempt, "{m} {p}");
+        }
+        for (m, p) in [("POST", "/v1/send"), ("GET", "/v1/inbox"), ("POST", "/v1/ack"), ("GET", "/v1/directory"), ("POST", "/v1/directory"), ("GET", "/v1/presence"), ("GET", "/v1/license"), ("POST", "/v1/logs"), ("POST", "/v1/console/invite"), ("GET", "/v1/not-a-route"), ("DELETE", "/v1/crl")] {
+            assert_eq!(license_gate_of(m, p), Gate::Service, "{m} {p}");
+        }
+    }
+
+    fn fleet_dir(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("lucid-server-fleet-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// AC-2a 16.1 f-relay: a running relay holds `fleet.lock`, so the offline commands (which take it) refuse with
+    /// `cli.fleet-running`; once it stops they run.
+    #[test]
+    fn ac2a_fleet_lock_makes_the_offline_commands_refuse_while_running() {
+        let dir = fleet_dir("lock");
+        let running = fleet_lock(&dir).unwrap();
+        assert_eq!(fleet_lock(&dir).err().as_deref(), Some(CLI_FLEET_RUNNING));
+        drop(running);
+        assert!(fleet_lock(&dir).is_ok());
+    }
+
+    /// AC-2a 16.1 f-relay (invariant 22): a relay that is not enrolled, holds no handoff and runs no console of its
+    /// own starts no agent (no listener, no connection) and writes only `fleet.lock`.
+    #[test]
+    fn ac2a_an_unenrolled_relay_writes_only_fleet_lock() {
+        let dir = fleet_dir("unenrolled");
+        let logger = Arc::new(Logger::capture("relay", Box::new(|_, _| {})));
+        let attached = std::sync::atomic::AtomicBool::new(false);
+        let attach = |_: &Arc<Console>| attached.store(true, std::sync::atomic::Ordering::SeqCst);
+        let opened = fleet_open(FleetOpen { product: crate::license::Product::Spokes, state_dir: &dir, console: None, logger, proxy: None, attach: &attach }).unwrap();
+        assert!(opened.agent.is_none() && opened.headless.is_none());
+        assert!(!attached.load(std::sync::atomic::Ordering::SeqCst));
+        let names: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(names, vec![FLEET_LOCK.to_string()]);
+    }
+
+    /// AC-2b-D 6.4 (16.1 d-relay), Remote Spokes: the profile lock first (a standard or missing profile exits 78 and
+    /// is recorded), then the apply under `fleet.lock`, then a `--root` file that does not exist exits 78.
+    #[test]
+    fn ac2b_spokes_start_order_and_exit_78() {
+        let logger = Arc::new(Logger::capture("relay", Box::new(|_, _| {})));
+        let d = fleet_dir("spokes-start");
+        let absent = d.join("absent.lock");
+        let root = d.join("root.pub");
+        let root_text = root.to_string_lossy().into_owned();
+        let start = |state: Option<&Path>, profile: Option<&str>, root: Option<&str>, lock: &Path| spokes_start(SpokesStart { state_dir: state, profile, root, license: None, logger: logger.clone(), lock_path: lock });
+        assert_eq!(start(None, None, Some(&root_text), &absent), Err(StartRefused::config(crate::fleet_wire::cli_words("cli.deploy-no-root"))));
+        assert_eq!(start(None, None, Some("-----BEGIN PUBLIC KEY-----\nAA==\n-----END PUBLIC KEY-----\n"), &absent), Ok(false));
+        std::fs::write(&root, "root").unwrap();
+        assert_eq!(start(Some(&d), Some("standard"), Some(&root_text), &absent), Ok(false));
+        assert!(d.join(FLEET_LOCK).exists(), "fleet.lock is taken before the apply");
+        let lock = d.join("profile.lock");
+        std::fs::write(&lock, "high\n").unwrap();
+        let refused = start(Some(&d), None, Some(&root_text), &lock).unwrap_err();
+        assert_eq!(refused.status, EXIT_CONFIG);
+        assert!(refused.words.contains("says missing") && refused.words.contains(&lock.display().to_string()));
+        assert_eq!(profile_lock_attention(&d).unwrap()["args"]["configured"], "missing");
+        assert!(dismiss_profile_lock_refused(&d) && profile_lock_attention(&d).is_none());
+    }
+
+    /// AC-2b-D 6.4: the lock the start took is the one `fleet_open` keeps; without one it takes its own.
+    #[test]
+    fn ac2b_fleet_open_takes_the_start_lock() {
+        let d = fleet_dir("start-lock");
+        hold_fleet_lock(&d).unwrap();
+        assert!(hold_fleet_lock(&d).is_ok(), "held already for this folder");
+        let logger = Arc::new(Logger::capture("relay", Box::new(|_, _| {})));
+        let attach = |_: &Arc<Console>| {};
+        let opened = fleet_open(FleetOpen { product: crate::license::Product::Spokes, state_dir: &d, console: None, logger, proxy: None, attach: &attach }).unwrap();
+        assert_eq!(fleet_lock(&d).err().as_deref(), Some(CLI_FLEET_RUNNING));
+        drop(opened);
+        assert!(fleet_lock(&d).is_ok());
+    }
+
+    /// AC-2a 2.2: under High a relay never runs the console role in process.
+    #[test]
+    fn ac2a_high_refuses_with_console() {
+        assert_eq!(high_start_checks(None, true, true).err().as_deref(), Some(CLI_WITH_CONSOLE_HIGH));
+        assert!(high_start_checks(None, false, true).is_ok());
+    }
 
     #[test]
     fn hosts_normalize_as_whatwg_urls_do() {
@@ -415,10 +912,7 @@ mod tests {
         let bare = HostCheck { names: None, port: 8080, public: None };
         assert!(bare.accepts(&dialed_of("127.0.0.1:8080", false)));
         assert!(!bare.accepts(&dialed_of("relay.example.com", false)));
-        // The caller is the address the front appended last.
-        assert_eq!(forwarded_ip("203.0.113.9, 198.51.100.4"), Some("198.51.100.4".parse().unwrap()));
-        assert_eq!(forwarded_ip(" 2001:db8::1 "), Some("2001:db8::1".parse().unwrap()));
-        assert_eq!(forwarded_ip("198.51.100.4, junk"), None);
+        // The console's source behind a front: console_source.rs (AC-1 3.1).
     }
 
     #[test]
@@ -428,7 +922,7 @@ mod tests {
     }
 
     use crate::log::Logger;
-    use crate::relay::{Options, SENDER_BYTES, STORE_BYTES};
+    use crate::relay::{Options, CERT_STORE_BYTES, SENDER_BYTES, STORE_BYTES};
     use std::time::Instant;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -446,10 +940,14 @@ mod tests {
             users_file: None,
             store_bytes: STORE_BYTES,
             sender_bytes: SENDER_BYTES,
+            cert_store_bytes: CERT_STORE_BYTES,
+            cert_dir: None,
             console: None,
+            state_dir: None,
+            license_file: None,
         };
         let state = State::new(opts, logger.clone()).unwrap();
-        Arc::new(Relay { state: Mutex::new(state), logger, hosts: HostCheck { names: None, port: 0, public: None }, tls: false })
+        Arc::new(Relay { state: Arc::new(Mutex::new(state)), logger, hosts: HostCheck { names: None, port: 0, public: None }, tls: false })
     }
 
     async fn listen(acceptor: Option<TlsAcceptor>, limits: ConnLimits) -> u16 {
@@ -499,8 +997,8 @@ mod tests {
         let limits = ConnLimits { connections: 8, handshake: Duration::from_secs(10), body: Duration::from_millis(300) };
         let port = listen(None, limits).await;
         let mut c = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
-        // Ten bytes of the hundred it declares, then nothing.
-        c.write_all(b"POST /v1/send HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 100\r\n\r\n{\"v\":1,\"x\"").await.unwrap();
+        // Ten bytes of the hundred it declares, then nothing (a CRL upload: the unlicensed test relay still reads it).
+        c.write_all(b"POST /v1/crl HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 100\r\n\r\n{\"v\":1,\"x\"").await.unwrap();
         let started = Instant::now();
         let mut answer = Vec::new();
         let read = tokio::time::timeout(Duration::from_secs(5), c.read_to_end(&mut answer)).await;

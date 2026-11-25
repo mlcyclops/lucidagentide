@@ -1,0 +1,1135 @@
+{
+ "version": 1,
+ "contract": "AC-2a revision 3.4",
+ "encoding": "lp(...) writes each part as its byte length (4 bytes, big-endian) then its bytes. Inside lp: text (labels, ids such as c_, r_, en_, ap_ and sr_ ids, actions, targets, emails, roles) as UTF-8; integers (seq, generation, requestedAt) as decimal ASCII; hashes (previewHash, a previous rosterHash or policyHash, the first being 32 zero bytes) as their raw 32 bytes; credentialId, cose, attestationObject, clientDataJSON, spki and serials as raw bytes. canonical_json is AC-1 3.6's (CE-1 with null). In JSON: hashes and fingerprints are lowercase hex; keys, certificates, MACs, nonces and signatures are base64url without padding; serials are lowercase hex; times are milliseconds. Every ECDSA signature is the ASN.1 DER ECDSA-Sig-Value.",
+ "about": "4.6: challenge = SHA-256(lp(label, consoleId, action, target, canonical_json(params), canonical_json(targets))), targets [{relay, nonce}] sorted by relay id, nonce base64url of the relay's 32 random bytes; params the body without stepup. 4.7: request challenge = SHA-256(lp(label, consoleId, approvalId, action, target, canonical_json(params), canonical_json(relayIds sorted), requestedAt)); the approver's challenge is a 4.6 challenge with action approvals.approve and target the approval id. 4.4 and 4.5: hash(seq) = SHA-256(lp(label, consoleId, seq, hash(seq - 1), canonical_json(change or policy))), hash(0) 32 zero bytes; endorsement challenge SHA-256(lp(endorse label, consoleId, seq, hash(seq))). 4.1: scope request hash.",
+ "console_id": "c_0123456789abcdef",
+ "rp_id": "console.acme.example",
+ "origin": "https://console.acme.example",
+ "nonces": {
+  "r_c2a7f05e19d83b64": "FcsVpeuhGuGhmmxYO04cS9AyRDc17m8-eATAbLQoobc",
+  "r_3f0a9c2b7d5e1f48": "QLMvqoKfSUesdoerLwutNpb2HXOsOlsjjQpus2Btep0"
+ },
+ "stepup": {
+  "label": "lucid-fleet-stepup-v1",
+  "base": {
+   "action": "spokes.block",
+   "target": "n_0123456789abcdef0123456789abcdef",
+   "params": {
+    "node": "n_0123456789abcdef0123456789abcdef",
+    "hours": 2,
+    "reason": "Sending junk"
+   },
+   "targets": [
+    {
+     "relay": "r_c2a7f05e19d83b64",
+     "nonce": "FcsVpeuhGuGhmmxYO04cS9AyRDc17m8-eATAbLQoobc"
+    },
+    {
+     "relay": "r_3f0a9c2b7d5e1f48",
+     "nonce": "QLMvqoKfSUesdoerLwutNpb2HXOsOlsjjQpus2Btep0"
+    }
+   ],
+   "params_canonical": "{\"hours\":2,\"node\":\"n_0123456789abcdef0123456789abcdef\",\"reason\":\"Sending junk\"}",
+   "targets_canonical": "[{\"nonce\":\"QLMvqoKfSUesdoerLwutNpb2HXOsOlsjjQpus2Btep0\",\"relay\":\"r_3f0a9c2b7d5e1f48\"},{\"nonce\":\"FcsVpeuhGuGhmmxYO04cS9AyRDc17m8-eATAbLQoobc\",\"relay\":\"r_c2a7f05e19d83b64\"}]",
+   "preimage_hex": "000000156c756369642d666c6565742d7374657075702d763100000012635f303132333435363738396162636465660000000c73706f6b65732e626c6f636b000000226e5f30313233343536373839616263646566303132333435363738396162636465660000004f7b22686f757273223a322c226e6f6465223a226e5f3031323334353637383961626364656630313233343536373839616263646566222c22726561736f6e223a2253656e64696e67206a756e6b227d000000ab5b7b226e6f6e6365223a22514c4d76716f4b6653556573646f65724c7775744e70623248584f734f6c736a6a51707573324274657030222c2272656c6179223a22725f33663061396332623764356531663438227d2c7b226e6f6e6365223a224663735670657568477547686d6d78594f3034635339417952446331376d382d65415441624c516f6f6263222c2272656c6179223a22725f63326137663035653139643833623634227d5d",
+   "challenge_hex": "4c1288cc84e3a84eca7d3cfe87fc17436e5cc86b04607951663f38701c547527",
+   "challenge_b64url": "TBKIzITjqE7KfTz-h_wXQ25cyGsEYHlRZj84cBxUdSc"
+  },
+  "changed": [
+   {
+    "field": "label",
+    "value": "lucid-fleet-stepup-v0",
+    "challenge_hex": "f1ee384693f225855713d2a225eb639a02e953bab63a67b98ae5755aa5970b55"
+   },
+   {
+    "field": "consoleId",
+    "value": "c_0123456789abcdeg",
+    "challenge_hex": "171eb25b73de772ccae58a847428d483676af80fb02ad346e6e99149eb7b2988"
+   },
+   {
+    "field": "action",
+    "value": "spokes.blocj",
+    "challenge_hex": "ba66a2d4d319f42c4ed68ec19d73d50c091bfb80b635a5720b8d5621d7189f78"
+   },
+   {
+    "field": "target",
+    "value": "n_0123456789abcdef0123456789abcdeg",
+    "challenge_hex": "318cc0b0b10dbb04ab3af6e7aba09d7e5439c5a87343fc6caf8a4f6e3cc50694"
+   },
+   {
+    "field": "params",
+    "value": {
+     "node": "n_0123456789abcdef0123456789abcdef",
+     "hours": 2,
+     "reason": "Sending junj"
+    },
+    "challenge_hex": "3587a00801459e2230c735b303466bb0f3bb75dad6452716db12fb46b19cfc43"
+   },
+   {
+    "field": "nonce",
+    "value": [
+     {
+      "relay": "r_c2a7f05e19d83b64",
+      "nonce": "FcsVpeuhGuGhmmxYO04cS9AyRDc17m8-eATAbLQoobc"
+     },
+     {
+      "relay": "r_3f0a9c2b7d5e1f48",
+      "nonce": "QLMvqoKfSUesdoerLwutNpb2HXOsOlsjjQpus2Btepw"
+     }
+    ],
+    "challenge_hex": "134386907cd8972e751d445ac7e0242866e5399e97f633002082366887b142b7"
+   },
+   {
+    "field": "relay",
+    "value": [
+     {
+      "relay": "r_c2a7f05e19d83b65",
+      "nonce": "FcsVpeuhGuGhmmxYO04cS9AyRDc17m8-eATAbLQoobc"
+     },
+     {
+      "relay": "r_3f0a9c2b7d5e1f48",
+      "nonce": "QLMvqoKfSUesdoerLwutNpb2HXOsOlsjjQpus2Btep0"
+     }
+    ],
+    "challenge_hex": "86cd05e267c224ec1c95120d3b2b35b0bed4b464c1214a2683cb6651e33c82bf"
+   }
+  ],
+  "reordered": {
+   "targets": [
+    {
+     "relay": "r_c2a7f05e19d83b64",
+     "nonce": "FcsVpeuhGuGhmmxYO04cS9AyRDc17m8-eATAbLQoobc"
+    },
+    {
+     "relay": "r_3f0a9c2b7d5e1f48",
+     "nonce": "QLMvqoKfSUesdoerLwutNpb2HXOsOlsjjQpus2Btep0"
+    }
+   ],
+   "about": "targets as received in another order: the relay sorts by relay id before hashing, so the challenge is the base one; hashing the unsorted list gives another value",
+   "challenge_hex": "4c1288cc84e3a84eca7d3cfe87fc17436e5cc86b04607951663f38701c547527",
+   "unsorted_challenge_hex": "2f997b2c02efdb84e7fffbd87b517e1aeb6ab73cfeb8c2e29b331a331982fa75"
+  }
+ },
+ "request": {
+  "label": "lucid-fleet-request-v1",
+  "base": {
+   "approvalId": "ap_0123456789abcdef",
+   "action": "spokes.block",
+   "target": "n_0123456789abcdef0123456789abcdef",
+   "params": {
+    "node": "n_0123456789abcdef0123456789abcdef",
+    "hours": 2,
+    "reason": "Sending junk"
+   },
+   "relayIds": [
+    "r_c2a7f05e19d83b64",
+    "r_3f0a9c2b7d5e1f48"
+   ],
+   "requestedAt": 1794884400000,
+   "preimage_hex": "000000166c756369642d666c6565742d726571756573742d763100000012635f303132333435363738396162636465660000001361705f303132333435363738396162636465660000000c73706f6b65732e626c6f636b000000226e5f30313233343536373839616263646566303132333435363738396162636465660000004f7b22686f757273223a322c226e6f6465223a226e5f3031323334353637383961626364656630313233343536373839616263646566222c22726561736f6e223a2253656e64696e67206a756e6b227d0000002b5b22725f33663061396332623764356531663438222c22725f63326137663035653139643833623634225d0000000d31373934383834343030303030",
+   "challenge_hex": "5f5b65f6c38de893612e8b0d5eee5ab8cb5101ee370489c5baa3d4de60662564"
+  },
+  "changed": [
+   {
+    "field": "label",
+    "value": "lucid-fleet-request-v0",
+    "challenge_hex": "0d03f38419eda3a1d4bdc7f404e56b051d52bee6c578c43ce491ec4eade96afb"
+   },
+   {
+    "field": "consoleId",
+    "value": "c_0123456789abcdeg",
+    "challenge_hex": "9060e6be2994161160b3d234e54026f87b586bf89477e40162823867fd14aab8"
+   },
+   {
+    "field": "approvalId",
+    "value": "ap_0123456789abcdeg",
+    "challenge_hex": "be920f285ecbf9f204ddb0cd82904e3fab245d819694c53c0faa0e02d8bf85f4"
+   },
+   {
+    "field": "action",
+    "value": "spokes.blocj",
+    "challenge_hex": "b512eed5d6a961ab69f74acb143453fca340c63471cde7e5329f1731d8edcc6a"
+   },
+   {
+    "field": "target",
+    "value": "n_0123456789abcdef0123456789abcdeg",
+    "challenge_hex": "9ae787a50436898228d742f0d0916d38a36a5154e0486d43112edfdf96173db6"
+   },
+   {
+    "field": "params",
+    "value": {
+     "node": "n_0123456789abcdef0123456789abcdef",
+     "hours": 2,
+     "reason": "Sending junj"
+    },
+    "challenge_hex": "7b7c548637d915fb2b5dfb8d7764df37f77138a3674a8abba881ecde663a589f"
+   },
+   {
+    "field": "relayIds",
+    "value": [
+     "r_3f0a9c2b7d5e1f48"
+    ],
+    "challenge_hex": "c15da1a50c1894f7f90d025607e310b0efb8071ddc0ac009d286064c915b8d4c"
+   },
+   {
+    "field": "requestedAt",
+    "value": 1794884400001,
+    "challenge_hex": "69ff0ea1e3654e2316758fc8b4cf2e6167ee57e9ae5673e2f324bee0cb32caac"
+   }
+  ]
+ },
+ "approval": {
+  "base": {
+   "action": "approvals.approve",
+   "target": "ap_0123456789abcdef",
+   "params": {
+    "action": "spokes.block",
+    "target": "n_0123456789abcdef0123456789abcdef",
+    "params": {
+     "node": "n_0123456789abcdef0123456789abcdef",
+     "hours": 2,
+     "reason": "Sending junk"
+    },
+    "requestedBy": "alice@acme.example",
+    "requestedAt": 1794884400000
+   },
+   "targets": [
+    {
+     "relay": "r_3f0a9c2b7d5e1f48",
+     "nonce": "Gkms_-tjDe8NfAJqwjrFoerJIcWy2GxH90rzgG7HF_E"
+    },
+    {
+     "relay": "r_c2a7f05e19d83b64",
+     "nonce": "c0uH7cVVneTs91AheWFxLtSzoYYrx-MqQcdV_xQUjr8"
+    }
+   ],
+   "preimage_hex": "000000156c756369642d666c6565742d7374657075702d763100000012635f3031323334353637383961626364656600000011617070726f76616c732e617070726f76650000001361705f30313233343536373839616263646566000000df7b22616374696f6e223a2273706f6b65732e626c6f636b222c22706172616d73223a7b22686f757273223a322c226e6f6465223a226e5f3031323334353637383961626364656630313233343536373839616263646566222c22726561736f6e223a2253656e64696e67206a756e6b227d2c227265717565737465644174223a313739343838343430303030302c227265717565737465644279223a22616c6963654061636d652e6578616d706c65222c22746172676574223a226e5f3031323334353637383961626364656630313233343536373839616263646566227d000000ab5b7b226e6f6e6365223a22476b6d735f2d746a4465384e66414a71776a72466f65724a49635779324778483930727a67473748465f45222c2272656c6179223a22725f33663061396332623764356531663438227d2c7b226e6f6e6365223a2263307548376356566e65547339314168655746784c74537a6f595972782d4d71516364565f7851556a7238222c2272656c6179223a22725f63326137663035653139643833623634227d5d",
+   "challenge_hex": "72d6417f7aa441eb3a89b2a775ba8903250ab8c8eb506284c2a4ef7a45197e15"
+  }
+ },
+ "roster": {
+  "label": "lucid-fleet-roster-v1",
+  "endorse_label": "lucid-fleet-roster-endorse-v1",
+  "chain": [
+   {
+    "seq": 1,
+    "change": {
+     "adds": [
+      {
+       "credentialId": "GTnokNHC97txkcNniWOEKOQaRkGVLtsJm0UYCoY4-yc",
+       "cose": "pQECAyYgASFYIFjDE-__uLVz2z79bFzQ8SulOOmHTfr0UFXJPiHmzJ2hIlgglpCwR4lFQhowR1JluTo1G5jFXCS0EsqD-IBBtykFuEw",
+       "email": "dave@acme.example",
+       "role": "admin",
+       "evidenceSha256": "cda6ab7d92cf69d77f39dfc9077cf5ba707f30de11297c6a6df894939e26cb5b"
+      }
+     ],
+     "removes": []
+    },
+    "prev_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+    "preimage_hex": "000000156c756369642d666c6565742d726f737465722d763100000012635f303132333435363738396162636465660000000131000000200000000000000000000000000000000000000000000000000000000000000000000001467b2261646473223a5b7b22636f7365223a2270514543417959674153465949466a44452d5f5f754c567a327a373962467a513853756c4f4f6d48546672305546584a5069486d7a4a3268496c67676c70437752346c4651686f7752314a6c75546f3147356a4658435330457371442d49424274796b46754577222c2263726564656e7469616c4964223a2247546e6f6b4e4843393774786b634e6e69574f454b4f5161526b47564c74734a6d305559436f59342d7963222c22656d61696c223a22646176654061636d652e6578616d706c65222c2265766964656e6365536861323536223a2263646136616237643932636636396437376633396466633930373763663562613730376633306465313132393763366136646638393439333965323663623562222c22726f6c65223a2261646d696e227d5d2c2272656d6f766573223a5b5d7d",
+    "hash_hex": "fefd73601326bcea0ed0b00d1f4015a031db209470b84fb38739f19cb47f4858",
+    "endorse_challenge_hex": "66dfa3754ec3ad7f750ce9af36447e63c15332114cc3791bee349dbf111b1833"
+   },
+   {
+    "seq": 2,
+    "change": {
+     "adds": [],
+     "removes": [
+      "eeba6df2effe8bbf"
+     ]
+    },
+    "prev_hex": "fefd73601326bcea0ed0b00d1f4015a031db209470b84fb38739f19cb47f4858",
+    "preimage_hex": "000000156c756369642d666c6565742d726f737465722d763100000012635f30313233343536373839616263646566000000013200000020fefd73601326bcea0ed0b00d1f4015a031db209470b84fb38739f19cb47f48580000002a7b2261646473223a5b5d2c2272656d6f766573223a5b2265656261366466326566666538626266225d7d",
+    "hash_hex": "76d9ec17ac4137d99dd19ec1c3df47dedd111ae709bb7085e760f526e6a22a2e",
+    "endorse_challenge_hex": "9d7722eeba239fd98f94b01c3ab25af409a35609dd9a947274ad10890213aeaf"
+   }
+  ],
+  "changed": [
+   {
+    "field": "consoleId",
+    "hash_hex": "d37bcfcec9c3084f04f1ee353e8577e82ca9c686d94703ad0a11dfb846070a48"
+   },
+   {
+    "field": "seq",
+    "hash_hex": "5b5be461911ea4a3edc7c7cabf872cae3c9e5e3868de8b46012f3c200ce83389"
+   },
+   {
+    "field": "prev",
+    "hash_hex": "3278d3c9c3b98fb21caeb6ae7289392afd7e9a4b832a9cdfd36544a8709e27b7"
+   },
+   {
+    "field": "change",
+    "hash_hex": "a1dbc401c0b15201f49e68f51eb48b971224a5b15f77ce2b47d3ff83f4c6d71f"
+   }
+  ]
+ },
+ "policy": {
+  "label": "lucid-fleet-policy-v1",
+  "endorse_label": "lucid-fleet-policy-endorse-v1",
+  "chain": [
+   {
+    "seq": 1,
+    "policy": {
+     "profile": "standard",
+     "twoPerson": "off"
+    },
+    "prev_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+    "hash_hex": "ef6a7d5c6a4b99801eb12e049beb9261df3974bc1af7c58e7cb2a2dc824d3b05",
+    "endorse_challenge_hex": "ef4ea02abfaad879f1d0bfffd001e4f30dad70a6d9e79568f7ff2be9736a224e",
+    "kind": "first",
+    "assertions": 0,
+    "different_emails": false
+   },
+   {
+    "seq": 2,
+    "policy": {
+     "profile": "high",
+     "twoPerson": "off"
+    },
+    "prev_hex": "ef6a7d5c6a4b99801eb12e049beb9261df3974bc1af7c58e7cb2a2dc824d3b05",
+    "hash_hex": "b1f97f1057e808c20418a9318dcaf6ecad3bd7c62e404f45125412bd9f2c75cf",
+    "endorse_challenge_hex": "8ae999ac233364df5edbbd46c21ecc0f29d9ec559ba308fc4d0b3d881a1f407a",
+    "kind": "tighten",
+    "assertions": 1,
+    "different_emails": false
+   },
+   {
+    "seq": 3,
+    "policy": {
+     "profile": "high",
+     "twoPerson": "on"
+    },
+    "prev_hex": "b1f97f1057e808c20418a9318dcaf6ecad3bd7c62e404f45125412bd9f2c75cf",
+    "hash_hex": "779c4ad7462ecdb2c22df932e13644200a2d96ec683ecbf72a657eb3bda033b0",
+    "endorse_challenge_hex": "7731242f000d69c9563dd95539097491370e671a88c1107c5111f4e0bdb19b49",
+    "kind": "tighten",
+    "assertions": 1,
+    "different_emails": false
+   },
+   {
+    "seq": 4,
+    "policy": {
+     "profile": "standard",
+     "twoPerson": "on"
+    },
+    "prev_hex": "779c4ad7462ecdb2c22df932e13644200a2d96ec683ecbf72a657eb3bda033b0",
+    "hash_hex": "1ca5d73bc21546b74e1f315ab41b032a179bef20f47fe5d3b8fbbd2f62127a0c",
+    "endorse_challenge_hex": "9face7b475f76a6d838979522838ea4ce963c569a2227ee1c258259c43b64380",
+    "kind": "loosen",
+    "assertions": 2,
+    "different_emails": true
+   },
+   {
+    "seq": 5,
+    "policy": {
+     "profile": "high",
+     "twoPerson": "off"
+    },
+    "prev_hex": "1ca5d73bc21546b74e1f315ab41b032a179bef20f47fe5d3b8fbbd2f62127a0c",
+    "hash_hex": "6253a33c480752e5f392b7ae1ed78337fbf2112ed75374ec4aa05fbdb0c5259c",
+    "endorse_challenge_hex": "1711400fddded6324f9f97953c0fb3974c0d774bb83a85755403b11c85a0762c",
+    "kind": "loosen",
+    "assertions": 2,
+    "different_emails": true
+   }
+  ],
+  "about": "kind is relative to the previous record; a change that loosens either field needs two assertions of different emails, else one (the first record comes with enrollment and needs none)"
+ },
+ "scopes": {
+  "label": "lucid-fleet-scopes-v1",
+  "cases": [
+   {
+    "relayId": "r_3f0a9c2b7d5e1f48",
+    "requestId": "sr_0123456789abcdef",
+    "generation": 3,
+    "oldScopes": [
+     "read-health"
+    ],
+    "requestedScopes": [
+     "read-health",
+     "people",
+     "read-logs"
+    ],
+    "preimage_hex": "000000156c756369642d666c6565742d73636f7065732d763100000012725f336630613963326237643565316634380000001373725f3031323334353637383961626364656600000001330000000f5b22726561642d6865616c7468225d000000245b22726561642d6865616c7468222c2270656f706c65222c22726561642d6c6f6773225d",
+    "hash_hex": "9730afb0372c513b8c28ca0d1c2448b50b5487a5ce68ce42768c7a5457154760"
+   },
+   {
+    "relayId": "r_8c41d2e07b9a6f13",
+    "requestId": "sr_fedcba9876543210",
+    "generation": 1,
+    "oldScopes": [
+     "read-health",
+     "people"
+    ],
+    "requestedScopes": [
+     "read-health",
+     "people",
+     "config",
+     "license"
+    ],
+    "preimage_hex": "000000156c756369642d666c6565742d73636f7065732d763100000012725f386334316432653037623961366631330000001373725f666564636261393837363534333231300000000131000000185b22726561642d6865616c7468222c2270656f706c65225d0000002b5b22726561642d6865616c7468222c2270656f706c65222c22636f6e666967222c226c6963656e7365225d",
+    "hash_hex": "423de5bd56a8a95524e0c29d48215808425c4838b07a1242e769b4b16cfd9dbe"
+   }
+  ]
+ },
+ "confirm_done": {
+  "results": [
+   "ok",
+   "refused",
+   "expired",
+   "failed",
+   "unknown"
+  ],
+  "about": "5.6 confirm-done result union (unknown from revision 3.2: a confirmed write interrupted by a relay crash, not run again, answer null); the console audits the call's fleet.call with that result, and on unknown shows fleet.confirm-unknown and raises relay-confirm-unknown; any other value is refused as fleet-op",
+  "frames": [
+   {
+    "t": "evt",
+    "op": "confirm-done",
+    "body": {
+     "id": "fc_0123456789abcdef",
+     "result": "unknown",
+     "answer": null
+    }
+   }
+  ],
+  "refused": [
+   {
+    "t": "evt",
+    "op": "confirm-done",
+    "body": {
+     "id": "fc_0123456789abcdef",
+     "result": "maybe",
+     "answer": null
+    },
+    "code": "fleet-op"
+   }
+  ]
+ },
+ "routes": [
+  {
+   "route": "GET overview",
+   "method": "GET",
+   "path": "overview",
+   "product": "both",
+   "write": false,
+   "stepup": false,
+   "action": null,
+   "target": null,
+   "read_health": "viewer",
+   "scopes": [
+    "people"
+   ]
+  },
+  {
+   "route": "GET search",
+   "method": "GET",
+   "path": "search",
+   "product": "both",
+   "write": false,
+   "stepup": false,
+   "action": null,
+   "target": null,
+   "read_health": "refused",
+   "scopes": [
+    "people"
+   ]
+  },
+  {
+   "route": "GET spokes/counts",
+   "method": "GET",
+   "path": "spokes/counts",
+   "product": "spokes",
+   "write": false,
+   "stepup": false,
+   "action": null,
+   "target": null,
+   "read_health": "whole",
+   "scopes": [
+    "read-health"
+   ]
+  },
+  {
+   "route": "GET meet/counts",
+   "method": "GET",
+   "path": "meet/counts",
+   "product": "meet",
+   "write": false,
+   "stepup": false,
+   "action": null,
+   "target": null,
+   "read_health": "whole",
+   "scopes": [
+    "read-health"
+   ]
+  },
+  {
+   "route": "GET license",
+   "method": "GET",
+   "path": "license",
+   "product": "both",
+   "write": false,
+   "stepup": false,
+   "action": null,
+   "target": null,
+   "read_health": "viewer",
+   "scopes": [
+    "read-health"
+   ]
+  },
+  {
+   "route": "POST license/install",
+   "method": "POST",
+   "path": "license/install",
+   "product": "both",
+   "write": true,
+   "stepup": true,
+   "action": "license.install",
+   "target": "license.id",
+   "read_health": "write",
+   "scopes": [
+    "license"
+   ]
+  },
+  {
+   "route": "GET logs",
+   "method": "GET",
+   "path": "logs",
+   "product": "both",
+   "write": false,
+   "stepup": false,
+   "action": null,
+   "target": null,
+   "read_health": "refused",
+   "scopes": [
+    "read-logs",
+    "people"
+   ]
+  },
+  {
+   "route": "POST logs/export",
+   "method": "POST",
+   "path": "logs/export",
+   "product": "both",
+   "write": false,
+   "stepup": true,
+   "action": "logs.export",
+   "target": "source",
+   "read_health": "refused",
+   "scopes": [
+    "read-logs",
+    "people"
+   ]
+  },
+  {
+   "route": "GET audit",
+   "method": "GET",
+   "path": "audit",
+   "product": "both",
+   "write": false,
+   "stepup": false,
+   "action": null,
+   "target": null,
+   "read_health": "refused",
+   "scopes": [
+    "read-logs",
+    "people"
+   ]
+  },
+  {
+   "route": "POST audit/export",
+   "method": "POST",
+   "path": "audit/export",
+   "product": "both",
+   "write": false,
+   "stepup": true,
+   "action": "audit.export",
+   "target": "{from}-{to}",
+   "read_health": "refused",
+   "scopes": [
+    "read-logs",
+    "people"
+   ]
+  },
+  {
+   "route": "GET audit/verify",
+   "method": "GET",
+   "path": "audit/verify",
+   "product": "both",
+   "write": false,
+   "stepup": false,
+   "action": null,
+   "target": null,
+   "read_health": "refused",
+   "scopes": [
+    "read-logs",
+    "people"
+   ]
+  },
+  {
+   "route": "POST audit/restart",
+   "method": "POST",
+   "path": "audit/restart",
+   "product": "both",
+   "write": true,
+   "stepup": true,
+   "action": "audit.restart",
+   "target": "-",
+   "read_health": "write",
+   "scopes": [
+    "read-logs",
+    "people"
+   ]
+  },
+  {
+   "route": "GET requests",
+   "method": "GET",
+   "path": "requests",
+   "product": "both",
+   "write": false,
+   "stepup": false,
+   "action": null,
+   "target": null,
+   "read_health": "refused",
+   "scopes": [
+    "people"
+   ]
+  },
+  {
+   "route": "POST requests/new",
+   "method": "POST",
+   "path": "requests/new",
+   "product": "both",
+   "write": true,
+   "stepup": true,
+   "action": "requests.new",
+   "target": "-",
+   "read_health": "write",
+   "scopes": [
+    "people"
+   ]
+  },
+  {
+   "route": "POST requests/cancel",
+   "method": "POST",
+   "path": "requests/cancel",
+   "product": "both",
+   "write": true,
+   "stepup": true,
+   "action": "requests.cancel",
+   "target": "id",
+   "read_health": "write",
+   "scopes": [
+    "people"
+   ]
+  },
+  {
+   "route": "GET spokes/nodes",
+   "method": "GET",
+   "path": "spokes/nodes",
+   "product": "spokes",
+   "write": false,
+   "stepup": false,
+   "action": null,
+   "target": null,
+   "read_health": "refused",
+   "scopes": [
+    "people"
+   ]
+  },
+  {
+   "route": "GET spokes/seats",
+   "method": "GET",
+   "path": "spokes/seats",
+   "product": "spokes",
+   "write": false,
+   "stepup": false,
+   "action": null,
+   "target": null,
+   "read_health": "refused",
+   "scopes": [
+    "people"
+   ]
+  },
+  {
+   "route": "GET spokes/relays",
+   "method": "GET",
+   "path": "spokes/relays",
+   "product": "spokes",
+   "write": false,
+   "stepup": false,
+   "action": null,
+   "target": null,
+   "read_health": "viewer",
+   "scopes": [
+    "read-health"
+   ]
+  },
+  {
+   "route": "POST spokes/crl",
+   "method": "POST",
+   "path": "spokes/crl",
+   "product": "spokes",
+   "write": true,
+   "stepup": true,
+   "action": "spokes.crl",
+   "target": "-",
+   "read_health": "write",
+   "scopes": [
+    "config"
+   ]
+  },
+  {
+   "route": "POST spokes/directory",
+   "method": "POST",
+   "path": "spokes/directory",
+   "product": "spokes",
+   "write": true,
+   "stepup": true,
+   "action": "spokes.directory",
+   "target": "-",
+   "read_health": "write",
+   "scopes": [
+    "config"
+   ]
+  },
+  {
+   "route": "POST spokes/block",
+   "method": "POST",
+   "path": "spokes/block",
+   "product": "spokes",
+   "write": true,
+   "stepup": true,
+   "action": "spokes.block",
+   "target": "node",
+   "read_health": "write",
+   "scopes": [
+    "people"
+   ]
+  },
+  {
+   "route": "POST spokes/unblock",
+   "method": "POST",
+   "path": "spokes/unblock",
+   "product": "spokes",
+   "write": true,
+   "stepup": true,
+   "action": "spokes.unblock",
+   "target": "node",
+   "read_health": "write",
+   "scopes": [
+    "people"
+   ]
+  },
+  {
+   "route": "GET meet/people",
+   "method": "GET",
+   "path": "meet/people",
+   "product": "meet",
+   "write": false,
+   "stepup": false,
+   "action": null,
+   "target": null,
+   "read_health": "refused",
+   "scopes": [
+    "people"
+   ]
+  },
+  {
+   "route": "GET meet/seats",
+   "method": "GET",
+   "path": "meet/seats",
+   "product": "meet",
+   "write": false,
+   "stepup": false,
+   "action": null,
+   "target": null,
+   "read_health": "refused",
+   "scopes": [
+    "people"
+   ]
+  },
+  {
+   "route": "GET meet/enrollments",
+   "method": "GET",
+   "path": "meet/enrollments",
+   "product": "meet",
+   "write": false,
+   "stepup": false,
+   "action": null,
+   "target": null,
+   "read_health": "refused",
+   "scopes": [
+    "people"
+   ]
+  },
+  {
+   "route": "GET meet/organizations",
+   "method": "GET",
+   "path": "meet/organizations",
+   "product": "meet",
+   "write": false,
+   "stepup": false,
+   "action": null,
+   "target": null,
+   "read_health": "refused",
+   "scopes": [
+    "people"
+   ]
+  },
+  {
+   "route": "POST meet/seats/pick",
+   "method": "POST",
+   "path": "meet/seats/pick",
+   "product": "meet",
+   "write": true,
+   "stepup": true,
+   "action": "meet.seats.pick",
+   "target": "principal",
+   "read_health": "write",
+   "scopes": [
+    "people"
+   ]
+  },
+  {
+   "route": "POST meet/seats/request",
+   "method": "POST",
+   "path": "meet/seats/request",
+   "product": "meet",
+   "write": true,
+   "stepup": true,
+   "action": "meet.seats.request",
+   "target": "-",
+   "read_health": "write",
+   "scopes": [
+    "license"
+   ]
+  },
+  {
+   "route": "GET meet/clock",
+   "method": "GET",
+   "path": "meet/clock",
+   "product": "meet",
+   "write": false,
+   "stepup": false,
+   "action": null,
+   "target": null,
+   "read_health": "viewer",
+   "scopes": [
+    "read-health"
+   ]
+  },
+  {
+   "route": "GET meet/release",
+   "method": "GET",
+   "path": "meet/release",
+   "product": "meet",
+   "write": false,
+   "stepup": false,
+   "action": null,
+   "target": null,
+   "read_health": "viewer",
+   "scopes": [
+    "read-health"
+   ]
+  },
+  {
+   "route": "GET meet/servers",
+   "method": "GET",
+   "path": "meet/servers",
+   "product": "meet",
+   "write": false,
+   "stepup": false,
+   "action": null,
+   "target": null,
+   "read_health": "viewer",
+   "scopes": [
+    "read-health"
+   ]
+  },
+  {
+   "route": "GET meet/calls",
+   "method": "GET",
+   "path": "meet/calls",
+   "product": "meet",
+   "write": false,
+   "stepup": false,
+   "action": null,
+   "target": null,
+   "read_health": "refused",
+   "scopes": [
+    "people"
+   ]
+  },
+  {
+   "route": "GET meet/signer",
+   "method": "GET",
+   "path": "meet/signer",
+   "product": "meet",
+   "write": false,
+   "stepup": false,
+   "action": null,
+   "target": null,
+   "read_health": "viewer",
+   "scopes": [
+    "people"
+   ]
+  },
+  {
+   "route": "GET meet/push",
+   "method": "GET",
+   "path": "meet/push",
+   "product": "meet",
+   "write": false,
+   "stepup": false,
+   "action": null,
+   "target": null,
+   "read_health": "viewer",
+   "scopes": [
+    "people"
+   ]
+  },
+  {
+   "route": "GET meet/identity",
+   "method": "GET",
+   "path": "meet/identity",
+   "product": "meet",
+   "write": false,
+   "stepup": false,
+   "action": null,
+   "target": null,
+   "read_health": "viewer",
+   "scopes": [
+    "people"
+   ]
+  },
+  {
+   "route": "POST meet/clock/confirm",
+   "method": "POST",
+   "path": "meet/clock/confirm",
+   "product": "meet",
+   "write": true,
+   "stepup": true,
+   "action": "meet.clock.confirm",
+   "target": "-",
+   "read_health": "write",
+   "scopes": [
+    "config"
+   ]
+  },
+  {
+   "route": "POST meet/crl",
+   "method": "POST",
+   "path": "meet/crl",
+   "product": "meet",
+   "write": true,
+   "stepup": true,
+   "action": "meet.crl",
+   "target": "-",
+   "read_health": "write",
+   "scopes": [
+    "config"
+   ]
+  },
+  {
+   "route": "POST meet/bridge",
+   "method": "POST",
+   "path": "meet/bridge",
+   "product": "meet",
+   "write": true,
+   "stepup": true,
+   "action": "meet.bridge.set",
+   "target": "org",
+   "read_health": "write",
+   "scopes": [
+    "config"
+   ]
+  },
+  {
+   "route": "POST meet/holds",
+   "method": "POST",
+   "path": "meet/holds",
+   "product": "meet",
+   "write": true,
+   "stepup": true,
+   "action": "meet.holds.place",
+   "target": "-",
+   "read_health": "write",
+   "scopes": [
+    "config"
+   ]
+  },
+  {
+   "route": "POST meet/holds/release",
+   "method": "POST",
+   "path": "meet/holds/release",
+   "product": "meet",
+   "write": true,
+   "stepup": true,
+   "action": "meet.holds.release",
+   "target": "id",
+   "read_health": "write",
+   "scopes": [
+    "config"
+   ]
+  },
+  {
+   "route": "POST meet/release",
+   "method": "POST",
+   "path": "meet/release",
+   "product": "meet",
+   "write": true,
+   "stepup": true,
+   "action": "meet.release.set",
+   "target": "version",
+   "read_health": "write",
+   "scopes": [
+    "config"
+   ]
+  },
+  {
+   "route": "POST meet/files/start",
+   "method": "POST",
+   "path": "meet/files/start",
+   "product": "meet",
+   "write": true,
+   "stepup": true,
+   "action": "meet.files.start",
+   "target": "-",
+   "read_health": "write",
+   "scopes": [
+    "config"
+   ]
+  },
+  {
+   "route": "POST meet/organizations",
+   "method": "POST",
+   "path": "meet/organizations",
+   "product": "meet",
+   "write": true,
+   "stepup": true,
+   "action": "meet.org.set",
+   "target": "principal",
+   "read_health": "write",
+   "scopes": [
+    "config",
+    "people"
+   ]
+  },
+  {
+   "route": "GET meet/bridge",
+   "method": "GET",
+   "path": "meet/bridge",
+   "product": "meet",
+   "write": false,
+   "stepup": false,
+   "action": null,
+   "target": null,
+   "read_health": "refused",
+   "scopes": [
+    "config",
+    "people"
+   ]
+  },
+  {
+   "route": "GET meet/holds",
+   "method": "GET",
+   "path": "meet/holds",
+   "product": "meet",
+   "write": false,
+   "stepup": false,
+   "action": null,
+   "target": null,
+   "read_health": "refused",
+   "scopes": [
+    "config",
+    "people"
+   ]
+  },
+  {
+   "route": "GET meet/bridge/audit",
+   "method": "GET",
+   "path": "meet/bridge/audit",
+   "product": "meet",
+   "write": false,
+   "stepup": false,
+   "action": null,
+   "target": null,
+   "read_health": "refused",
+   "scopes": [
+    "read-logs",
+    "people"
+   ]
+  },
+  {
+   "route": "POST meet/block",
+   "method": "POST",
+   "path": "meet/block",
+   "product": "meet",
+   "write": true,
+   "stepup": true,
+   "action": "meet.block",
+   "target": "{principal}/{device}",
+   "read_health": "write",
+   "scopes": [
+    "people"
+   ]
+  },
+  {
+   "route": "POST meet/unblock",
+   "method": "POST",
+   "path": "meet/unblock",
+   "product": "meet",
+   "write": true,
+   "stepup": true,
+   "action": "meet.unblock",
+   "target": "{principal}/{device}",
+   "read_health": "write",
+   "scopes": [
+    "people"
+   ]
+  },
+  {
+   "route": "GET meet/support",
+   "method": "GET",
+   "path": "meet/support",
+   "product": "meet",
+   "write": false,
+   "stepup": false,
+   "action": null,
+   "target": null,
+   "read_health": "refused",
+   "scopes": [
+    "people"
+   ]
+  },
+  {
+   "route": "POST meet/support/answer",
+   "method": "POST",
+   "path": "meet/support/answer",
+   "product": "meet",
+   "write": true,
+   "stepup": true,
+   "action": "meet.support.answer",
+   "target": "id",
+   "read_health": "write",
+   "scopes": [
+    "people"
+   ]
+  },
+  {
+   "route": "POST meet/support/close",
+   "method": "POST",
+   "path": "meet/support/close",
+   "product": "meet",
+   "write": true,
+   "stepup": true,
+   "action": "meet.support.close",
+   "target": "id",
+   "read_health": "write",
+   "scopes": [
+    "people"
+   ]
+  }
+ ]
+}

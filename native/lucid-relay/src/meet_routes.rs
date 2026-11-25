@@ -2,7 +2,7 @@
 // caller, body and gate in the order the Python handler does, so the same request gets the same first refusal.
 
 use crate::meet::{self as m, run, Ctx, R, CAPTIONS_LIMIT_MAX};
-use crate::meet_hub::{bridge, ce, files, parity, pc, E2EE_BODY_MAX, E2EE_ROSTER_BODY_MAX};
+use crate::meet_hub::{ai, bridge, ce, files, parity, pc, push, E2EE_BODY_MAX, E2EE_ROSTER_BODY_MAX};
 use crate::meet_json::{self as pj, obj, Obj};
 use crate::meet_tls::{crl_path, read_bytes};
 use crate::meet_x509::pem_blocks;
@@ -11,16 +11,58 @@ use std::panic::AssertUnwindSafe;
 
 type Route = fn(&mut Ctx) -> R<Obj>;
 
+/// SE-1 7: a support ticket's body is at most 20,000 characters (title 200, version 40), counted as characters, so
+/// the bytes that carry them are bounded by the worst JSON escaping: 12 bytes (a `\uXXXX\uXXXX` surrogate pair) per
+/// character, 243,000 bytes with the keys and the case, rounded up.
+const SUPPORT_TICKET_BODY_MAX: usize = 256 * 1024;
+
 fn get_route(path: &str) -> Option<Route> {
     let route: Route = match path {
-        "/v1/console/summary" => |c: &mut Ctx| console(c, "summary"),
-        "/v1/console/links" => |c: &mut Ctx| console(c, "links"),
-        "/v1/console/logs" => |c: &mut Ctx| console(c, "logs"),
-        "/v1/console/servers" => |c: &mut Ctx| console(c, "servers"),
-        "/v1/console/directory" => |c: &mut Ctx| console(c, "directory"),
+        // SE-1 (meet_support.rs): a person's own support tickets and the admins' answers
+        "/v1/support/tickets" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            let case = c.q("case", "");
+            crate::meet_support::device_mine(c.relay, &who, &case)
+        },
+        // AC-1 4.10: the signing side reads the Admin Console's meet.* requests
+        "/v1/admin/console/requests" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            let session = c.q("session", "");
+            c.relay.hub.check_admin(&session, &who)?;
+            Ok(crate::console_meet::requests_for(c.relay, &who.principal))
+        },
+        // AI-1 6.6: the kept personal-access audit records, for the Admin Console's Usage
+        "/v1/admin/ai/audit" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            let session = c.q("session", "");
+            c.relay.hub.check_admin(&session, &who)?;
+            let since = m::number(Some(&Value::from(c.q("since", "0"))), "since")?.trunc() as i64;
+            let cursor = c.q("cursor", "");
+            c.relay.hub.ai_audit_list(&c.q("org", ""), since, Some(cursor.as_str()))
+        },
+        // AC-2a 5.7 (F13): whether this relay runs its own console and which Lucid Admin Console manages it
+        "/v1/admin/console/where" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            let session = c.q("session", "");
+            c.relay.hub.check_admin(&session, &who)?;
+            Ok(crate::console_meet::console_where(c.relay))
+        },
+        // AC-2a 3.9 (F20): the caller's first-roster entries, for the Hub app to endorse
+        "/v1/admin/console/fleet-bootstrap" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            let session = c.q("session", "");
+            // AC-2a 3.9: the Meeting Hub endorsement routes are relay admins' (check_admin), as on the reference relay
+            c.relay.hub.check_admin(&session, &who)?;
+            crate::console_meet::fleet_bootstrap(c.relay, &who)
+        },
         "/v1/whoami" => whoami,
         "/v1/events" => events,
         "/v1/inbox" => inbox,
+        // NT-1 section 4.3: the iPhone's background read-mark fetch (own device, no session)
+        "/v1/notify/reads" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            c.relay.hub.notify_reads(&who)
+        },
         "/v1/dm/history" => dm_history,
         "/v1/channels" => |c: &mut Ctx| {
             let who = c.who(false)?;
@@ -191,6 +233,31 @@ fn get_route(path: &str) -> Option<Route> {
             c.who(false)?;
             c.relay.hub.pc_policy_get(&c.q("org", ""), &c.q("sha256", ""))
         },
+        // AI-1 2: org AI maps, only to people the org's current policy covers and its ai app
+        "/v1/org/ai" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            c.relay.hub.pc_ai_get_for(&who, &c.q("org", ""), &c.q("sha256", ""))
+        },
+        // AI-1 6.4 and 7.6: who may use org AI, and AI history
+        "/v1/ai/allowed" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            c.relay.hub.ai_allowed(&who, &c.q("principal", ""), c.q("groups", "") == "1")
+        },
+        "/v1/ai/history" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            let limit = ai::HISTORY_LIMIT.to_string();
+            c.relay.hub.ai_history_get(&c.q("session", ""), &who, &c.q("cid", ""), &c.q("after", "0"), &c.q("limit", &limit))
+        },
+        // SD-1 13.5: org storage maps, only to people the org's current policy covers
+        "/v1/org/storage" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            c.relay.hub.sd_storage_get(&who, &c.q("org", ""), &c.q("sha256", ""))
+        },
+        // ID-1: the signed proposals for that org's admins
+        "/v1/org/proposals" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            c.relay.hub.pc_proposals_get(&c.q("session", ""), &who, &c.q("org", ""))
+        },
         "/v1/apps" => |c: &mut Ctx| {
             let who = c.who(false)?;
             let session = c.q("session", "");
@@ -200,6 +267,12 @@ fn get_route(path: &str) -> Option<Route> {
         "/v1/apps/icon" => |c: &mut Ctx| {
             c.who(false)?;
             let (headers, body) = c.relay.hub.pc_icon_get(&c.q("sha256", ""))?;
+            c.raw = Some(m::Raw::Bytes(headers, body));
+            Ok(Obj::new())
+        },
+        "/v1/org/background" => |c: &mut Ctx| {
+            c.who(false)?;
+            let (headers, body) = c.relay.hub.pc_background_get(&c.q("sha256", ""))?;
             c.raw = Some(m::Raw::Bytes(headers, body));
             Ok(Obj::new())
         },
@@ -236,6 +309,11 @@ fn get_route(path: &str) -> Option<Route> {
 
 fn post_route(path: &str) -> Option<Route> {
     let route: Route = match path {
+        // SE-1 (meet_support.rs): a person files a support ticket for the org's Admin Console
+        "/v1/support/tickets" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(SUPPORT_TICKET_BODY_MAX)?);
+            crate::meet_support::device_file(c.relay, &who, &b)
+        },
         "/v1/join" => join,
         "/v1/signal" => signal,
         "/v1/link" => link,
@@ -245,6 +323,10 @@ fn post_route(path: &str) -> Option<Route> {
         "/v1/typing" => typing,
         "/v1/stage" => stage,
         "/v1/status" => status,
+        "/v1/activity" => |c: &mut Ctx| {
+            let (who, b, session) = session_gate(c)?;
+            c.relay.hub.activity(&session, &who, b.get("active"))
+        },
         "/v1/admin/organizations" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body()?);
             c.relay.hub.admin_set_organization(&pj::s(&b, "session"), &who, b.get("principal"), b.get("id"), b.get("label"), b.get("remove"))
@@ -317,6 +399,13 @@ fn post_route(path: &str) -> Option<Route> {
             c.relay.hub.meeting_rsvp(&session, &who, b.get("id"), b.get("response"))
         },
         "/v1/invite" => invite,
+        // NT-1 section 3.5: the caller's own device declines one of their invitations
+        "/v1/invite/settle" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            c.relay.hub.nt_own_device(&who)?;
+            let (who, b, session) = session_gate(c)?;
+            c.relay.hub.invite_settle(&session, &who, b.get("id"), b.get("how"))
+        },
         // parity wave A
         "/v1/prefs" => |c: &mut Ctx| {
             let (who, b, session) = session_gate_max(c, parity::PREFS_BODY_MAX)?;
@@ -330,10 +419,10 @@ fn post_route(path: &str) -> Option<Route> {
             let (who, b, session) = session_gate(c)?;
             c.relay.hub.emoji_delete(&session, &who, b.get("name"))
         },
-        // parity wave B: iPhone push (bound to the calling device; no session needed)
+        // parity wave B and NT-1 section 3.2: iPhone push (bound to the calling device; no session needed)
         "/v1/push/register" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body()?);
-            c.relay.hub.push_register(&who, b.get("token"), b.get("env"))
+            c.relay.hub.push_register(&who, &b)
         },
         "/v1/push/unregister" => |c: &mut Ctx| {
             let who = c.who(false)?;
@@ -372,15 +461,51 @@ fn post_route(path: &str) -> Option<Route> {
         },
         "/v1/admin/approve" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body()?);
-            c.relay.hub.admin_approve(&pj::s(&b, "session"), &who, &pj::s(&b, "kind"), &pj::s(&b, "id"), &pj::s(&b, "csr_sha256"), &pj::s(&b, "decision"), b.get("reason"), b.get("proof"), b.get("ts"))
+            let link = console_request(c, &who, &b)?;
+            let answer = c.relay.hub.admin_approve(&pj::s(&b, "session"), &who, &pj::s(&b, "kind"), &pj::s(&b, "id"), &pj::s(&b, "csr_sha256"), &pj::s(&b, "decision"), b.get("reason"), b.get("proof"), b.get("ts"))?;
+            let target = obj([("kind", Value::from(pj::s(&b, "kind"))), ("id", Value::from(pj::s(&b, "id"))), ("csr_sha256", Value::from(pj::s(&b, "csr_sha256").to_lowercase()))]);
+            c.relay.hub.console_observed("meet.approve", &target, &who.principal, link.as_deref());
+            Ok(answer)
         },
         "/v1/admin/invite" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body()?);
-            c.relay.hub.admin_invite(&pj::s(&b, "session"), &who, b.get("name"), b.get("email"), b.get("days"), b.get("seed_csr_pem"), b.get("proof"), b.get("ts"))
+            let link = console_request(c, &who, &b)?;
+            let answer = c.relay.hub.admin_invite(&pj::s(&b, "session"), &who, b.get("name"), b.get("email"), b.get("days"), b.get("seed_csr_pem"), b.get("proof"), b.get("ts"))?;
+            let target = obj([("email", Value::from(pj::s(&b, "email").trim().to_lowercase()))]);
+            c.relay.hub.console_observed("meet.invite", &target, &who.principal, link.as_deref());
+            Ok(answer)
         },
         "/v1/admin/revoke" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body()?);
-            c.relay.admin_revoke(&pj::s(&b, "session"), &who, b.get("principal"), b.get("device"), b.get("proof"), b.get("ts"))
+            let link = console_request(c, &who, &b)?;
+            let answer = c.relay.admin_revoke(&pj::s(&b, "session"), &who, b.get("principal"), b.get("device"), b.get("proof"), b.get("ts"))?;
+            let target = obj([("principal", Value::from(crate::meet::principal(b.get("principal")))), ("device", Value::from(pj::s(&b, "device")))]);
+            c.relay.hub.console_observed("meet.revoke", &target, &who.principal, link.as_deref());
+            Ok(answer)
+        },
+        // AC-1 4.10: a sign-in link for the calling admin's own principal, and declining a request
+        "/v1/admin/console/invite" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body()?);
+            c.relay.hub.check_admin(&pj::s(&b, "session"), &who)?;
+            crate::console_meet::device_invite(c.relay, &who)
+        },
+        // AC-2a 3.9 (F20): a device endorsement of a first-roster key; the device certificate's checks are the TLS
+        // layer's and `who`'s, the session is checked here, the 3.9 rules are fleet_trust's
+        "/v1/admin/console/fleet-endorse" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body()?);
+            c.relay.hub.check_admin(&pj::s(&b, "session"), &who)?;
+            crate::console_meet::fleet_endorse(c.relay, &who, &b)
+        },
+        "/v1/admin/console/requests/decline" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body()?);
+            c.relay.hub.check_admin(&pj::s(&b, "session"), &who)?;
+            crate::console_meet::decline(c.relay, &who.principal, b.get("id"), b.get("reason"))
+        },
+        // AI-1 9 and API-1 2.3: an admin's device answers a console AI or API signing request
+        "/v1/admin/console/requests/sign" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(pc::API_MAP_BODY_MAX)?);
+            c.relay.hub.check_admin(&pj::s(&b, "session"), &who)?;
+            crate::console_meet::request_signed(c.relay, &who, b.get("id"), b.get("sig"), b.get("signed"))
         },
         "/v1/admin/signer" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body()?);
@@ -561,9 +686,68 @@ fn post_route(path: &str) -> Option<Route> {
             let (who, b) = (c.who(false)?, c.body_max(pc::POLICY_BODY_MAX)?);
             c.relay.pc_sign_policy(&pj::s(&b, "session"), &who, b.get("policy"), b.get("proof"), b.get("ts"))
         },
+        // AI-1 2: org AI maps (a relay admin uploads; an org admin's device signs through the signer)
+        "/v1/org/ai" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(pc::AI_MAP_BODY_MAX)?);
+            c.relay.hub.pc_ai_upload(&pj::s(&b, "session"), &who, b.get("signed"))
+        },
+        // API-1 2.4: org api maps (the uploaders of POST /v1/org/policy: a relay admin)
+        "/v1/org/api" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(pc::API_MAP_BODY_MAX)?);
+            c.relay.hub.pc_api_upload(&pj::s(&b, "session"), &who, b.get("signed"))
+        },
+        // API-1 2.3 (slice 1a6): an org admin's device signs the api map of a console `meet.api.sign` request
+        "/v1/org/api/sign" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(pc::API_MAP_BODY_MAX)?);
+            c.relay.pc_sign_api(&pj::s(&b, "session"), &who, b.get("map"), b.get("proof"), b.get("ts"))
+        },
+        "/v1/org/ai/sign" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(pc::AI_MAP_BODY_MAX)?);
+            c.relay.pc_sign_ai(&pj::s(&b, "session"), &who, b.get("map"), b.get("proof"), b.get("ts"))
+        },
+        // AI-1 6.4, 6.6 and 7.6
+        "/v1/sso/c/ai-groups" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body()?);
+            c.relay.hub.ai_groups_post(&who, &b)
+        },
+        // API-1 revision 5 4.3: SSO-signed person records
+        "/v1/sso/c/persons" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(crate::api_subject::BODY_MAX)?);
+            crate::api_subject::persons_post(&c.relay.hub, &who, &b)
+        },
+        // API-1 revision 4 13.1: the SSO service's directory status, for the console's `directory/status`
+        "/v1/sso/c/directory-status" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(crate::api_sso_status::BODY_MAX)?);
+            crate::api_sso_status::post(c.relay, &who, &b)
+        },
+        "/v1/ai/audit" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body()?);
+            c.relay.hub.ai_audit_post(&who, &b)
+        },
+        "/v1/ai/history" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(ce::BODY_MAX)?);
+            c.relay.hub.ai_history_post(&pj::s(&b, "session"), &who, b.get("id"), b.get("enc"))
+        },
+        "/v1/ai/history/delete" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(ce::BODY_MAX)?);
+            c.relay.hub.ai_history_delete(&pj::s(&b, "session"), &who, b.get("id"), b.get("event"), b.get("enc"))
+        },
+        // SD-1 13.5: org storage maps (a relay admin uploads; an org admin's device signs through the signer)
+        "/v1/org/storage" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(pc::MAP_BODY_MAX)?);
+            c.relay.hub.sd_storage_upload(&pj::s(&b, "session"), &who, b.get("signed"))
+        },
+        "/v1/org/storage/sign" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(pc::MAP_BODY_MAX)?);
+            c.relay.sd_sign_storage(&pj::s(&b, "session"), &who, b.get("map"), b.get("proof"), b.get("ts"))
+        },
         "/v1/apps/icon" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body_max(pc::ICON_MAX * 2)?);
             c.relay.hub.pc_icon_put(&pj::s(&b, "session"), &who, b.get("png"))
+        },
+        "/v1/org/background" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(pc::BACKGROUND_BODY_MAX)?);
+            c.relay.hub.pc_background_put(&pj::s(&b, "session"), &who, b.get("jpeg"))
         },
         // app and archive certificates
         "/v1/apps/c/hello" => |c: &mut Ctx| {
@@ -615,6 +799,48 @@ fn post_route(path: &str) -> Option<Route> {
             let (who, b) = (c.who(false)?, c.body()?);
             c.relay.hub.pc_sso_pending_add(&who, b.get("principal"), b.get("cid"), b.get("idp"), b.get("group"))
         },
+        // ID-1 (contract section 8)
+        "/v1/sso/c/propose" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(pc::PROPOSAL_BODY_MAX)?);
+            if who.kind != "sso" {
+                return m::forbidden(pc::SSO_ONLY);
+            }
+            let chain_pem = c.relay.pc_chain_pem(&who);
+            c.relay.hub.pc_sso_propose(&who, b.get("proposal"), b.get("sig"), &chain_pem)
+        },
+        "/v1/sso/c/suspend" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body()?);
+            c.relay.pc_sso_suspend(&who, &b, false)
+        },
+        "/v1/sso/c/unsuspend" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body()?);
+            c.relay.pc_sso_suspend(&who, &b, true)
+        },
+        // API-1 revision 4 6.3: the relay decides and audits every SCIM request of the org's SSO service
+        "/v1/sso/c/api-check" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(crate::api_scim::BODY_MAX)?);
+            crate::api_scim::api_check(c.relay, &who, &b)
+        },
+        "/v1/sso/c/status" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(pc::STATUS_BODY_MAX)?);
+            c.relay.hub.pc_sso_status(&who, &b)
+        },
+        "/v1/org/proposals/dismiss" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body()?);
+            c.relay.hub.pc_proposal_dismiss(&pj::s(&b, "session"), &who, b.get("org"), b.get("id"))
+        },
+        "/v1/org/proposals/read-again" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body()?);
+            c.relay.hub.pc_proposal_read_again(&pj::s(&b, "session"), &who, b.get("org"), b.get("provider"))
+        },
+        "/v1/org/policy/lower" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body_max(pc::POLICY_BODY_MAX)?);
+            c.relay.pc_lower_policy(&pj::s(&b, "session"), &who, &b)
+        },
+        "/v1/org/policy/lower/cancel" => |c: &mut Ctx| {
+            let (who, b) = (c.who(false)?, c.body()?);
+            c.relay.pc_cancel_lowering(&pj::s(&b, "session"), &who, &b)
+        },
         // canvases and lists
         "/v1/docs/post" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body_max(ce::BODY_MAX)?);
@@ -636,16 +862,34 @@ fn post_route(path: &str) -> Option<Route> {
     Some(route)
 }
 
+/// Whether the main port has this route (the gate table's test, meet_license.rs).
+#[cfg(test)]
+pub fn has_route(method: &str, path: &str) -> bool {
+    if method == "GET" {
+        get_route(path).is_some()
+    } else {
+        post_route(path).is_some()
+    }
+}
+
 /// do_GET / do_POST: 404 `unknown path`, else the route's answer through Handler._run. None when the client went
 /// away.
 pub fn dispatch(ctx: &mut Ctx, method: &str) -> Option<(u16, Obj)> {
-    if let Some(refused) = confined(ctx, method) {
+    // the web port's own allow-list ran first (it has no client certificate)
+    if let Some(refused) = ctx.web.is_none().then(|| confined(ctx, method)).flatten() {
         return run(ctx, Ok(Err(refused)));
     }
     let route = if method == "GET" { get_route(&ctx.path) } else { post_route(&ctx.path) };
     let Some(route) = route else {
         return Some((404, obj([("error", Value::from("unknown path"))])));
     };
+    // AC-1 2.4 and 4.10 (R42-1): the service gate and the seat refusal, before the route reads anything
+    if let Some(gate) = ctx.relay.hub.gate() {
+        let who = m::identity_from_cert(ctx.der).ok();
+        if let Err(refused) = gate.admits(method, &ctx.path, who.as_ref()) {
+            return run(ctx, Ok(Err(refused)));
+        }
+    }
     let result = std::panic::catch_unwind(AssertUnwindSafe(|| route(ctx)));
     run(ctx, result)
 }
@@ -655,6 +899,10 @@ pub fn dispatch(ctx: &mut Ctx, method: &str) -> Option<(u16, Obj)> {
 /// (the answer says `enclave: true`).
 fn confined(ctx: &Ctx, method: &str) -> Option<m::E> {
     let uris = m::cert_uris(ctx.der);
+    // AC-2b-D 8.4 (R2-L10, D16): a relay or signer client certificate is accepted on no route of the main port
+    if uris.iter().any(|u| u == m::RELAY_URI) {
+        return Some(m::E::Forbidden(m::RELAY_NOT_PERSON.into()));
+    }
     let (kind, mut words) = match pc::cert_kind(&uris) {
         Ok((kind, _)) => {
             let words = pc::service_confined(&kind, method, &ctx.path).to_string();
@@ -669,6 +917,14 @@ fn confined(ctx: &Ctx, method: &str) -> Option<m::E> {
     if words.is_empty() && s.enclave && (ctx.path.starts_with(bridge::C_PREFIX) || (method == "POST" && pc::ENCLAVE_BRIDGE_ROUTES.contains(&ctx.path.as_str()))) {
         return Some(m::E::Held(pc::ENCLAVE_BRIDGES.into(), obj([("enclave", Value::Bool(true))])));
     }
+    if words.is_empty() && kind == "person" && ctx.relay.hub.pc_pausing() {
+        // ID-1 (2.11): a suspended principal, or one past its status_stale_at, is refused on every route
+        if let Some(principal) = m::identity_from_cert(ctx.der).ok().map(|w| w.principal) {
+            if let Some(paused) = ctx.relay.hub.pc_paused(&principal) {
+                words = paused;
+            }
+        }
+    }
     if words.is_empty() {
         None
     } else {
@@ -678,18 +934,14 @@ fn confined(ctx: &Ctx, method: &str) -> Option<m::E> {
 
 // ── GET ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
-fn console(c: &mut Ctx, what: &str) -> R<Obj> {
-    let relay = c.relay.clone();
-    relay.console.gate(&c.address)?;
-    let who = c.who(false)?;
-    relay.console.service(&who)?;
-    let q = |name: &str, default: &str| c.q(name, default);
-    match what {
-        "summary" => Ok(relay.console.summary(&relay)),
-        "links" => Ok(relay.console.links_view(&relay, &q("room", ""))),
-        "logs" => relay.console.logs(&q("since", "0"), &q("level", "info"), &q("q", "")),
-        "servers" => Ok(relay.console.servers(&relay)),
-        _ => Ok(relay.console.directory(&relay)),
+/// AC-1 4.10: the optional `console_request` of /v1/admin/approve, revoke and invite, checked after the admin check
+/// and before anything else of the route: absent, or `rq_` and 16 lower-case hex.
+fn console_request(c: &Ctx, who: &crate::meet::Identity, b: &Obj) -> R<Option<String>> {
+    c.relay.hub.check_admin(&pj::s(b, "session"), who)?;
+    match b.get("console_request") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(id)) if crate::console_meet::request_id_ok(id) => Ok(Some(id.clone())),
+        Some(_) => Err(crate::meet::E::Bad(crate::console_meet::CONSOLE_REQUEST_FIELD.into())),
     }
 }
 
@@ -714,7 +966,9 @@ fn inbox(c: &mut Ctx) -> R<Obj> {
     let session = c.q("session", "");
     c.gate(&who, None, "", &session)?;
     let after = m::py_int(&c.q("after", "0"))?;
-    c.relay.hub.inbox(&session, &who, after, m::POLL_WAIT)
+    // NT-1 section 3.6: `wait` 1 to 25 seconds (the iPhone polls with 10)
+    let wait = push::inbox_wait(&c.q("wait", "25"))?;
+    c.relay.hub.inbox(&session, &who, after, wait)
 }
 
 fn dm_history(c: &mut Ctx) -> R<Obj> {
@@ -922,7 +1176,7 @@ fn files_send(c: &mut Ctx, file: &Obj, fh: std::fs::File, offset: u64, count: u6
     let name = pj::text_of(file, "name");
     let plain: String = name.chars().map(|ch| if (' '..'\u{7f}').contains(&ch) && ch != '"' && ch != '\\' { ch } else { '_' }).collect();
     let quoted = quote(&name);
-    let id = pj::text_of(&file, "id");
+    let id = pj::text_of(file, "id");
     let field = |k: &str| file.get(k).map(pj::py_str).unwrap_or_default();
     let headers = vec![
         ("Content-Type", "application/octet-stream".to_string()),
@@ -1081,7 +1335,7 @@ fn caption(c: &mut Ctx) -> R<Obj> {
 fn captions(c: &mut Ctx) -> R<Obj> {
     let (who, b) = (c.who(false)?, c.body()?);
     let weak = m::weak(b.get("weak"))?;
-    c.relay.hub.captions(&pj::s(&b, "peer"), &who, b.get("lines"), weak, b.get("sent_ms"))
+    c.relay.hub.captions(&pj::s(&b, "peer"), &who, b.get("lines"), weak, b.get("sent_ms"), b.get("for").filter(|v| !v.is_null()))
 }
 
 /// `{peer, late_history?, catchup?}` (`catchup`: the signed catch-up option of chat encryption, Hub::ce_catchup).
@@ -1128,10 +1382,16 @@ fn recording_consent(c: &mut Ctx) -> R<Obj> {
 fn hello(c: &mut Ctx) -> R<Obj> {
     let (who, b) = (c.who(false)?, c.body()?);
     let client = m::client(b.get("client"));
-    let mut reply = c.relay.hub.hello(&who, &c.address, &client)?;
+    let active = crate::meet_hub::parse_active(b.get("active"), Some(true))?;
+    let resume = b.get("resume").and_then(Value::as_str).unwrap_or("");
+    let mut reply = c.relay.hub.hello_resume(&who, &c.address, &client, active, resume)?;
     if let Some(info) = c.relay.outdated(&who, &client) {
         c.relay.note_outdated(&who, &info);
         reply.insert("update_required".into(), Value::Object(info));
+    }
+    // API-1 3.2: a device whose certificate is in its grace hears when the grace ends
+    if who.in_grace && !who.device.is_empty() {
+        reply.insert("grace".into(), Value::from(pj::iso_utc(who.grace_end)));
     }
     Ok(reply)
 }
@@ -1199,4 +1459,40 @@ fn admin_renewed(c: &mut Ctx) -> R<Obj> {
 fn enroll(c: &mut Ctx) -> R<Obj> {
     let (who, b) = (c.who(true)?, c.body()?);
     c.relay.hub.enroll(&who, b.get("csr_pem"), b.get("chain"), b.get("proof"), b.get("ts"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_old_console_routes_are_gone_and_the_admin_console_routes_exist() {
+        // AC-1 9.1: /v1/console/* answers the unknown-path 404 now
+        for p in ["/v1/console/summary", "/v1/console/links", "/v1/console/logs", "/v1/console/servers", "/v1/console/directory"] {
+            assert!(get_route(p).is_none() && post_route(p).is_none(), "{p}");
+        }
+        // AC-1 4.10 on the main port
+        assert!(get_route("/v1/admin/console/requests").is_some());
+        assert!(post_route("/v1/admin/console/invite").is_some());
+        assert!(post_route("/v1/admin/console/requests/decline").is_some());
+        // AC-2a 5.7 and 3.9 on the main port
+        assert!(get_route("/v1/admin/console/where").is_some());
+        assert!(get_route("/v1/admin/console/fleet-bootstrap").is_some());
+        assert!(post_route("/v1/admin/console/fleet-endorse").is_some());
+        // SE-1 support tickets on the main port
+        assert!(get_route("/v1/support/tickets").is_some() && post_route("/v1/support/tickets").is_some());
+        for p in ["/v1/admin/approve", "/v1/admin/revoke", "/v1/admin/invite"] {
+            assert!(post_route(p).is_some(), "{p}");
+        }
+    }
+
+    #[test]
+    fn the_largest_valid_support_ticket_fits_the_route_cap() {
+        // SE-1 7: 20,000 characters of body, 200 of title and 40 of version, every one an escaped surrogate pair
+        let escaped = |n: usize| "\\ud83d\\ude00".repeat(n);
+        let worst = format!("{{\"case\": \"c_0123456789ab\", \"title\": \"{}\", \"body\": \"{}\", \"version\": \"{}\"}}", escaped(200), escaped(20_000), escaped(40));
+        let parsed: Value = serde_json::from_str(&worst).unwrap();
+        assert_eq!(parsed["body"].as_str().unwrap().chars().count(), 20_000);
+        assert!(worst.len() <= SUPPORT_TICKET_BODY_MAX, "{} bytes", worst.len());
+    }
 }

@@ -1,0 +1,2279 @@
+{
+ "version": 1,
+ "contract": "AC-2a revision 3.4",
+ "encoding": "lp(...) writes each part as its byte length (4 bytes, big-endian) then its bytes. Inside lp: text (labels, ids such as c_, r_, en_, ap_ and sr_ ids, actions, targets, emails, roles) as UTF-8; integers (seq, generation, requestedAt) as decimal ASCII; hashes (previewHash, a previous rosterHash or policyHash, the first being 32 zero bytes) as their raw 32 bytes; credentialId, cose, attestationObject, clientDataJSON, spki and serials as raw bytes. canonical_json is AC-1 3.6's (CE-1 with null). In JSON: hashes and fingerprints are lowercase hex; keys, certificates, MACs, nonces and signatures are base64url without padding; serials are lowercase hex; times are milliseconds. Every ECDSA signature is the ASN.1 DER ECDSA-Sig-Value.",
+ "console_id": "c_0123456789abcdef",
+ "profile": {
+  "signature": "ecdsa-with-SHA384 (1.2.840.10045.4.3.3) for every certificate, by the P-384 CA key",
+  "names": "UTF8String attributes; CA subject [CN, O] in that order; server subject CN=<public host>; relay subject CN=<relayId>",
+  "validity": "UTCTime before 2050, GeneralizedTime from 2050; CA 10 years, leaves 90 days",
+  "serial": "16 bytes, first byte (b & 0x7f) | 0x40, so positive with no leading zero",
+  "extensions_order": [
+   "basicConstraints",
+   "keyUsage",
+   "extendedKeyUsage",
+   "subjectAltName",
+   "subjectKeyIdentifier",
+   "authorityKeyIdentifier"
+  ],
+  "ca": "basicConstraints critical CA true pathLen 0; keyUsage critical keyCertSign cRLSign; subjectKeyIdentifier",
+  "server": "basicConstraints critical CA false (empty SEQUENCE); keyUsage critical digitalSignature; extendedKeyUsage serverAuth; subjectAltName DNS names",
+  "relay": "basicConstraints critical CA false; keyUsage critical digitalSignature; extendedKeyUsage clientAuth; subjectAltName URI urn:lucid:relay:<relayId>; subjectKeyIdentifier; authorityKeyIdentifier keyIdentifier",
+  "key_identifier": "the first 20 bytes of SHA-256 of the subjectPublicKey bits (the SEC1 uncompressed point), RFC 7093 method 1",
+  "pin": "SHA-256 of the CA certificate's SubjectPublicKeyInfo DER, 64 lowercase hex; the CA fingerprint trust-ca takes is the same value"
+ },
+ "keys": {
+  "ca": {
+   "curve": "P-384",
+   "label": "ca-1",
+   "d_hex": "3c54373a8960b7257d79bcad5e3d77f74026784f87db22591cf6beb26a6b2d898ca9b334e9370242d9f188d24160d65a",
+   "pkcs8_hex": "3081b6020100301006072a8648ce3d020106052b8104002204819e30819b02010104303c54373a8960b7257d79bcad5e3d77f74026784f87db22591cf6beb26a6b2d898ca9b334e9370242d9f188d24160d65aa16403620004dcd91dad0ac7e82f489aae609f4f0c65f434b886d05cf6e96da0db229c991671c6eac118685a804312a3560e33d95e4d6d691ac695239d4712deaf8d153370c2da28dfc43c69c819f2e586e5f8b614914bc9e0ccea6d7988538086191675ef32",
+   "spki_hex": "3076301006072a8648ce3d020106052b8104002203620004dcd91dad0ac7e82f489aae609f4f0c65f434b886d05cf6e96da0db229c991671c6eac118685a804312a3560e33d95e4d6d691ac695239d4712deaf8d153370c2da28dfc43c69c819f2e586e5f8b614914bc9e0ccea6d7988538086191675ef32"
+  },
+  "ca2": {
+   "curve": "P-384",
+   "label": "ca-2",
+   "d_hex": "70d832cd118c048baec7414b3bc08e5a5da0d04ebdba0fd2a23d41814d8ec5523b14e323561c3c4acea5513e97452a03",
+   "pkcs8_hex": "3081b6020100301006072a8648ce3d020106052b8104002204819e30819b020101043070d832cd118c048baec7414b3bc08e5a5da0d04ebdba0fd2a23d41814d8ec5523b14e323561c3c4acea5513e97452a03a16403620004ae1304bf1fe1352cc8f708fae5013aada7045c1dc89259c494e36bf027b4d01ab0701f87f676b1eef69644351c3637070a59c67e7de0f375df13c692b3330fd2fa86289eaf3af223c46a3af7c37668e83906c30a758f8dd26b4df9a619307135",
+   "spki_hex": "3076301006072a8648ce3d020106052b8104002203620004ae1304bf1fe1352cc8f708fae5013aada7045c1dc89259c494e36bf027b4d01ab0701f87f676b1eef69644351c3637070a59c67e7de0f375df13c692b3330fd2fa86289eaf3af223c46a3af7c37668e83906c30a758f8dd26b4df9a619307135"
+  },
+  "relay": {
+   "curve": "P-256",
+   "label": "relay-a-1",
+   "d_hex": "28f902a11ea93e35b866a96f57a87f24b97911368d1245923f5c3eaedded2058",
+   "pkcs8_hex": "308187020100301306072a8648ce3d020106082a8648ce3d030107046d306b020101042028f902a11ea93e35b866a96f57a87f24b97911368d1245923f5c3eaedded2058a144034200048e1bc841a90d28bacb96ee4b11f38d55822d0fde1e71acc855ad3c61caac1154a0e80f9992c1671c1bc9b667d4b07b85311d3583b5bb90f8cd1efe070f13476a",
+   "spki_hex": "3059301306072a8648ce3d020106082a8648ce3d030107034200048e1bc841a90d28bacb96ee4b11f38d55822d0fde1e71acc855ad3c61caac1154a0e80f9992c1671c1bc9b667d4b07b85311d3583b5bb90f8cd1efe070f13476a"
+  },
+  "relay_new": {
+   "curve": "P-256",
+   "label": "relay-a-2",
+   "d_hex": "c2231eb3ff3350900d0d331e84b27eb4f050b23c512c193f48e08420fbb1ab30",
+   "pkcs8_hex": "308187020100301306072a8648ce3d020106082a8648ce3d030107046d306b0201010420c2231eb3ff3350900d0d331e84b27eb4f050b23c512c193f48e08420fbb1ab30a14403420004cbf48158c62c903b3985abad4140aafef277e6875585a4b1bbadd823ff2a175c962488590169dbd481033d54438746668a4f2d4762d41f4905ba1674881a1b63",
+   "spki_hex": "3059301306072a8648ce3d020106082a8648ce3d03010703420004cbf48158c62c903b3985abad4140aafef277e6875585a4b1bbadd823ff2a175c962488590169dbd481033d54438746668a4f2d4762d41f4905ba1674881a1b63"
+  },
+  "relay_renewed": {
+   "curve": "P-256",
+   "label": "relay-a-renewed",
+   "d_hex": "090eb42e6b66cb4aa4aae41e11b8145cf455f9ab58fd7a2de61e7efc4d3154c6",
+   "pkcs8_hex": "308187020100301306072a8648ce3d020106082a8648ce3d030107046d306b0201010420090eb42e6b66cb4aa4aae41e11b8145cf455f9ab58fd7a2de61e7efc4d3154c6a1440342000473b3ef9df3a0822539d3889dc86946bf2955c0354b808275800507db13f7d2cff749beb35d95e3c470dfa16db3481207c4dd08b1d2fbbe25b77b6b92c7814925",
+   "spki_hex": "3059301306072a8648ce3d020106082a8648ce3d0301070342000473b3ef9df3a0822539d3889dc86946bf2955c0354b808275800507db13f7d2cff749beb35d95e3c470dfa16db3481207c4dd08b1d2fbbe25b77b6b92c7814925"
+  },
+  "server": {
+   "curve": "P-256",
+   "label": "server-1",
+   "d_hex": "0aabc9bfdbce2365a39587856d4be90d3882a16e71e0e534aca125d3108ca520",
+   "pkcs8_hex": "308187020100301306072a8648ce3d020106082a8648ce3d030107046d306b02010104200aabc9bfdbce2365a39587856d4be90d3882a16e71e0e534aca125d3108ca520a144034200046d5dd722f96c3a44306d421779704816c9c3c1d3a1b652d8d77d559768d9ece4745b04e6242a7fa088b1fccc74bc8e3008e6fc62d70e2325f789b3a0d0264f57",
+   "spki_hex": "3059301306072a8648ce3d020106082a8648ce3d030107034200046d5dd722f96c3a44306d421779704816c9c3c1d3a1b652d8d77d559768d9ece4745b04e6242a7fa088b1fccc74bc8e3008e6fc62d70e2325f789b3a0d0264f57"
+  },
+  "server_next": {
+   "curve": "P-256",
+   "label": "server-2",
+   "d_hex": "fab42503bdaa0414e8d45f65079589c2584673aff0db010b32201dcda4f709fa",
+   "pkcs8_hex": "308187020100301306072a8648ce3d020106082a8648ce3d030107046d306b0201010420fab42503bdaa0414e8d45f65079589c2584673aff0db010b32201dcda4f709faa14403420004e97e3e352e274809259c9fd3ed71ecab5517452f4ea76cf7bcdd532644ef14014344bc71a8694f92954aad640bc561c371303747a843e6011b680627016fcc07",
+   "spki_hex": "3059301306072a8648ce3d020106082a8648ce3d03010703420004e97e3e352e274809259c9fd3ed71ecab5517452f4ea76cf7bcdd532644ef14014344bc71a8694f92954aad640bc561c371303747a843e6011b680627016fcc07"
+  },
+  "server_stolen": {
+   "curve": "P-256",
+   "label": "server-0",
+   "d_hex": "66f8d3455dc05511155e025f277d19ed078da14d1e0167ca3c6719c15fffbdcb",
+   "pkcs8_hex": "308187020100301306072a8648ce3d020106082a8648ce3d030107046d306b020101042066f8d3455dc05511155e025f277d19ed078da14d1e0167ca3c6719c15fffbdcba1440342000409401cd0eee870f02866d5ef5d7048b1d8a0632615fe978e2beac6567e545aca29a5856eac84443b80bd240fe2caaa502a9a8ebfa23e1c89e9e38a63b1798838",
+   "spki_hex": "3059301306072a8648ce3d020106082a8648ce3d0301070342000409401cd0eee870f02866d5ef5d7048b1d8a0632615fe978e2beac6567e545aca29a5856eac84443b80bd240fe2caaa502a9a8ebfa23e1c89e9e38a63b1798838"
+  },
+  "thief_ca": {
+   "curve": "P-384",
+   "label": "thief-ca",
+   "d_hex": "bdb09b54e93543f668ad48198c01efac4508ad340eb9970c3efd91e9fd503db3cc33fc004ee3dc1dbb4cda0f941b8e59",
+   "pkcs8_hex": "3081b6020100301006072a8648ce3d020106052b8104002204819e30819b0201010430bdb09b54e93543f668ad48198c01efac4508ad340eb9970c3efd91e9fd503db3cc33fc004ee3dc1dbb4cda0f941b8e59a1640362000474c6f93432e529b88d028a1c8b0a0259348e1071ce630cf7e927bb94faafbb13d9cc311200f19dec08f4b1d19894d56a39eb3c845ae226efa3497b882eba710a55671c11d7d5f7170c699e83cb7c93de00d6efe9ac2acf0855f56b55a8f09a18",
+   "spki_hex": "3076301006072a8648ce3d020106052b810400220362000474c6f93432e529b88d028a1c8b0a0259348e1071ce630cf7e927bb94faafbb13d9cc311200f19dec08f4b1d19894d56a39eb3c845ae226efa3497b882eba710a55671c11d7d5f7170c699e83cb7c93de00d6efe9ac2acf0855f56b55a8f09a18"
+  },
+  "thief_relay": {
+   "curve": "P-256",
+   "label": "thief-relay",
+   "d_hex": "565133725ed32f64af81a6335b7cde5fd52bd729955d7a6e0fc7142a893448f8",
+   "pkcs8_hex": "308187020100301306072a8648ce3d020106082a8648ce3d030107046d306b0201010420565133725ed32f64af81a6335b7cde5fd52bd729955d7a6e0fc7142a893448f8a144034200041a4decb74662b80bb8d99958eb0d8197608d1195d3974b8be9ba02c4c2e1fa27b207994e3c123925a6b3621b54104de9675c6f8b58354852f90c76349a6b60cd",
+   "spki_hex": "3059301306072a8648ce3d020106082a8648ce3d030107034200041a4decb74662b80bb8d99958eb0d8197608d1195d3974b8be9ba02c4c2e1fa27b207994e3c123925a6b3621b54104de9675c6f8b58354852f90c76349a6b60cd"
+  }
+ },
+ "ca": {
+  "generation": 1,
+  "host": "console.acme.example",
+  "subject": [
+   "CN=Lucid Admin Console management CA",
+   "O=console.acme.example"
+  ],
+  "serial_hex": "653cdfeadf10794e9335a3b974c52fad",
+  "not_before_ms": 1794873600000,
+  "not_after_ms": 2110492800000,
+  "pin_hex": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+  "tbs_hex": "3082019ca0030201020210653cdfeadf10794e9335a3b974c52fad300a06082a8648ce3d040303304b312a302806035504030c214c756369642041646d696e20436f6e736f6c65206d616e6167656d656e74204341311d301b060355040a0c14636f6e736f6c652e61636d652e6578616d706c65301e170d3236313131373030303030305a170d3336313131373030303030305a304b312a302806035504030c214c756369642041646d696e20436f6e736f6c65206d616e6167656d656e74204341311d301b060355040a0c14636f6e736f6c652e61636d652e6578616d706c653076301006072a8648ce3d020106052b8104002203620004dcd91dad0ac7e82f489aae609f4f0c65f434b886d05cf6e96da0db229c991671c6eac118685a804312a3560e33d95e4d6d691ac695239d4712deaf8d153370c2da28dfc43c69c819f2e586e5f8b614914bc9e0ccea6d7988538086191675ef32a345304330120603551d130101ff040830060101ff020100300e0603551d0f0101ff040403020106301d0603551d0e04160414117b1f81b5fc32b7295edc4e9f466ae61b628445",
+  "der_hex": "308202173082019ca0030201020210653cdfeadf10794e9335a3b974c52fad300a06082a8648ce3d040303304b312a302806035504030c214c756369642041646d696e20436f6e736f6c65206d616e6167656d656e74204341311d301b060355040a0c14636f6e736f6c652e61636d652e6578616d706c65301e170d3236313131373030303030305a170d3336313131373030303030305a304b312a302806035504030c214c756369642041646d696e20436f6e736f6c65206d616e6167656d656e74204341311d301b060355040a0c14636f6e736f6c652e61636d652e6578616d706c653076301006072a8648ce3d020106052b8104002203620004dcd91dad0ac7e82f489aae609f4f0c65f434b886d05cf6e96da0db229c991671c6eac118685a804312a3560e33d95e4d6d691ac695239d4712deaf8d153370c2da28dfc43c69c819f2e586e5f8b614914bc9e0ccea6d7988538086191675ef32a345304330120603551d130101ff040830060101ff020100300e0603551d0f0101ff040403020106301d0603551d0e04160414117b1f81b5fc32b7295edc4e9f466ae61b628445300a06082a8648ce3d0403030369003066023100ed8c9c34f86d2b6dc59e2d4e82daa93b45e9ceecda1b5480a3b077fa1d911afd1eb0fce83c58f61e9a837937080b2598023100a39b87a051136656f99200d17a107e95ce2f23dfffd2061e8e19e6f54c17ca6016d2f97ffeb51896cee916575fb94f7e",
+  "pem": "-----BEGIN CERTIFICATE-----\nMIICFzCCAZygAwIBAgIQZTzf6t8QeU6TNaO5dMUvrTAKBggqhkjOPQQDAzBLMSow\nKAYDVQQDDCFMdWNpZCBBZG1pbiBDb25zb2xlIG1hbmFnZW1lbnQgQ0ExHTAbBgNV\nBAoMFGNvbnNvbGUuYWNtZS5leGFtcGxlMB4XDTI2MTExNzAwMDAwMFoXDTM2MTEx\nNzAwMDAwMFowSzEqMCgGA1UEAwwhTHVjaWQgQWRtaW4gQ29uc29sZSBtYW5hZ2Vt\nZW50IENBMR0wGwYDVQQKDBRjb25zb2xlLmFjbWUuZXhhbXBsZTB2MBAGByqGSM49\nAgEGBSuBBAAiA2IABNzZHa0Kx+gvSJquYJ9PDGX0NLiG0Fz26W2g2yKcmRZxxurB\nGGhagEMSo1YOM9leTW1pGsaVI51HEt6vjRUzcMLaKN/EPGnIGfLlhuX4thSRS8ng\nzOpteYhTgIYZFnXvMqNFMEMwEgYDVR0TAQH/BAgwBgEB/wIBADAOBgNVHQ8BAf8E\nBAMCAQYwHQYDVR0OBBYEFBF7H4G1/DK3KV7cTp9GauYbYoRFMAoGCCqGSM49BAMD\nA2kAMGYCMQDtjJw0+G0rbcWeLU6C2qk7RenO7NobVICjsHf6HZEa/R6w/Og8WPYe\nmoN5NwgLJZgCMQCjm4egURNmVvmSANF6EH6Vzi8j3//SBh6OGeb1TBfKYBbS+X/+\ntRiWzukWV1+5T34=\n-----END CERTIFICATE-----\n"
+ },
+ "ca2": {
+  "generation": 2,
+  "host": "console.acme.example",
+  "subject": [
+   "CN=Lucid Admin Console management CA",
+   "O=console.acme.example"
+  ],
+  "serial_hex": "6a1be2b179cf444c0649cd4eeb69717c",
+  "not_before_ms": 1797465600000,
+  "not_after_ms": 2113084800000,
+  "pin_hex": "d52ba96110d02ef3cc872998883ca273581bc5b406ee6e3df2cbbbaf24690522",
+  "tbs_hex": "3082019ca00302010202106a1be2b179cf444c0649cd4eeb69717c300a06082a8648ce3d040303304b312a302806035504030c214c756369642041646d696e20436f6e736f6c65206d616e6167656d656e74204341311d301b060355040a0c14636f6e736f6c652e61636d652e6578616d706c65301e170d3236313231373030303030305a170d3336313231373030303030305a304b312a302806035504030c214c756369642041646d696e20436f6e736f6c65206d616e6167656d656e74204341311d301b060355040a0c14636f6e736f6c652e61636d652e6578616d706c653076301006072a8648ce3d020106052b8104002203620004ae1304bf1fe1352cc8f708fae5013aada7045c1dc89259c494e36bf027b4d01ab0701f87f676b1eef69644351c3637070a59c67e7de0f375df13c692b3330fd2fa86289eaf3af223c46a3af7c37668e83906c30a758f8dd26b4df9a619307135a345304330120603551d130101ff040830060101ff020100300e0603551d0f0101ff040403020106301d0603551d0e04160414625ac2ab99ac5b263156c9221ab05eeff4ba645e",
+  "der_hex": "308202153082019ca00302010202106a1be2b179cf444c0649cd4eeb69717c300a06082a8648ce3d040303304b312a302806035504030c214c756369642041646d696e20436f6e736f6c65206d616e6167656d656e74204341311d301b060355040a0c14636f6e736f6c652e61636d652e6578616d706c65301e170d3236313231373030303030305a170d3336313231373030303030305a304b312a302806035504030c214c756369642041646d696e20436f6e736f6c65206d616e6167656d656e74204341311d301b060355040a0c14636f6e736f6c652e61636d652e6578616d706c653076301006072a8648ce3d020106052b8104002203620004ae1304bf1fe1352cc8f708fae5013aada7045c1dc89259c494e36bf027b4d01ab0701f87f676b1eef69644351c3637070a59c67e7de0f375df13c692b3330fd2fa86289eaf3af223c46a3af7c37668e83906c30a758f8dd26b4df9a619307135a345304330120603551d130101ff040830060101ff020100300e0603551d0f0101ff040403020106301d0603551d0e04160414625ac2ab99ac5b263156c9221ab05eeff4ba645e300a06082a8648ce3d040303036700306402307267f27735b845a6344406a8f51b396972b22994cd894229dd9026a4be46f877092f430d22e76768dd9814d3ce496dcb02306167810e8b31781a4388583449046edd77bf5ad3a1fbe4ea3406bb445bf2e497a1045e7e188b66846d299ffa8fb0f601",
+  "pem": "-----BEGIN CERTIFICATE-----\nMIICFTCCAZygAwIBAgIQahvisXnPREwGSc1O62lxfDAKBggqhkjOPQQDAzBLMSow\nKAYDVQQDDCFMdWNpZCBBZG1pbiBDb25zb2xlIG1hbmFnZW1lbnQgQ0ExHTAbBgNV\nBAoMFGNvbnNvbGUuYWNtZS5leGFtcGxlMB4XDTI2MTIxNzAwMDAwMFoXDTM2MTIx\nNzAwMDAwMFowSzEqMCgGA1UEAwwhTHVjaWQgQWRtaW4gQ29uc29sZSBtYW5hZ2Vt\nZW50IENBMR0wGwYDVQQKDBRjb25zb2xlLmFjbWUuZXhhbXBsZTB2MBAGByqGSM49\nAgEGBSuBBAAiA2IABK4TBL8f4TUsyPcI+uUBOq2nBFwdyJJZxJTja/AntNAasHAf\nh/Z2se72lkQ1HDY3BwpZxn594PN13xPGkrMzD9L6hiierzryI8RqOvfDdmjoOQbD\nCnWPjdJrTfmmGTBxNaNFMEMwEgYDVR0TAQH/BAgwBgEB/wIBADAOBgNVHQ8BAf8E\nBAMCAQYwHQYDVR0OBBYEFGJawquZrFsmMVbJIhqwXu/0umReMAoGCCqGSM49BAMD\nA2cAMGQCMHJn8nc1uEWmNEQGqPUbOWlysimUzYlCKd2QJqS+Rvh3CS9DDSLnZ2jd\nmBTTzkltywIwYWeBDosxeBpDiFg0SQRu3Xe/WtOh++TqNAa7RFvy5JehBF5+GItm\nhG0pn/qPsPYB\n-----END CERTIFICATE-----\n"
+ },
+ "server": {
+  "subject": [
+   "CN=console.acme.example"
+  ],
+  "dns": [
+   "console.acme.example",
+   "fleet.acme.example"
+  ],
+  "serial_hex": "60192cdd8390123ed602df899c7bf2c5",
+  "not_before_ms": 1794873600000,
+  "not_after_ms": 1802649600000,
+  "spki_sha256_hex": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+  "tbs_hex": "30820178a003020102021060192cdd8390123ed602df899c7bf2c5300a06082a8648ce3d040303304b312a302806035504030c214c756369642041646d696e20436f6e736f6c65206d616e6167656d656e74204341311d301b060355040a0c14636f6e736f6c652e61636d652e6578616d706c65301e170d3236313131373030303030305a170d3237303231353030303030305a301f311d301b06035504030c14636f6e736f6c652e61636d652e6578616d706c653059301306072a8648ce3d020106082a8648ce3d030107034200046d5dd722f96c3a44306d421779704816c9c3c1d3a1b652d8d77d559768d9ece4745b04e6242a7fa088b1fccc74bc8e3008e6fc62d70e2325f789b3a0d0264f57a36a3068300c0603551d130101ff04023000300e0603551d0f0101ff04040302078030130603551d25040c300a06082b0601050507030130330603551d11042c302a8214636f6e736f6c652e61636d652e6578616d706c658212666c6565742e61636d652e6578616d706c65",
+  "der_hex": "308201f330820178a003020102021060192cdd8390123ed602df899c7bf2c5300a06082a8648ce3d040303304b312a302806035504030c214c756369642041646d696e20436f6e736f6c65206d616e6167656d656e74204341311d301b060355040a0c14636f6e736f6c652e61636d652e6578616d706c65301e170d3236313131373030303030305a170d3237303231353030303030305a301f311d301b06035504030c14636f6e736f6c652e61636d652e6578616d706c653059301306072a8648ce3d020106082a8648ce3d030107034200046d5dd722f96c3a44306d421779704816c9c3c1d3a1b652d8d77d559768d9ece4745b04e6242a7fa088b1fccc74bc8e3008e6fc62d70e2325f789b3a0d0264f57a36a3068300c0603551d130101ff04023000300e0603551d0f0101ff04040302078030130603551d25040c300a06082b0601050507030130330603551d11042c302a8214636f6e736f6c652e61636d652e6578616d706c658212666c6565742e61636d652e6578616d706c65300a06082a8648ce3d0403030369003066023100dd5d611ae0d2416ba72aeacbe36da82f03a741fb0a0651a8c02cc53ffdb0968dc615075577e2a248088f4ae17a110bfc023100c46ee7b9155af81dd713008c0cfe3aea04fc150787f0ae436e103a3910af5dddc4a4a37d67dce6211863435d1aabb033"
+ },
+ "relay": {
+  "relay_id": "r_3f0a9c2b7d5e1f48",
+  "subject": [
+   "CN=r_3f0a9c2b7d5e1f48"
+  ],
+  "uri": "urn:lucid:relay:r_3f0a9c2b7d5e1f48",
+  "serial_hex": "71ba231310aff865af9210a82529f4ab",
+  "not_before_ms": 1794877200000,
+  "not_after_ms": 1802653200000,
+  "tbs_hex": "308201b2a003020102021071ba231310aff865af9210a82529f4ab300a06082a8648ce3d040303304b312a302806035504030c214c756369642041646d696e20436f6e736f6c65206d616e6167656d656e74204341311d301b060355040a0c14636f6e736f6c652e61636d652e6578616d706c65301e170d3236313131373031303030305a170d3237303231353031303030305a301d311b301906035504030c12725f336630613963326237643565316634383059301306072a8648ce3d020106082a8648ce3d030107034200048e1bc841a90d28bacb96ee4b11f38d55822d0fde1e71acc855ad3c61caac1154a0e80f9992c1671c1bc9b667d4b07b85311d3583b5bb90f8cd1efe070f13476aa381a53081a2300c0603551d130101ff04023000300e0603551d0f0101ff04040302078030130603551d25040c300a06082b06010505070302302d0603551d1104263024862275726e3a6c756369643a72656c61793a725f33663061396332623764356531663438301d0603551d0e04160414d256c325c77fd253fd350a243e9fdb92e5c4571c301f0603551d23041830168014117b1f81b5fc32b7295edc4e9f466ae61b628445",
+  "der_hex": "3082022b308201b2a003020102021071ba231310aff865af9210a82529f4ab300a06082a8648ce3d040303304b312a302806035504030c214c756369642041646d696e20436f6e736f6c65206d616e6167656d656e74204341311d301b060355040a0c14636f6e736f6c652e61636d652e6578616d706c65301e170d3236313131373031303030305a170d3237303231353031303030305a301d311b301906035504030c12725f336630613963326237643565316634383059301306072a8648ce3d020106082a8648ce3d030107034200048e1bc841a90d28bacb96ee4b11f38d55822d0fde1e71acc855ad3c61caac1154a0e80f9992c1671c1bc9b667d4b07b85311d3583b5bb90f8cd1efe070f13476aa381a53081a2300c0603551d130101ff04023000300e0603551d0f0101ff04040302078030130603551d25040c300a06082b06010505070302302d0603551d1104263024862275726e3a6c756369643a72656c61793a725f33663061396332623764356531663438301d0603551d0e04160414d256c325c77fd253fd350a243e9fdb92e5c4571c301f0603551d23041830168014117b1f81b5fc32b7295edc4e9f466ae61b628445300a06082a8648ce3d040303036700306402305569206a155c2b24ed7bc4d678d6003cb3ad85dca8b9d0146de7e831b6266afb5403c4fb23928059f4bef7806c605788023075aeb574aa85e7a9fe6b1677a24fc0f969c331d176aa8f7a31d91ea8b329dbbc85565ac79538b85d0512eecaae21b13f"
+ },
+ "manifest": {
+  "label": "lucid-fleet-trust-v1",
+  "checks": [
+   "unpinned-ca",
+   "signature",
+   "rollback-seq",
+   "same-seq-different-bytes",
+   "rollback-issued",
+   "issued-future",
+   "expired",
+   "revoked",
+   "not-listed"
+  ],
+  "about": "signing input lp(label, canonical_json(manifest without sig)); sig by the CA of caGeneration (ECDSA P-384 SHA-384, DER, base64url); stored.sha256 is SHA-256 of canonical_json of the whole stored manifest (sig included), so \"equal with the same bytes\" compares that digest",
+  "base": {
+   "v": 1,
+   "consoleId": "c_0123456789abcdef",
+   "caGeneration": 1,
+   "seq": 7,
+   "issuedAt": 1795737600000,
+   "expiresAt": 1796947200000,
+   "leaves": [
+    {
+     "spkiSha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+     "serial": "60192cdd8390123ed602df899c7bf2c5",
+     "role": "current",
+     "notAfter": 1802649600000
+    },
+    {
+     "spkiSha256": "f29a6f745a3c17303e47c4aea82020cbda0840de6814deac71ff66b77855950d",
+     "serial": "7aa919eb868df19c4efd16eecb19aba1",
+     "role": "next",
+     "notAfter": 1807833600000
+    }
+   ],
+   "revoked": [
+    {
+     "spkiSha256": "d9d74778c2ae6569c45c647899afc48ced535f424d75f5bfab0c7362c8031b98",
+     "serial": "6c521b1ecc59338659fedc4d66c539fe",
+     "at": 1795651200000
+    }
+   ],
+   "nextCa": null,
+   "sig": "MGUCMFhaDGzFOzy32mZgWthR_Fqcovny8iC49Dez1GdAn0ePaUyy-g17CCGV9GiRIuQC_AIxAJryEQL3xKi0z1yeJhY8U38ZsvqZ2YfE5BNNe6etlYD34oiP3NDaQOngMQ097yD-zQ"
+  },
+  "signing_input_hex": "000000146c756369642d666c6565742d74727573742d7631000002777b22636147656e65726174696f6e223a312c22636f6e736f6c654964223a22635f30313233343536373839616263646566222c22657870697265734174223a313739363934373230303030302c226973737565644174223a313739353733373630303030302c226c6561766573223a5b7b226e6f744166746572223a313830323634393630303030302c22726f6c65223a2263757272656e74222c2273657269616c223a223630313932636464383339303132336564363032646638393963376266326335222c2273706b69536861323536223a2238626262386566613132643462376136623435623662653439636538633333366562343137653839373163363938666137633936653439626264313431396330227d2c7b226e6f744166746572223a313830373833333630303030302c22726f6c65223a226e657874222c2273657269616c223a223761613931396562383638646631396334656664313665656362313961626131222c2273706b69536861323536223a2266323961366637343561336331373330336534376334616561383230323063626461303834306465363831346465616337316666363662373738353539353064227d5d2c226e6578744361223a6e756c6c2c227265766f6b6564223a5b7b226174223a313739353635313230303030302c2273657269616c223a223663353231623165636335393333383635396665646334643636633533396665222c2273706b69536861323536223a2264396437343737386332616536353639633435633634373839396166633438636564353335663432346437356635626661623063373336326338303331623938227d5d2c22736571223a372c2276223a317d",
+  "cases": [
+   {
+    "name": "good",
+    "manifest": {
+     "v": 1,
+     "consoleId": "c_0123456789abcdef",
+     "caGeneration": 1,
+     "seq": 7,
+     "issuedAt": 1795737600000,
+     "expiresAt": 1796947200000,
+     "leaves": [
+      {
+       "spkiSha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+       "serial": "60192cdd8390123ed602df899c7bf2c5",
+       "role": "current",
+       "notAfter": 1802649600000
+      },
+      {
+       "spkiSha256": "f29a6f745a3c17303e47c4aea82020cbda0840de6814deac71ff66b77855950d",
+       "serial": "7aa919eb868df19c4efd16eecb19aba1",
+       "role": "next",
+       "notAfter": 1807833600000
+      }
+     ],
+     "revoked": [
+      {
+       "spkiSha256": "d9d74778c2ae6569c45c647899afc48ced535f424d75f5bfab0c7362c8031b98",
+       "serial": "6c521b1ecc59338659fedc4d66c539fe",
+       "at": 1795651200000
+      }
+     ],
+     "nextCa": null,
+     "sig": "MGUCMFhaDGzFOzy32mZgWthR_Fqcovny8iC49Dez1GdAn0ePaUyy-g17CCGV9GiRIuQC_AIxAJryEQL3xKi0z1yeJhY8U38ZsvqZ2YfE5BNNe6etlYD34oiP3NDaQOngMQ097yD-zQ"
+    },
+    "pins": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "active"
+     }
+    ],
+    "stored": {
+     "seq": 6,
+     "issuedAt": 1795651200000,
+     "sha256": "a9a304a3a7e2d3e2c249936ec8378cb5e8678c2c949eb8ccb107def8c421b2de"
+    },
+    "trusted_time_ms": 1795741200000,
+    "wall_ms": 1795741200000,
+    "leaf_spki_sha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+    "ok": true,
+    "why": null
+   },
+   {
+    "name": "good next leaf",
+    "manifest": {
+     "v": 1,
+     "consoleId": "c_0123456789abcdef",
+     "caGeneration": 1,
+     "seq": 7,
+     "issuedAt": 1795737600000,
+     "expiresAt": 1796947200000,
+     "leaves": [
+      {
+       "spkiSha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+       "serial": "60192cdd8390123ed602df899c7bf2c5",
+       "role": "current",
+       "notAfter": 1802649600000
+      },
+      {
+       "spkiSha256": "f29a6f745a3c17303e47c4aea82020cbda0840de6814deac71ff66b77855950d",
+       "serial": "7aa919eb868df19c4efd16eecb19aba1",
+       "role": "next",
+       "notAfter": 1807833600000
+      }
+     ],
+     "revoked": [
+      {
+       "spkiSha256": "d9d74778c2ae6569c45c647899afc48ced535f424d75f5bfab0c7362c8031b98",
+       "serial": "6c521b1ecc59338659fedc4d66c539fe",
+       "at": 1795651200000
+      }
+     ],
+     "nextCa": null,
+     "sig": "MGUCMFhaDGzFOzy32mZgWthR_Fqcovny8iC49Dez1GdAn0ePaUyy-g17CCGV9GiRIuQC_AIxAJryEQL3xKi0z1yeJhY8U38ZsvqZ2YfE5BNNe6etlYD34oiP3NDaQOngMQ097yD-zQ"
+    },
+    "pins": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "active"
+     }
+    ],
+    "stored": {
+     "seq": 6,
+     "issuedAt": 1795651200000,
+     "sha256": "a9a304a3a7e2d3e2c249936ec8378cb5e8678c2c949eb8ccb107def8c421b2de"
+    },
+    "trusted_time_ms": 1795741200000,
+    "wall_ms": 1795741200000,
+    "leaf_spki_sha256": "f29a6f745a3c17303e47c4aea82020cbda0840de6814deac71ff66b77855950d",
+    "ok": true,
+    "why": null
+   },
+   {
+    "name": "same seq same bytes",
+    "manifest": {
+     "v": 1,
+     "consoleId": "c_0123456789abcdef",
+     "caGeneration": 1,
+     "seq": 7,
+     "issuedAt": 1795737600000,
+     "expiresAt": 1796947200000,
+     "leaves": [
+      {
+       "spkiSha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+       "serial": "60192cdd8390123ed602df899c7bf2c5",
+       "role": "current",
+       "notAfter": 1802649600000
+      },
+      {
+       "spkiSha256": "f29a6f745a3c17303e47c4aea82020cbda0840de6814deac71ff66b77855950d",
+       "serial": "7aa919eb868df19c4efd16eecb19aba1",
+       "role": "next",
+       "notAfter": 1807833600000
+      }
+     ],
+     "revoked": [
+      {
+       "spkiSha256": "d9d74778c2ae6569c45c647899afc48ced535f424d75f5bfab0c7362c8031b98",
+       "serial": "6c521b1ecc59338659fedc4d66c539fe",
+       "at": 1795651200000
+      }
+     ],
+     "nextCa": null,
+     "sig": "MGUCMFhaDGzFOzy32mZgWthR_Fqcovny8iC49Dez1GdAn0ePaUyy-g17CCGV9GiRIuQC_AIxAJryEQL3xKi0z1yeJhY8U38ZsvqZ2YfE5BNNe6etlYD34oiP3NDaQOngMQ097yD-zQ"
+    },
+    "pins": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "active"
+     }
+    ],
+    "stored": {
+     "seq": 7,
+     "issuedAt": 1795737600000,
+     "sha256": "ce9834936749ffe2a03ea68fe9ae9623156ef2fb9d0a069da96b95d359e84f07"
+    },
+    "trusted_time_ms": 1795741200000,
+    "wall_ms": 1795741200000,
+    "leaf_spki_sha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+    "ok": true,
+    "why": null
+   },
+   {
+    "name": "first manifest, nothing stored",
+    "manifest": {
+     "v": 1,
+     "consoleId": "c_0123456789abcdef",
+     "caGeneration": 1,
+     "seq": 7,
+     "issuedAt": 1795737600000,
+     "expiresAt": 1796947200000,
+     "leaves": [
+      {
+       "spkiSha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+       "serial": "60192cdd8390123ed602df899c7bf2c5",
+       "role": "current",
+       "notAfter": 1802649600000
+      },
+      {
+       "spkiSha256": "f29a6f745a3c17303e47c4aea82020cbda0840de6814deac71ff66b77855950d",
+       "serial": "7aa919eb868df19c4efd16eecb19aba1",
+       "role": "next",
+       "notAfter": 1807833600000
+      }
+     ],
+     "revoked": [
+      {
+       "spkiSha256": "d9d74778c2ae6569c45c647899afc48ced535f424d75f5bfab0c7362c8031b98",
+       "serial": "6c521b1ecc59338659fedc4d66c539fe",
+       "at": 1795651200000
+      }
+     ],
+     "nextCa": null,
+     "sig": "MGUCMFhaDGzFOzy32mZgWthR_Fqcovny8iC49Dez1GdAn0ePaUyy-g17CCGV9GiRIuQC_AIxAJryEQL3xKi0z1yeJhY8U38ZsvqZ2YfE5BNNe6etlYD34oiP3NDaQOngMQ097yD-zQ"
+    },
+    "pins": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "active"
+     }
+    ],
+    "stored": null,
+    "trusted_time_ms": 1795741200000,
+    "wall_ms": 1795741200000,
+    "leaf_spki_sha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+    "ok": true,
+    "why": null
+   },
+   {
+    "name": "signed by another CA key",
+    "manifest": {
+     "v": 1,
+     "consoleId": "c_0123456789abcdef",
+     "caGeneration": 1,
+     "seq": 7,
+     "issuedAt": 1795737600000,
+     "expiresAt": 1796947200000,
+     "leaves": [
+      {
+       "spkiSha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+       "serial": "60192cdd8390123ed602df899c7bf2c5",
+       "role": "current",
+       "notAfter": 1802649600000
+      },
+      {
+       "spkiSha256": "f29a6f745a3c17303e47c4aea82020cbda0840de6814deac71ff66b77855950d",
+       "serial": "7aa919eb868df19c4efd16eecb19aba1",
+       "role": "next",
+       "notAfter": 1807833600000
+      }
+     ],
+     "revoked": [
+      {
+       "spkiSha256": "d9d74778c2ae6569c45c647899afc48ced535f424d75f5bfab0c7362c8031b98",
+       "serial": "6c521b1ecc59338659fedc4d66c539fe",
+       "at": 1795651200000
+      }
+     ],
+     "nextCa": null,
+     "sig": "MGUCMQDTjs1y4KtxrrOW4iuin6lAHKFv5AmUW_nCtcedQZ2MAvQFr--WnY--ucGAjDo0YWMCMB5_yXOfWEcqviZCbb2Ehxv0FFu_nCTFTX75Wg5fmKnSysayO8dCMxeaORN2-lImkg"
+    },
+    "pins": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "active"
+     }
+    ],
+    "stored": {
+     "seq": 6,
+     "issuedAt": 1795651200000,
+     "sha256": "a9a304a3a7e2d3e2c249936ec8378cb5e8678c2c949eb8ccb107def8c421b2de"
+    },
+    "trusted_time_ms": 1795741200000,
+    "wall_ms": 1795741200000,
+    "leaf_spki_sha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+    "ok": false,
+    "why": "signature"
+   },
+   {
+    "name": "generation 2 only pending",
+    "manifest": {
+     "v": 1,
+     "consoleId": "c_0123456789abcdef",
+     "caGeneration": 2,
+     "seq": 8,
+     "issuedAt": 1795737600000,
+     "expiresAt": 1796947200000,
+     "leaves": [
+      {
+       "spkiSha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+       "serial": "60192cdd8390123ed602df899c7bf2c5",
+       "role": "current",
+       "notAfter": 1802649600000
+      }
+     ],
+     "revoked": [],
+     "nextCa": null,
+     "sig": "MGYCMQCeWiJJRFQbcdnp8XzXMsUfEGr5UmWoqDH4H1gULxfBMyig9ZMcL1OS7miFWZXFjwkCMQCi2jrfrGNLlrUd7oe04syXrBBU4TUWxm0lsUsEtzB-6-h67NuSrZt7zLm2R6n-1Ps"
+    },
+    "pins": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "active"
+     },
+     {
+      "generation": 2,
+      "pin": "d52ba96110d02ef3cc872998883ca273581bc5b406ee6e3df2cbbbaf24690522",
+      "state": "pending"
+     }
+    ],
+    "stored": {
+     "seq": 6,
+     "issuedAt": 1795651200000,
+     "sha256": "a9a304a3a7e2d3e2c249936ec8378cb5e8678c2c949eb8ccb107def8c421b2de"
+    },
+    "trusted_time_ms": 1795741200000,
+    "wall_ms": 1795741200000,
+    "leaf_spki_sha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+    "ok": false,
+    "why": "unpinned-ca"
+   },
+   {
+    "name": "lower seq",
+    "manifest": {
+     "v": 1,
+     "consoleId": "c_0123456789abcdef",
+     "caGeneration": 1,
+     "seq": 5,
+     "issuedAt": 1795737600000,
+     "expiresAt": 1796947200000,
+     "leaves": [
+      {
+       "spkiSha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+       "serial": "60192cdd8390123ed602df899c7bf2c5",
+       "role": "current",
+       "notAfter": 1802649600000
+      }
+     ],
+     "revoked": [],
+     "nextCa": null,
+     "sig": "MGUCMB1dOCAAAxcUXGblKYXP3Gm-n1KgxDc6pki08KBoiij3Ho0PuSptAHuIMUUDT-XVYwIxAPqP4rCP2WcPdd6r1LD9LwBME9Z7PdsykRvSJ1YB0m9RNkgoG-N3WR7wTwG0GLrMOg"
+    },
+    "pins": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "active"
+     }
+    ],
+    "stored": {
+     "seq": 6,
+     "issuedAt": 1795651200000,
+     "sha256": "a9a304a3a7e2d3e2c249936ec8378cb5e8678c2c949eb8ccb107def8c421b2de"
+    },
+    "trusted_time_ms": 1795741200000,
+    "wall_ms": 1795741200000,
+    "leaf_spki_sha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+    "ok": false,
+    "why": "rollback-seq"
+   },
+   {
+    "name": "same seq different bytes",
+    "manifest": {
+     "v": 1,
+     "consoleId": "c_0123456789abcdef",
+     "caGeneration": 1,
+     "seq": 7,
+     "issuedAt": 1795737600000,
+     "expiresAt": 1796947200000,
+     "leaves": [
+      {
+       "spkiSha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+       "serial": "60192cdd8390123ed602df899c7bf2c5",
+       "role": "current",
+       "notAfter": 1802649600000
+      }
+     ],
+     "revoked": [],
+     "nextCa": null,
+     "sig": "MGUCMGPhjNLM6X-8f6rzM9UUn8d4Q0qHkJF5S_dDsGFllBEya-btEUipdwxlpNV1X_O3RAIxAOM_YroHparw-nqlG8bnSnY4o65RRieXwOQ4QFO8zeBglzmLtU9hsiatndmT18WMAg"
+    },
+    "pins": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "active"
+     }
+    ],
+    "stored": {
+     "seq": 7,
+     "issuedAt": 1795737600000,
+     "sha256": "ce9834936749ffe2a03ea68fe9ae9623156ef2fb9d0a069da96b95d359e84f07"
+    },
+    "trusted_time_ms": 1795741200000,
+    "wall_ms": 1795741200000,
+    "leaf_spki_sha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+    "ok": false,
+    "why": "same-seq-different-bytes"
+   },
+   {
+    "name": "older issuedAt",
+    "manifest": {
+     "v": 1,
+     "consoleId": "c_0123456789abcdef",
+     "caGeneration": 1,
+     "seq": 8,
+     "issuedAt": 1795564800000,
+     "expiresAt": 1796774400000,
+     "leaves": [
+      {
+       "spkiSha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+       "serial": "60192cdd8390123ed602df899c7bf2c5",
+       "role": "current",
+       "notAfter": 1802649600000
+      }
+     ],
+     "revoked": [],
+     "nextCa": null,
+     "sig": "MGUCMQCi13NB0IKSxnSFwyIskSx3QGSUHq-MhfJZKQQY_xCxf30pZt3xqaJSgF6GkgKuadACMDt37kJkQa42ErLRBB4JlrE-unVXeRMZSoJwVamuqDQLUDle5g58BsReHexvAJDFyg"
+    },
+    "pins": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "active"
+     }
+    ],
+    "stored": {
+     "seq": 6,
+     "issuedAt": 1795651200000,
+     "sha256": "a9a304a3a7e2d3e2c249936ec8378cb5e8678c2c949eb8ccb107def8c421b2de"
+    },
+    "trusted_time_ms": 1795741200000,
+    "wall_ms": 1795741200000,
+    "leaf_spki_sha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+    "ok": false,
+    "why": "rollback-issued"
+   },
+   {
+    "name": "issuedAt past wall time plus 5 minutes",
+    "manifest": {
+     "v": 1,
+     "consoleId": "c_0123456789abcdef",
+     "caGeneration": 1,
+     "seq": 8,
+     "issuedAt": 1795741560000,
+     "expiresAt": 1796951160000,
+     "leaves": [
+      {
+       "spkiSha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+       "serial": "60192cdd8390123ed602df899c7bf2c5",
+       "role": "current",
+       "notAfter": 1802649600000
+      }
+     ],
+     "revoked": [],
+     "nextCa": null,
+     "sig": "MGQCMEIDYqgaX8ZvmMaPAD4J9RzZseFZ7t0Vficsy2uFLKaEt63ms8LSOv7alXDq15wdaQIwekpfaChgYqCz9PVsmG3IZM4D2UDt1EVs_wfRVJHZD6yvGb4bS-iUo8ulMVv4_ME3"
+    },
+    "pins": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "active"
+     }
+    ],
+    "stored": {
+     "seq": 6,
+     "issuedAt": 1795651200000,
+     "sha256": "a9a304a3a7e2d3e2c249936ec8378cb5e8678c2c949eb8ccb107def8c421b2de"
+    },
+    "trusted_time_ms": 1795741200000,
+    "wall_ms": 1795741200000,
+    "leaf_spki_sha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+    "ok": false,
+    "why": "issued-future"
+   },
+   {
+    "name": "expired at trusted time",
+    "manifest": {
+     "v": 1,
+     "consoleId": "c_0123456789abcdef",
+     "caGeneration": 1,
+     "seq": 7,
+     "issuedAt": 1795737600000,
+     "expiresAt": 1796947200000,
+     "leaves": [
+      {
+       "spkiSha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+       "serial": "60192cdd8390123ed602df899c7bf2c5",
+       "role": "current",
+       "notAfter": 1802649600000
+      },
+      {
+       "spkiSha256": "f29a6f745a3c17303e47c4aea82020cbda0840de6814deac71ff66b77855950d",
+       "serial": "7aa919eb868df19c4efd16eecb19aba1",
+       "role": "next",
+       "notAfter": 1807833600000
+      }
+     ],
+     "revoked": [
+      {
+       "spkiSha256": "d9d74778c2ae6569c45c647899afc48ced535f424d75f5bfab0c7362c8031b98",
+       "serial": "6c521b1ecc59338659fedc4d66c539fe",
+       "at": 1795651200000
+      }
+     ],
+     "nextCa": null,
+     "sig": "MGUCMFhaDGzFOzy32mZgWthR_Fqcovny8iC49Dez1GdAn0ePaUyy-g17CCGV9GiRIuQC_AIxAJryEQL3xKi0z1yeJhY8U38ZsvqZ2YfE5BNNe6etlYD34oiP3NDaQOngMQ097yD-zQ"
+    },
+    "pins": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "active"
+     }
+    ],
+    "stored": {
+     "seq": 6,
+     "issuedAt": 1795651200000,
+     "sha256": "a9a304a3a7e2d3e2c249936ec8378cb5e8678c2c949eb8ccb107def8c421b2de"
+    },
+    "trusted_time_ms": 1797033600000,
+    "wall_ms": 1797033600000,
+    "leaf_spki_sha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+    "ok": false,
+    "why": "expired"
+   },
+   {
+    "name": "wall time past expiresAt",
+    "manifest": {
+     "v": 1,
+     "consoleId": "c_0123456789abcdef",
+     "caGeneration": 1,
+     "seq": 7,
+     "issuedAt": 1795737600000,
+     "expiresAt": 1796947200000,
+     "leaves": [
+      {
+       "spkiSha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+       "serial": "60192cdd8390123ed602df899c7bf2c5",
+       "role": "current",
+       "notAfter": 1802649600000
+      },
+      {
+       "spkiSha256": "f29a6f745a3c17303e47c4aea82020cbda0840de6814deac71ff66b77855950d",
+       "serial": "7aa919eb868df19c4efd16eecb19aba1",
+       "role": "next",
+       "notAfter": 1807833600000
+      }
+     ],
+     "revoked": [
+      {
+       "spkiSha256": "d9d74778c2ae6569c45c647899afc48ced535f424d75f5bfab0c7362c8031b98",
+       "serial": "6c521b1ecc59338659fedc4d66c539fe",
+       "at": 1795651200000
+      }
+     ],
+     "nextCa": null,
+     "sig": "MGUCMFhaDGzFOzy32mZgWthR_Fqcovny8iC49Dez1GdAn0ePaUyy-g17CCGV9GiRIuQC_AIxAJryEQL3xKi0z1yeJhY8U38ZsvqZ2YfE5BNNe6etlYD34oiP3NDaQOngMQ097yD-zQ"
+    },
+    "pins": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "active"
+     }
+    ],
+    "stored": {
+     "seq": 6,
+     "issuedAt": 1795651200000,
+     "sha256": "a9a304a3a7e2d3e2c249936ec8378cb5e8678c2c949eb8ccb107def8c421b2de"
+    },
+    "trusted_time_ms": 1795741200000,
+    "wall_ms": 1797033600000,
+    "leaf_spki_sha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+    "ok": false,
+    "why": "expired"
+   },
+   {
+    "name": "revoked leaf",
+    "manifest": {
+     "v": 1,
+     "consoleId": "c_0123456789abcdef",
+     "caGeneration": 1,
+     "seq": 7,
+     "issuedAt": 1795737600000,
+     "expiresAt": 1796947200000,
+     "leaves": [
+      {
+       "spkiSha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+       "serial": "60192cdd8390123ed602df899c7bf2c5",
+       "role": "current",
+       "notAfter": 1802649600000
+      },
+      {
+       "spkiSha256": "f29a6f745a3c17303e47c4aea82020cbda0840de6814deac71ff66b77855950d",
+       "serial": "7aa919eb868df19c4efd16eecb19aba1",
+       "role": "next",
+       "notAfter": 1807833600000
+      }
+     ],
+     "revoked": [
+      {
+       "spkiSha256": "d9d74778c2ae6569c45c647899afc48ced535f424d75f5bfab0c7362c8031b98",
+       "serial": "6c521b1ecc59338659fedc4d66c539fe",
+       "at": 1795651200000
+      }
+     ],
+     "nextCa": null,
+     "sig": "MGUCMFhaDGzFOzy32mZgWthR_Fqcovny8iC49Dez1GdAn0ePaUyy-g17CCGV9GiRIuQC_AIxAJryEQL3xKi0z1yeJhY8U38ZsvqZ2YfE5BNNe6etlYD34oiP3NDaQOngMQ097yD-zQ"
+    },
+    "pins": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "active"
+     }
+    ],
+    "stored": {
+     "seq": 6,
+     "issuedAt": 1795651200000,
+     "sha256": "a9a304a3a7e2d3e2c249936ec8378cb5e8678c2c949eb8ccb107def8c421b2de"
+    },
+    "trusted_time_ms": 1795741200000,
+    "wall_ms": 1795741200000,
+    "leaf_spki_sha256": "d9d74778c2ae6569c45c647899afc48ced535f424d75f5bfab0c7362c8031b98",
+    "ok": false,
+    "why": "revoked"
+   },
+   {
+    "name": "leaf not listed",
+    "manifest": {
+     "v": 1,
+     "consoleId": "c_0123456789abcdef",
+     "caGeneration": 1,
+     "seq": 7,
+     "issuedAt": 1795737600000,
+     "expiresAt": 1796947200000,
+     "leaves": [
+      {
+       "spkiSha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+       "serial": "60192cdd8390123ed602df899c7bf2c5",
+       "role": "current",
+       "notAfter": 1802649600000
+      },
+      {
+       "spkiSha256": "f29a6f745a3c17303e47c4aea82020cbda0840de6814deac71ff66b77855950d",
+       "serial": "7aa919eb868df19c4efd16eecb19aba1",
+       "role": "next",
+       "notAfter": 1807833600000
+      }
+     ],
+     "revoked": [
+      {
+       "spkiSha256": "d9d74778c2ae6569c45c647899afc48ced535f424d75f5bfab0c7362c8031b98",
+       "serial": "6c521b1ecc59338659fedc4d66c539fe",
+       "at": 1795651200000
+      }
+     ],
+     "nextCa": null,
+     "sig": "MGUCMFhaDGzFOzy32mZgWthR_Fqcovny8iC49Dez1GdAn0ePaUyy-g17CCGV9GiRIuQC_AIxAJryEQL3xKi0z1yeJhY8U38ZsvqZ2YfE5BNNe6etlYD34oiP3NDaQOngMQ097yD-zQ"
+    },
+    "pins": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "active"
+     }
+    ],
+    "stored": {
+     "seq": 6,
+     "issuedAt": 1795651200000,
+     "sha256": "a9a304a3a7e2d3e2c249936ec8378cb5e8678c2c949eb8ccb107def8c421b2de"
+    },
+    "trusted_time_ms": 1795741200000,
+    "wall_ms": 1795741200000,
+    "leaf_spki_sha256": "babe6d8303922a6b6f2f6c7b812140ba840fa627bb8e37e866ef0d1e187252d0",
+    "ok": false,
+    "why": "not-listed"
+   },
+   {
+    "name": "stolen leaf listed only in an older stored manifest",
+    "manifest": {
+     "v": 1,
+     "consoleId": "c_0123456789abcdef",
+     "caGeneration": 1,
+     "seq": 8,
+     "issuedAt": 1795737600000,
+     "expiresAt": 1796947200000,
+     "leaves": [
+      {
+       "spkiSha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+       "serial": "60192cdd8390123ed602df899c7bf2c5",
+       "role": "current",
+       "notAfter": 1802649600000
+      }
+     ],
+     "revoked": [],
+     "nextCa": null,
+     "sig": "MGQCMB5LOUFQ10u2Z931w3DeZanmiEbNlOtJFko_P3AcRKkeSVbDwLKZSPwzrRTIUsGDbAIwF0nkq9CSGH5GsEno2ntX33ruAkxgkbsurufnb5tPl6673kIzH-LfKn_kpAMcf8dG"
+    },
+    "pins": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "active"
+     }
+    ],
+    "stored": {
+     "seq": 6,
+     "issuedAt": 1795651200000,
+     "sha256": "a9a304a3a7e2d3e2c249936ec8378cb5e8678c2c949eb8ccb107def8c421b2de"
+    },
+    "trusted_time_ms": 1795741200000,
+    "wall_ms": 1795741200000,
+    "leaf_spki_sha256": "d9d74778c2ae6569c45c647899afc48ced535f424d75f5bfab0c7362c8031b98",
+    "ok": false,
+    "why": "not-listed"
+   }
+  ]
+ },
+ "rollover": {
+  "about": "nextCa in a manifest signed by generation g is stored pending and never trusted on that signature; only trust-ca with the matching fingerprint (the pin, 64 hex, compared ignoring case and spaces) makes it active",
+  "manifest": {
+   "v": 1,
+   "consoleId": "c_0123456789abcdef",
+   "caGeneration": 1,
+   "seq": 9,
+   "issuedAt": 1797552000000,
+   "expiresAt": 1798761600000,
+   "leaves": [
+    {
+     "spkiSha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+     "serial": "60192cdd8390123ed602df899c7bf2c5",
+     "role": "current",
+     "notAfter": 1802649600000
+    }
+   ],
+   "revoked": [],
+   "nextCa": {
+    "generation": 2,
+    "caCert": "MIICFTCCAZygAwIBAgIQahvisXnPREwGSc1O62lxfDAKBggqhkjOPQQDAzBLMSowKAYDVQQDDCFMdWNpZCBBZG1pbiBDb25zb2xlIG1hbmFnZW1lbnQgQ0ExHTAbBgNVBAoMFGNvbnNvbGUuYWNtZS5leGFtcGxlMB4XDTI2MTIxNzAwMDAwMFoXDTM2MTIxNzAwMDAwMFowSzEqMCgGA1UEAwwhTHVjaWQgQWRtaW4gQ29uc29sZSBtYW5hZ2VtZW50IENBMR0wGwYDVQQKDBRjb25zb2xlLmFjbWUuZXhhbXBsZTB2MBAGByqGSM49AgEGBSuBBAAiA2IABK4TBL8f4TUsyPcI-uUBOq2nBFwdyJJZxJTja_AntNAasHAfh_Z2se72lkQ1HDY3BwpZxn594PN13xPGkrMzD9L6hiierzryI8RqOvfDdmjoOQbDCnWPjdJrTfmmGTBxNaNFMEMwEgYDVR0TAQH_BAgwBgEB_wIBADAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0OBBYEFGJawquZrFsmMVbJIhqwXu_0umReMAoGCCqGSM49BAMDA2cAMGQCMHJn8nc1uEWmNEQGqPUbOWlysimUzYlCKd2QJqS-Rvh3CS9DDSLnZ2jdmBTTzkltywIwYWeBDosxeBpDiFg0SQRu3Xe_WtOh--TqNAa7RFvy5JehBF5-GItmhG0pn_qPsPYB",
+    "fingerprint": "d52ba96110d02ef3cc872998883ca273581bc5b406ee6e3df2cbbbaf24690522",
+    "from": 1797465600000
+   },
+   "sig": "MGUCMFOyAIH0Pw3ugZG85KKU_n5x4Jc6yYLx_NZVXQn45DtTIpDlKSKbcYb5Q_N0XVKyCwIxAOgJXhgezI3rgFtP7RSoT1pKp9gmVy3FZHi6NiKjp_BlDLEsFuIJpnQgNLOWlC1HQw"
+  },
+  "cases": [
+   {
+    "name": "announced by the old CA",
+    "step": "manifest",
+    "pins_before": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "active"
+     }
+    ],
+    "pins_after": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "active"
+     },
+     {
+      "generation": 2,
+      "pin": "d52ba96110d02ef3cc872998883ca273581bc5b406ee6e3df2cbbbaf24690522",
+      "state": "pending"
+     }
+    ],
+    "ok": true,
+    "why": null
+   },
+   {
+    "name": "trust-ca with the right fingerprint",
+    "step": "trust-ca",
+    "fingerprint": "D52BA96110D02EF3CC872998883CA273 581BC5B406EE6E3DF2CBBBAF24690522",
+    "pins_before": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "active"
+     },
+     {
+      "generation": 2,
+      "pin": "d52ba96110d02ef3cc872998883ca273581bc5b406ee6e3df2cbbbaf24690522",
+      "state": "pending"
+     }
+    ],
+    "pins_after": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "active"
+     },
+     {
+      "generation": 2,
+      "pin": "d52ba96110d02ef3cc872998883ca273581bc5b406ee6e3df2cbbbaf24690522",
+      "state": "active"
+     }
+    ],
+    "ok": true,
+    "why": null
+   },
+   {
+    "name": "trust-ca with a wrong fingerprint",
+    "step": "trust-ca",
+    "fingerprint": "d52ba96110d02ef3cc872998883ca273581bc5b406ee6e3df2cbbbaf24690523",
+    "pins_before": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "active"
+     },
+     {
+      "generation": 2,
+      "pin": "d52ba96110d02ef3cc872998883ca273581bc5b406ee6e3df2cbbbaf24690522",
+      "state": "pending"
+     }
+    ],
+    "pins_after": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "active"
+     },
+     {
+      "generation": 2,
+      "pin": "d52ba96110d02ef3cc872998883ca273581bc5b406ee6e3df2cbbbaf24690522",
+      "state": "pending"
+     }
+    ],
+    "ok": false,
+    "why": "fingerprint"
+   },
+   {
+    "name": "trust-ca with no pending generation",
+    "step": "trust-ca",
+    "fingerprint": "d52ba96110d02ef3cc872998883ca273581bc5b406ee6e3df2cbbbaf24690522",
+    "pins_before": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "active"
+     }
+    ],
+    "pins_after": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "active"
+     }
+    ],
+    "ok": false,
+    "why": "fingerprint"
+   }
+  ]
+ },
+ "distrust": {
+  "label": "lucid-fleet-distrust-v1",
+  "about": "sig over lp(label, consoleId, generation) by any CA the relay pins (active or pending); a distrust only removes trust; with no active pin left the relay is read only and silent until a confirmed pin exists",
+  "cases": [
+   {
+    "name": "old CA distrusts itself, new one active",
+    "frame": {
+     "generation": 1,
+     "sig": "MGUCMQD0obpTvzsBIMKJe-szyPRWG-Vq9k57QVNekHKGDgYkVM1EWap7J_oS-l_lE8VPkvMCMDunBlYhGa0DzF3JcC5DQEAXisun9rRwheeysgkP7njptFHMuMC6Mr0nrd85u6BxKw"
+    },
+    "input_hex": "000000176c756369642d666c6565742d64697374727573742d763100000012635f303132333435363738396162636465660000000131",
+    "pins_before": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "active"
+     },
+     {
+      "generation": 2,
+      "pin": "d52ba96110d02ef3cc872998883ca273581bc5b406ee6e3df2cbbbaf24690522",
+      "state": "active"
+     }
+    ],
+    "pins_after": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "distrusted"
+     },
+     {
+      "generation": 2,
+      "pin": "d52ba96110d02ef3cc872998883ca273581bc5b406ee6e3df2cbbbaf24690522",
+      "state": "active"
+     }
+    ],
+    "ok": true,
+    "why": null,
+    "silent": false
+   },
+   {
+    "name": "old CA distrusts itself, new one only pending",
+    "frame": {
+     "generation": 1,
+     "sig": "MGUCMQD0obpTvzsBIMKJe-szyPRWG-Vq9k57QVNekHKGDgYkVM1EWap7J_oS-l_lE8VPkvMCMDunBlYhGa0DzF3JcC5DQEAXisun9rRwheeysgkP7njptFHMuMC6Mr0nrd85u6BxKw"
+    },
+    "input_hex": "000000176c756369642d666c6565742d64697374727573742d763100000012635f303132333435363738396162636465660000000131",
+    "pins_before": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "active"
+     },
+     {
+      "generation": 2,
+      "pin": "d52ba96110d02ef3cc872998883ca273581bc5b406ee6e3df2cbbbaf24690522",
+      "state": "pending"
+     }
+    ],
+    "pins_after": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "distrusted"
+     },
+     {
+      "generation": 2,
+      "pin": "d52ba96110d02ef3cc872998883ca273581bc5b406ee6e3df2cbbbaf24690522",
+      "state": "pending"
+     }
+    ],
+    "ok": true,
+    "why": null,
+    "silent": true
+   },
+   {
+    "name": "pending CA distrusts the old one",
+    "frame": {
+     "generation": 1,
+     "sig": "MGQCMF2ClOg3abLceWMkNaiqB33M6hy6qUTux33t0PUoAIwHE4YAYnzyYXLEFkdTTNG_gQIwQh4QVafd0LIBsAp_cE1DSf_0x8imW27FUBhnm3_4Qbp2L4mhqKA_qTSPw0KkHGqf"
+    },
+    "input_hex": "000000176c756369642d666c6565742d64697374727573742d763100000012635f303132333435363738396162636465660000000131",
+    "pins_before": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "active"
+     },
+     {
+      "generation": 2,
+      "pin": "d52ba96110d02ef3cc872998883ca273581bc5b406ee6e3df2cbbbaf24690522",
+      "state": "pending"
+     }
+    ],
+    "pins_after": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "distrusted"
+     },
+     {
+      "generation": 2,
+      "pin": "d52ba96110d02ef3cc872998883ca273581bc5b406ee6e3df2cbbbaf24690522",
+      "state": "pending"
+     }
+    ],
+    "ok": true,
+    "why": null,
+    "silent": true
+   },
+   {
+    "name": "signed by a CA the relay does not pin",
+    "frame": {
+     "generation": 1,
+     "sig": "MGUCMHBXwKU0WU394QGEEOOVjO7rtC_6HC2R1vxPSH_JyHX1hyVM2RwrT5pYpPXB7v3HSQIxAIc_-N3FLCSjKCW2a4gS_MstNQg6qqotPXVmTBpasHJLPEhVesVWTZuEn5zwId-uWQ"
+    },
+    "input_hex": "000000176c756369642d666c6565742d64697374727573742d763100000012635f303132333435363738396162636465660000000131",
+    "pins_before": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "active"
+     },
+     {
+      "generation": 2,
+      "pin": "d52ba96110d02ef3cc872998883ca273581bc5b406ee6e3df2cbbbaf24690522",
+      "state": "active"
+     }
+    ],
+    "pins_after": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "active"
+     },
+     {
+      "generation": 2,
+      "pin": "d52ba96110d02ef3cc872998883ca273581bc5b406ee6e3df2cbbbaf24690522",
+      "state": "active"
+     }
+    ],
+    "ok": false,
+    "why": "signature",
+    "silent": false
+   },
+   {
+    "name": "unknown generation",
+    "frame": {
+     "generation": 9,
+     "sig": "MGYCMQDzRiHBLRM2PK_1iBJHYYSTijnEE7z3ewPeV9Dv4OQlaU6zVNjxuZPu9oQWpJefrEICMQD204_WMTa_X4eoOu0sbNJ1aLaQuBGEekt2U3BViuJlf9zzqHFqJsgVf7GGfbbKggw"
+    },
+    "input_hex": "000000176c756369642d666c6565742d64697374727573742d763100000012635f303132333435363738396162636465660000000139",
+    "pins_before": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "active"
+     },
+     {
+      "generation": 2,
+      "pin": "d52ba96110d02ef3cc872998883ca273581bc5b406ee6e3df2cbbbaf24690522",
+      "state": "active"
+     }
+    ],
+    "pins_after": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "active"
+     },
+     {
+      "generation": 2,
+      "pin": "d52ba96110d02ef3cc872998883ca273581bc5b406ee6e3df2cbbbaf24690522",
+      "state": "active"
+     }
+    ],
+    "ok": true,
+    "why": null,
+    "silent": false
+   }
+  ]
+ },
+ "trusted_time": {
+  "about": "3.10 (revision 3.2): T advances only by the monotonic clock while running; wall more than 10 minutes ahead or more than 5 minutes behind makes the relay clock-uncertain. Wall only ahead: the stored manifest and the channel stay usable at T, and a pushed or fetched manifest is accepted when not older than the stored one, issuedAt no more than 5 minutes after T and T before expiresAt (wall time unused). At every start and while wall is behind, the stored manifest counts as expired and a fetched one is accepted only when not older than the stored one, issuedAt no more than 5 minutes after wall time and wall time no later than expiresAt, then T = max(T, issuedAt). trust-time reset needs a manifest from an active pinned CA with a seq strictly higher than the stored one and issuedAt within 10 minutes of wall time (it may be below the stored issuedAt), the server leaf listed and not revoked in it; the new manifest replaces the stored one and T = its issuedAt; reset checks in the order no-manifest, unpinned-ca, signature, not-higher, far, revoked, not-listed",
+  "ahead": [
+   {
+    "name": "pushed manifest while wall is 2 years ahead",
+    "T": 1798329600000,
+    "wall": 1861401600000,
+    "stored": {
+     "seq": 19,
+     "issuedAt": 1798236000000,
+     "sha256": "f8309aebf25b61bd8ad5bdc577f8f2aa69776add93ebb5b8f809041fdf33fe54"
+    },
+    "manifest": {
+     "v": 1,
+     "consoleId": "c_0123456789abcdef",
+     "caGeneration": 1,
+     "seq": 20,
+     "issuedAt": 1798322400000,
+     "expiresAt": 1799532000000,
+     "leaves": [
+      {
+       "spkiSha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+       "serial": "60192cdd8390123ed602df899c7bf2c5",
+       "role": "current",
+       "notAfter": 1802649600000
+      }
+     ],
+     "revoked": [],
+     "nextCa": null,
+     "sig": "MGYCMQC3pjngoPmpnYo7E08hZPMS9Q04REonMMuXqd1NVUt-RRFdyfvpM2IQtpyzSKoHWH4CMQCzjcxlyxBdj9fXmdDh0QgVh4XZr-j_WQO3Pd9_X6uP9mfX5Qy6NyeIA_2SAFViqrs"
+    },
+    "accept": true,
+    "why": null
+   },
+   {
+    "name": "pushed manifest dated past T plus 5 minutes",
+    "T": 1798329600000,
+    "wall": 1861401600000,
+    "stored": {
+     "seq": 19,
+     "issuedAt": 1798236000000,
+     "sha256": "f8309aebf25b61bd8ad5bdc577f8f2aa69776add93ebb5b8f809041fdf33fe54"
+    },
+    "manifest": {
+     "v": 1,
+     "consoleId": "c_0123456789abcdef",
+     "caGeneration": 1,
+     "seq": 22,
+     "issuedAt": 1798329960000,
+     "expiresAt": 1799539560000,
+     "leaves": [
+      {
+       "spkiSha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+       "serial": "60192cdd8390123ed602df899c7bf2c5",
+       "role": "current",
+       "notAfter": 1802649600000
+      }
+     ],
+     "revoked": [],
+     "nextCa": null,
+     "sig": "MGUCMQDHuYY_rqM26LlhgOzuyTOzP6jQCMGQrA1iMg-zTP04WLRR7L7MG7_AbFb1w8sB7hsCMBFwNThvitP37hIRbY9uNjtwdTcpSuw5PCWDNhECsUNazgwx1aYC27Ho-lMOL2laHg"
+    },
+    "accept": false,
+    "why": "issued-future"
+   },
+   {
+    "name": "older pushed manifest",
+    "T": 1798329600000,
+    "wall": 1861401600000,
+    "stored": {
+     "seq": 19,
+     "issuedAt": 1798236000000,
+     "sha256": "f8309aebf25b61bd8ad5bdc577f8f2aa69776add93ebb5b8f809041fdf33fe54"
+    },
+    "manifest": {
+     "v": 1,
+     "consoleId": "c_0123456789abcdef",
+     "caGeneration": 1,
+     "seq": 12,
+     "issuedAt": 1796601600000,
+     "expiresAt": 1797811200000,
+     "leaves": [
+      {
+       "spkiSha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+       "serial": "60192cdd8390123ed602df899c7bf2c5",
+       "role": "current",
+       "notAfter": 1802649600000
+      }
+     ],
+     "revoked": [],
+     "nextCa": null,
+     "sig": "MGYCMQCCaQ1RowKhTN0ROReeaJ4LeKFPNnnU-d_FtxMswccTtNoQcalTxWr_dAmgleync14CMQC_31WcxhZF5xI9vJf_YU-U0ftCcz7AGQfi-Ezmuz-NXo5DLYKt6pxagTrDgMWFENc"
+    },
+    "accept": false,
+    "why": "older"
+   }
+  ],
+  "running": [
+   {
+    "name": "clocks agree",
+    "T": 1798329600000,
+    "wall": 1798329660000,
+    "uncertain": false,
+    "why": null
+   },
+   {
+    "name": "wall 10 minutes ahead exactly",
+    "T": 1798329600000,
+    "wall": 1798330200000,
+    "uncertain": false,
+    "why": null
+   },
+   {
+    "name": "wall 11 minutes ahead",
+    "T": 1798329600000,
+    "wall": 1798330260000,
+    "uncertain": true,
+    "why": "ahead"
+   },
+   {
+    "name": "wall 2 years ahead",
+    "T": 1798329600000,
+    "wall": 1861401600000,
+    "uncertain": true,
+    "why": "ahead"
+   },
+   {
+    "name": "wall 5 minutes behind exactly",
+    "T": 1798329600000,
+    "wall": 1798329300000,
+    "uncertain": false,
+    "why": null
+   },
+   {
+    "name": "wall 6 minutes behind",
+    "T": 1798329600000,
+    "wall": 1798329240000,
+    "uncertain": true,
+    "why": "behind"
+   },
+   {
+    "name": "wall 30 days behind",
+    "T": 1798329600000,
+    "wall": 1795737600000,
+    "uncertain": true,
+    "why": "behind"
+   }
+  ],
+  "start": [
+   {
+    "name": "normal start",
+    "T": 1798318800000,
+    "wall": 1798329600000,
+    "stored": {
+     "seq": 19,
+     "issuedAt": 1798236000000,
+     "sha256": "f8309aebf25b61bd8ad5bdc577f8f2aa69776add93ebb5b8f809041fdf33fe54"
+    },
+    "manifest": {
+     "v": 1,
+     "consoleId": "c_0123456789abcdef",
+     "caGeneration": 1,
+     "seq": 20,
+     "issuedAt": 1798322400000,
+     "expiresAt": 1799532000000,
+     "leaves": [
+      {
+       "spkiSha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+       "serial": "60192cdd8390123ed602df899c7bf2c5",
+       "role": "current",
+       "notAfter": 1802649600000
+      }
+     ],
+     "revoked": [],
+     "nextCa": null,
+     "sig": "MGYCMQC3pjngoPmpnYo7E08hZPMS9Q04REonMMuXqd1NVUt-RRFdyfvpM2IQtpyzSKoHWH4CMQCzjcxlyxBdj9fXmdDh0QgVh4XZr-j_WQO3Pd9_X6uP9mfX5Qy6NyeIA_2SAFViqrs"
+    },
+    "stored_counts_expired": true,
+    "accept": true,
+    "why": null,
+    "T_after": 1798322400000
+   },
+   {
+    "name": "old manifest replayed",
+    "T": 1798318800000,
+    "wall": 1798329600000,
+    "stored": {
+     "seq": 19,
+     "issuedAt": 1798236000000,
+     "sha256": "f8309aebf25b61bd8ad5bdc577f8f2aa69776add93ebb5b8f809041fdf33fe54"
+    },
+    "manifest": {
+     "v": 1,
+     "consoleId": "c_0123456789abcdef",
+     "caGeneration": 1,
+     "seq": 12,
+     "issuedAt": 1796601600000,
+     "expiresAt": 1797811200000,
+     "leaves": [
+      {
+       "spkiSha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+       "serial": "60192cdd8390123ed602df899c7bf2c5",
+       "role": "current",
+       "notAfter": 1802649600000
+      }
+     ],
+     "revoked": [],
+     "nextCa": null,
+     "sig": "MGYCMQCCaQ1RowKhTN0ROReeaJ4LeKFPNnnU-d_FtxMswccTtNoQcalTxWr_dAmgleync14CMQC_31WcxhZF5xI9vJf_YU-U0ftCcz7AGQfi-Ezmuz-NXo5DLYKt6pxagTrDgMWFENc"
+    },
+    "stored_counts_expired": true,
+    "accept": false,
+    "why": "older",
+    "T_after": 1798318800000
+   },
+   {
+    "name": "wall clock set back 30 days",
+    "T": 1798318800000,
+    "wall": 1795737600000,
+    "stored": {
+     "seq": 19,
+     "issuedAt": 1798236000000,
+     "sha256": "f8309aebf25b61bd8ad5bdc577f8f2aa69776add93ebb5b8f809041fdf33fe54"
+    },
+    "manifest": {
+     "v": 1,
+     "consoleId": "c_0123456789abcdef",
+     "caGeneration": 1,
+     "seq": 20,
+     "issuedAt": 1798322400000,
+     "expiresAt": 1799532000000,
+     "leaves": [
+      {
+       "spkiSha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+       "serial": "60192cdd8390123ed602df899c7bf2c5",
+       "role": "current",
+       "notAfter": 1802649600000
+      }
+     ],
+     "revoked": [],
+     "nextCa": null,
+     "sig": "MGYCMQC3pjngoPmpnYo7E08hZPMS9Q04REonMMuXqd1NVUt-RRFdyfvpM2IQtpyzSKoHWH4CMQCzjcxlyxBdj9fXmdDh0QgVh4XZr-j_WQO3Pd9_X6uP9mfX5Qy6NyeIA_2SAFViqrs"
+    },
+    "stored_counts_expired": true,
+    "accept": false,
+    "why": "issued-future",
+    "T_after": 1798318800000
+   },
+   {
+    "name": "restored snapshot, fresh manifest",
+    "T": 1797292800000,
+    "wall": 1798329600000,
+    "stored": {
+     "seq": 19,
+     "issuedAt": 1798236000000,
+     "sha256": "f8309aebf25b61bd8ad5bdc577f8f2aa69776add93ebb5b8f809041fdf33fe54"
+    },
+    "manifest": {
+     "v": 1,
+     "consoleId": "c_0123456789abcdef",
+     "caGeneration": 1,
+     "seq": 20,
+     "issuedAt": 1798322400000,
+     "expiresAt": 1799532000000,
+     "leaves": [
+      {
+       "spkiSha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+       "serial": "60192cdd8390123ed602df899c7bf2c5",
+       "role": "current",
+       "notAfter": 1802649600000
+      }
+     ],
+     "revoked": [],
+     "nextCa": null,
+     "sig": "MGYCMQC3pjngoPmpnYo7E08hZPMS9Q04REonMMuXqd1NVUt-RRFdyfvpM2IQtpyzSKoHWH4CMQCzjcxlyxBdj9fXmdDh0QgVh4XZr-j_WQO3Pd9_X6uP9mfX5Qy6NyeIA_2SAFViqrs"
+    },
+    "stored_counts_expired": true,
+    "accept": true,
+    "why": null,
+    "T_after": 1798322400000
+   }
+  ],
+  "reset": [
+   {
+    "name": "stored manifest a year ahead, higher seq dated now",
+    "T": 1861401600000,
+    "wall": 1798329600000,
+    "pins": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "active"
+     },
+     {
+      "generation": 2,
+      "pin": "d52ba96110d02ef3cc872998883ca273581bc5b406ee6e3df2cbbbaf24690522",
+      "state": "pending"
+     }
+    ],
+    "stored": {
+     "seq": 30,
+     "issuedAt": 1829865600000,
+     "sha256": "bf9aa04b1a60651a49fc9521adb2074e16e571b04bf4b9328b929824cb329fb4"
+    },
+    "manifest": {
+     "v": 1,
+     "consoleId": "c_0123456789abcdef",
+     "caGeneration": 1,
+     "seq": 31,
+     "issuedAt": 1798329420000,
+     "expiresAt": 1799539020000,
+     "leaves": [
+      {
+       "spkiSha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+       "serial": "60192cdd8390123ed602df899c7bf2c5",
+       "role": "current",
+       "notAfter": 1802649600000
+      }
+     ],
+     "revoked": [],
+     "nextCa": null,
+     "sig": "MGUCMQDxCcdiNsmJQDSHunE_LwMiJveNPBY4JrLQd8JLxQ2iCkHCUq0zvOiaFSatpJsZTxQCMD3ZcHNxbk9WF4DhiEhtQuBMYAs8Z-1D07zvplQzoho14KSTlosJOVPAuqCyZWedbg"
+    },
+    "leaf_spki_sha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+    "ok": true,
+    "why": null,
+    "code": null,
+    "T_after": 1798329420000,
+    "stored_after": {
+     "seq": 31,
+     "issuedAt": 1798329420000,
+     "sha256": "e4b2f38a370bff48b8fc1791a4eef4cfe9e5299f79de19a4c80045bb4054dd35"
+    },
+    "audit_detail": {
+     "from": 1861401600000,
+     "to": 1798329420000,
+     "manifestSeq": 31,
+     "previousSeq": 30,
+     "previousIssuedAt": 1829865600000
+    }
+   },
+   {
+    "name": "no manifest fetched",
+    "T": 1861401600000,
+    "wall": 1798329600000,
+    "pins": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "active"
+     },
+     {
+      "generation": 2,
+      "pin": "d52ba96110d02ef3cc872998883ca273581bc5b406ee6e3df2cbbbaf24690522",
+      "state": "pending"
+     }
+    ],
+    "stored": {
+     "seq": 30,
+     "issuedAt": 1829865600000,
+     "sha256": "bf9aa04b1a60651a49fc9521adb2074e16e571b04bf4b9328b929824cb329fb4"
+    },
+    "manifest": null,
+    "leaf_spki_sha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+    "ok": false,
+    "why": "no-manifest",
+    "code": "trust-time-refused",
+    "T_after": 1861401600000,
+    "stored_after": {
+     "seq": 30,
+     "issuedAt": 1829865600000,
+     "sha256": "bf9aa04b1a60651a49fc9521adb2074e16e571b04bf4b9328b929824cb329fb4"
+    },
+    "audit_detail": null
+   },
+   {
+    "name": "equal seq",
+    "T": 1861401600000,
+    "wall": 1798329600000,
+    "pins": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "active"
+     },
+     {
+      "generation": 2,
+      "pin": "d52ba96110d02ef3cc872998883ca273581bc5b406ee6e3df2cbbbaf24690522",
+      "state": "pending"
+     }
+    ],
+    "stored": {
+     "seq": 30,
+     "issuedAt": 1829865600000,
+     "sha256": "bf9aa04b1a60651a49fc9521adb2074e16e571b04bf4b9328b929824cb329fb4"
+    },
+    "manifest": {
+     "v": 1,
+     "consoleId": "c_0123456789abcdef",
+     "caGeneration": 1,
+     "seq": 30,
+     "issuedAt": 1798329420000,
+     "expiresAt": 1799539020000,
+     "leaves": [
+      {
+       "spkiSha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+       "serial": "60192cdd8390123ed602df899c7bf2c5",
+       "role": "current",
+       "notAfter": 1802649600000
+      }
+     ],
+     "revoked": [],
+     "nextCa": null,
+     "sig": "MGYCMQDaHUUK3Zhb_C_x0CjKvc0lMFDltb1WygvsFiKYLceRlwLGcaNp70kn3zhITwelBA4CMQDHnfASBAx5cUFoNU-lbnGJPj0e702yM_qKp-ZwMWueQyeTxnvQ2kOq-KY6KJoPaNM"
+    },
+    "leaf_spki_sha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+    "ok": false,
+    "why": "not-higher",
+    "code": "trust-time-refused",
+    "T_after": 1861401600000,
+    "stored_after": {
+     "seq": 30,
+     "issuedAt": 1829865600000,
+     "sha256": "bf9aa04b1a60651a49fc9521adb2074e16e571b04bf4b9328b929824cb329fb4"
+    },
+    "audit_detail": null
+   },
+   {
+    "name": "lower seq",
+    "T": 1861401600000,
+    "wall": 1798329600000,
+    "pins": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "active"
+     },
+     {
+      "generation": 2,
+      "pin": "d52ba96110d02ef3cc872998883ca273581bc5b406ee6e3df2cbbbaf24690522",
+      "state": "pending"
+     }
+    ],
+    "stored": {
+     "seq": 30,
+     "issuedAt": 1829865600000,
+     "sha256": "bf9aa04b1a60651a49fc9521adb2074e16e571b04bf4b9328b929824cb329fb4"
+    },
+    "manifest": {
+     "v": 1,
+     "consoleId": "c_0123456789abcdef",
+     "caGeneration": 1,
+     "seq": 12,
+     "issuedAt": 1796601600000,
+     "expiresAt": 1797811200000,
+     "leaves": [
+      {
+       "spkiSha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+       "serial": "60192cdd8390123ed602df899c7bf2c5",
+       "role": "current",
+       "notAfter": 1802649600000
+      }
+     ],
+     "revoked": [],
+     "nextCa": null,
+     "sig": "MGYCMQCCaQ1RowKhTN0ROReeaJ4LeKFPNnnU-d_FtxMswccTtNoQcalTxWr_dAmgleync14CMQC_31WcxhZF5xI9vJf_YU-U0ftCcz7AGQfi-Ezmuz-NXo5DLYKt6pxagTrDgMWFENc"
+    },
+    "leaf_spki_sha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+    "ok": false,
+    "why": "not-higher",
+    "code": "trust-time-refused",
+    "T_after": 1861401600000,
+    "stored_after": {
+     "seq": 30,
+     "issuedAt": 1829865600000,
+     "sha256": "bf9aa04b1a60651a49fc9521adb2074e16e571b04bf4b9328b929824cb329fb4"
+    },
+    "audit_detail": null
+   },
+   {
+    "name": "higher seq more than 10 minutes from wall time",
+    "T": 1861401600000,
+    "wall": 1798329600000,
+    "pins": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "active"
+     },
+     {
+      "generation": 2,
+      "pin": "d52ba96110d02ef3cc872998883ca273581bc5b406ee6e3df2cbbbaf24690522",
+      "state": "pending"
+     }
+    ],
+    "stored": {
+     "seq": 30,
+     "issuedAt": 1829865600000,
+     "sha256": "bf9aa04b1a60651a49fc9521adb2074e16e571b04bf4b9328b929824cb329fb4"
+    },
+    "manifest": {
+     "v": 1,
+     "consoleId": "c_0123456789abcdef",
+     "caGeneration": 1,
+     "seq": 32,
+     "issuedAt": 1798328940000,
+     "expiresAt": 1799538540000,
+     "leaves": [
+      {
+       "spkiSha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+       "serial": "60192cdd8390123ed602df899c7bf2c5",
+       "role": "current",
+       "notAfter": 1802649600000
+      }
+     ],
+     "revoked": [],
+     "nextCa": null,
+     "sig": "MGQCMDuvyZUXlBGFSVJAB-IVofN0KRxJ5Y04ByAfFawXQs1kLU-qlHA5YEeFJ1oBoNROigIwQ-fvqd-ii7BLIqZ7eVTwxhBBoBFCy5EB6Vp3tvnrRFjtDge0dv8EbQaCPo0mQ5bd"
+    },
+    "leaf_spki_sha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+    "ok": false,
+    "why": "far",
+    "code": "trust-time-refused",
+    "T_after": 1861401600000,
+    "stored_after": {
+     "seq": 30,
+     "issuedAt": 1829865600000,
+     "sha256": "bf9aa04b1a60651a49fc9521adb2074e16e571b04bf4b9328b929824cb329fb4"
+    },
+    "audit_detail": null
+   },
+   {
+    "name": "from the pending CA generation",
+    "T": 1861401600000,
+    "wall": 1798329600000,
+    "pins": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "active"
+     },
+     {
+      "generation": 2,
+      "pin": "d52ba96110d02ef3cc872998883ca273581bc5b406ee6e3df2cbbbaf24690522",
+      "state": "pending"
+     }
+    ],
+    "stored": {
+     "seq": 30,
+     "issuedAt": 1829865600000,
+     "sha256": "bf9aa04b1a60651a49fc9521adb2074e16e571b04bf4b9328b929824cb329fb4"
+    },
+    "manifest": {
+     "v": 1,
+     "consoleId": "c_0123456789abcdef",
+     "caGeneration": 2,
+     "seq": 33,
+     "issuedAt": 1798329420000,
+     "expiresAt": 1799539020000,
+     "leaves": [
+      {
+       "spkiSha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+       "serial": "60192cdd8390123ed602df899c7bf2c5",
+       "role": "current",
+       "notAfter": 1802649600000
+      }
+     ],
+     "revoked": [],
+     "nextCa": null,
+     "sig": "MGUCMFBKhh0cQVa1HeUev9RwpwkE7IyI8NGcBuvQp5buU_64-BZMY6hKzAbRRCjgFill6gIxAIf9SpydoY8K41lNlCnDgWy3Q2iUlDVlNHQs3dgRrHS6m3PQgkSJwuXIGq6ysnJu2Q"
+    },
+    "leaf_spki_sha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+    "ok": false,
+    "why": "unpinned-ca",
+    "code": "trust-time-refused",
+    "T_after": 1861401600000,
+    "stored_after": {
+     "seq": 30,
+     "issuedAt": 1829865600000,
+     "sha256": "bf9aa04b1a60651a49fc9521adb2074e16e571b04bf4b9328b929824cb329fb4"
+    },
+    "audit_detail": null
+   },
+   {
+    "name": "signed by a CA the relay does not pin",
+    "T": 1861401600000,
+    "wall": 1798329600000,
+    "pins": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "active"
+     },
+     {
+      "generation": 2,
+      "pin": "d52ba96110d02ef3cc872998883ca273581bc5b406ee6e3df2cbbbaf24690522",
+      "state": "pending"
+     }
+    ],
+    "stored": {
+     "seq": 30,
+     "issuedAt": 1829865600000,
+     "sha256": "bf9aa04b1a60651a49fc9521adb2074e16e571b04bf4b9328b929824cb329fb4"
+    },
+    "manifest": {
+     "v": 1,
+     "consoleId": "c_0123456789abcdef",
+     "caGeneration": 1,
+     "seq": 31,
+     "issuedAt": 1798329420000,
+     "expiresAt": 1799539020000,
+     "leaves": [
+      {
+       "spkiSha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+       "serial": "60192cdd8390123ed602df899c7bf2c5",
+       "role": "current",
+       "notAfter": 1802649600000
+      }
+     ],
+     "revoked": [],
+     "nextCa": null,
+     "sig": "MGQCL0UXHkbN-EW2XR5nc5dQiCUAwZ0E05a3vjwUt5nYomoFzJoJRVwk9DoySDHZbN3RAjEA6zKT1BsakXR2JDL5DfNAmqjbiCH-32lBi7-INiVD5OYRXENC1DsfK8RhhQfKeY-O"
+    },
+    "leaf_spki_sha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+    "ok": false,
+    "why": "signature",
+    "code": "trust-time-refused",
+    "T_after": 1861401600000,
+    "stored_after": {
+     "seq": 30,
+     "issuedAt": 1829865600000,
+     "sha256": "bf9aa04b1a60651a49fc9521adb2074e16e571b04bf4b9328b929824cb329fb4"
+    },
+    "audit_detail": null
+   },
+   {
+    "name": "server leaf revoked in the new manifest",
+    "T": 1861401600000,
+    "wall": 1798329600000,
+    "pins": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "active"
+     },
+     {
+      "generation": 2,
+      "pin": "d52ba96110d02ef3cc872998883ca273581bc5b406ee6e3df2cbbbaf24690522",
+      "state": "pending"
+     }
+    ],
+    "stored": {
+     "seq": 30,
+     "issuedAt": 1829865600000,
+     "sha256": "bf9aa04b1a60651a49fc9521adb2074e16e571b04bf4b9328b929824cb329fb4"
+    },
+    "manifest": {
+     "v": 1,
+     "consoleId": "c_0123456789abcdef",
+     "caGeneration": 1,
+     "seq": 34,
+     "issuedAt": 1798329420000,
+     "expiresAt": 1799539020000,
+     "leaves": [
+      {
+       "spkiSha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+       "serial": "60192cdd8390123ed602df899c7bf2c5",
+       "role": "current",
+       "notAfter": 1802649600000
+      }
+     ],
+     "revoked": [
+      {
+       "spkiSha256": "d9d74778c2ae6569c45c647899afc48ced535f424d75f5bfab0c7362c8031b98",
+       "serial": "6c521b1ecc59338659fedc4d66c539fe",
+       "at": 1798243200000
+      }
+     ],
+     "nextCa": null,
+     "sig": "MGUCMQDK77jMnlBv6W48TKoKLKHH1Uf5BHu7vq-tnJ078oQMFhwWMfsuIzWW_pOuchHSzPgCMHtId-hLgu3I80ekOkvpO23sJoXLzt054RkCHUhrO3ckNrN1JgaMEgnnAknfILZgwg"
+    },
+    "leaf_spki_sha256": "d9d74778c2ae6569c45c647899afc48ced535f424d75f5bfab0c7362c8031b98",
+    "ok": false,
+    "why": "revoked",
+    "code": "trust-time-refused",
+    "T_after": 1861401600000,
+    "stored_after": {
+     "seq": 30,
+     "issuedAt": 1829865600000,
+     "sha256": "bf9aa04b1a60651a49fc9521adb2074e16e571b04bf4b9328b929824cb329fb4"
+    },
+    "audit_detail": null
+   },
+   {
+    "name": "server leaf not listed in the new manifest",
+    "T": 1861401600000,
+    "wall": 1798329600000,
+    "pins": [
+     {
+      "generation": 1,
+      "pin": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+      "state": "active"
+     },
+     {
+      "generation": 2,
+      "pin": "d52ba96110d02ef3cc872998883ca273581bc5b406ee6e3df2cbbbaf24690522",
+      "state": "pending"
+     }
+    ],
+    "stored": {
+     "seq": 30,
+     "issuedAt": 1829865600000,
+     "sha256": "bf9aa04b1a60651a49fc9521adb2074e16e571b04bf4b9328b929824cb329fb4"
+    },
+    "manifest": {
+     "v": 1,
+     "consoleId": "c_0123456789abcdef",
+     "caGeneration": 1,
+     "seq": 31,
+     "issuedAt": 1798329420000,
+     "expiresAt": 1799539020000,
+     "leaves": [
+      {
+       "spkiSha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+       "serial": "60192cdd8390123ed602df899c7bf2c5",
+       "role": "current",
+       "notAfter": 1802649600000
+      }
+     ],
+     "revoked": [],
+     "nextCa": null,
+     "sig": "MGUCMQDxCcdiNsmJQDSHunE_LwMiJveNPBY4JrLQd8JLxQ2iCkHCUq0zvOiaFSatpJsZTxQCMD3ZcHNxbk9WF4DhiEhtQuBMYAs8Z-1D07zvplQzoho14KSTlosJOVPAuqCyZWedbg"
+    },
+    "leaf_spki_sha256": "d9d74778c2ae6569c45c647899afc48ced535f424d75f5bfab0c7362c8031b98",
+    "ok": false,
+    "why": "not-listed",
+    "code": "trust-time-refused",
+    "T_after": 1861401600000,
+    "stored_after": {
+     "seq": 30,
+     "issuedAt": 1829865600000,
+     "sha256": "bf9aa04b1a60651a49fc9521adb2074e16e571b04bf4b9328b929824cb329fb4"
+    },
+    "audit_detail": null
+   }
+  ]
+ },
+ "recovery": {
+  "label": "lucid-fleet-recover-v1",
+  "checks": [
+   "no-record",
+   "closed",
+   "expired",
+   "serial",
+   "spki",
+   "sig-old",
+   "sig-new",
+   "issued-different"
+  ],
+  "new_generation": 2,
+  "about": "3.11 (revision 3.1): signing input lp(label, consoleId, relayId, oldSerial raw bytes, spkiNew DER, newGeneration decimal); sigOld by the old key, sigNew by the new key; requestSha256 = SHA-256(canonical_json(body)); an exact retry while issued is stored gets the stored answer (retry: true, audited fleet.relay.recovered with detail.retry true)",
+  "input_hex": "000000166c756369642d666c6565742d7265636f7665722d763100000012635f3031323334353637383961626364656600000012725f336630613963326237643565316634380000001071ba231310aff865af9210a82529f4ab0000005b3059301306072a8648ce3d020106082a8648ce3d03010703420004cbf48158c62c903b3985abad4140aafef277e6875585a4b1bbadd823ff2a175c962488590169dbd481033d54438746668a4f2d4762d41f4905ba1674881a1b630000000132",
+  "request_sha256": "38f1e3a9049ade89d805fe6e7171d41af8fe319c75de93807551386e20b78468",
+  "issued": {
+   "cert": "MIICKzCCAbKgAwIBAgIQeJ9HWZ2h8TVoBhdEj1ZmCDAKBggqhkjOPQQDAzBLMSowKAYDVQQDDCFMdWNpZCBBZG1pbiBDb25zb2xlIG1hbmFnZW1lbnQgQ0ExHTAbBgNVBAoMFGNvbnNvbGUuYWNtZS5leGFtcGxlMB4XDTI2MTIyODAwMDAwMFoXDTI3MDMyODAwMDAwMFowHTEbMBkGA1UEAwwScl8zZjBhOWMyYjdkNWUxZjQ4MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEy_SBWMYskDs5hautQUCq_vJ35odVhaSxu63YI_8qF1yWJIhZAWnb1IEDPVRDh0Zmik8tR2LUH0kFuhZ0iBobY6OBpTCBojAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB_wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcDAjAtBgNVHREEJjAkhiJ1cm46bHVjaWQ6cmVsYXk6cl8zZjBhOWMyYjdkNWUxZjQ4MB0GA1UdDgQWBBSLUYVRF4QDuUyFyUzfdxJdpL0zODAfBgNVHSMEGDAWgBRiWsKrmaxbJjFWySIasF7v9LpkXjAKBggqhkjOPQQDAwNnADBkAjBlcqqFWLa7-FZ5kBHgieNHLyAvCNW8fjnD_v1eFryEFOSqfCzQRlflyixZRF3x9roCMCzJPhtb8rgMk8QvS8g2CfSxCipf7iVcSwHCNqRNj3-L86Jc28TkXFdiCGK2Pjb7ew",
+   "spkiNew": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEy_SBWMYskDs5hautQUCq_vJ35odVhaSxu63YI_8qF1yWJIhZAWnb1IEDPVRDh0Zmik8tR2LUH0kFuhZ0iBobYw",
+   "requestSha256": "38f1e3a9049ade89d805fe6e7171d41af8fe319c75de93807551386e20b78468"
+  },
+  "new_relay": {
+   "relay_id": "r_3f0a9c2b7d5e1f48",
+   "subject": [
+    "CN=r_3f0a9c2b7d5e1f48"
+   ],
+   "uri": "urn:lucid:relay:r_3f0a9c2b7d5e1f48",
+   "serial_hex": "789f47599da1f135680617448f566608",
+   "not_before_ms": 1798416000000,
+   "not_after_ms": 1806192000000,
+   "tbs_hex": "308201b2a0030201020210789f47599da1f135680617448f566608300a06082a8648ce3d040303304b312a302806035504030c214c756369642041646d696e20436f6e736f6c65206d616e6167656d656e74204341311d301b060355040a0c14636f6e736f6c652e61636d652e6578616d706c65301e170d3236313232383030303030305a170d3237303332383030303030305a301d311b301906035504030c12725f336630613963326237643565316634383059301306072a8648ce3d020106082a8648ce3d03010703420004cbf48158c62c903b3985abad4140aafef277e6875585a4b1bbadd823ff2a175c962488590169dbd481033d54438746668a4f2d4762d41f4905ba1674881a1b63a381a53081a2300c0603551d130101ff04023000300e0603551d0f0101ff04040302078030130603551d25040c300a06082b06010505070302302d0603551d1104263024862275726e3a6c756369643a72656c61793a725f33663061396332623764356531663438301d0603551d0e041604148b518551178403b94c85c94cdf77125da4bd3338301f0603551d23041830168014625ac2ab99ac5b263156c9221ab05eeff4ba645e",
+   "der_hex": "3082022b308201b2a0030201020210789f47599da1f135680617448f566608300a06082a8648ce3d040303304b312a302806035504030c214c756369642041646d696e20436f6e736f6c65206d616e6167656d656e74204341311d301b060355040a0c14636f6e736f6c652e61636d652e6578616d706c65301e170d3236313232383030303030305a170d3237303332383030303030305a301d311b301906035504030c12725f336630613963326237643565316634383059301306072a8648ce3d020106082a8648ce3d03010703420004cbf48158c62c903b3985abad4140aafef277e6875585a4b1bbadd823ff2a175c962488590169dbd481033d54438746668a4f2d4762d41f4905ba1674881a1b63a381a53081a2300c0603551d130101ff04023000300e0603551d0f0101ff04040302078030130603551d25040c300a06082b06010505070302302d0603551d1104263024862275726e3a6c756369643a72656c61793a725f33663061396332623764356531663438301d0603551d0e041604148b518551178403b94c85c94cdf77125da4bd3338301f0603551d23041830168014625ac2ab99ac5b263156c9221ab05eeff4ba645e300a06082a8648ce3d040303036700306402306572aa8558b6bbf856799011e089e3472f202f08d5bc7e39c3fefd5e16bc8414e4aa7c2cd04657e5ca2c59445df1f6ba02302cc93e1b5bf2b80c93c42f4bc83609f4b10a2a5fee255c4b01c236a44d8f7f8bf3a25cdbc4e45c57620862b63e36fb7b"
+  },
+  "cases": [
+   {
+    "name": "first request",
+    "record": {
+     "relayId": "r_3f0a9c2b7d5e1f48",
+     "oldSerial": "71ba231310aff865af9210a82529f4ab",
+     "oldSpki": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEjhvIQakNKLrLlu5LEfONVYItD94ecazIVa08YcqsEVSg6A-ZksFnHBvJtmfUsHuFMR01g7W7kPjNHv4HDxNHag",
+     "until": 1806105600000,
+     "issued": null,
+     "closed": false
+    },
+    "presented_serial_hex": "71ba231310aff865af9210a82529f4ab",
+    "presented_spki_hex": "3059301306072a8648ce3d020106082a8648ce3d030107034200048e1bc841a90d28bacb96ee4b11f38d55822d0fde1e71acc855ad3c61caac1154a0e80f9992c1671c1bc9b667d4b07b85311d3583b5bb90f8cd1efe070f13476a",
+    "body": {
+     "relayId": "r_3f0a9c2b7d5e1f48",
+     "spkiNew": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEy_SBWMYskDs5hautQUCq_vJ35odVhaSxu63YI_8qF1yWJIhZAWnb1IEDPVRDh0Zmik8tR2LUH0kFuhZ0iBobYw",
+     "sigOld": "MEYCIQCV1O-4lee6WUqCNITAlywHy9E0FYeAIIL5Mnmwy-mOUwIhAPWBPZGarLEsIsYjnT-71NJuxopiULK2-at9mZu-sztA",
+     "sigNew": "MEQCIHXBvZX82M3hxl2o8dqFpB1qsQUbx2sJX-hmVZVEoEu3AiA_CPd5yB48mQQ7VzziOahUG9-tyXGReDBW0l2kPY07Vw"
+    },
+    "now_ms": 1798416000000,
+    "ok": true,
+    "retry": false,
+    "why": null,
+    "code": null,
+    "answer": {
+     "cert": "MIICKzCCAbKgAwIBAgIQeJ9HWZ2h8TVoBhdEj1ZmCDAKBggqhkjOPQQDAzBLMSowKAYDVQQDDCFMdWNpZCBBZG1pbiBDb25zb2xlIG1hbmFnZW1lbnQgQ0ExHTAbBgNVBAoMFGNvbnNvbGUuYWNtZS5leGFtcGxlMB4XDTI2MTIyODAwMDAwMFoXDTI3MDMyODAwMDAwMFowHTEbMBkGA1UEAwwScl8zZjBhOWMyYjdkNWUxZjQ4MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEy_SBWMYskDs5hautQUCq_vJ35odVhaSxu63YI_8qF1yWJIhZAWnb1IEDPVRDh0Zmik8tR2LUH0kFuhZ0iBobY6OBpTCBojAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB_wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcDAjAtBgNVHREEJjAkhiJ1cm46bHVjaWQ6cmVsYXk6cl8zZjBhOWMyYjdkNWUxZjQ4MB0GA1UdDgQWBBSLUYVRF4QDuUyFyUzfdxJdpL0zODAfBgNVHSMEGDAWgBRiWsKrmaxbJjFWySIasF7v9LpkXjAKBggqhkjOPQQDAwNnADBkAjBlcqqFWLa7-FZ5kBHgieNHLyAvCNW8fjnD_v1eFryEFOSqfCzQRlflyixZRF3x9roCMCzJPhtb8rgMk8QvS8g2CfSxCipf7iVcSwHCNqRNj3-L86Jc28TkXFdiCGK2Pjb7ew",
+     "caCert": "MIICFTCCAZygAwIBAgIQahvisXnPREwGSc1O62lxfDAKBggqhkjOPQQDAzBLMSowKAYDVQQDDCFMdWNpZCBBZG1pbiBDb25zb2xlIG1hbmFnZW1lbnQgQ0ExHTAbBgNVBAoMFGNvbnNvbGUuYWNtZS5leGFtcGxlMB4XDTI2MTIxNzAwMDAwMFoXDTM2MTIxNzAwMDAwMFowSzEqMCgGA1UEAwwhTHVjaWQgQWRtaW4gQ29uc29sZSBtYW5hZ2VtZW50IENBMR0wGwYDVQQKDBRjb25zb2xlLmFjbWUuZXhhbXBsZTB2MBAGByqGSM49AgEGBSuBBAAiA2IABK4TBL8f4TUsyPcI-uUBOq2nBFwdyJJZxJTja_AntNAasHAfh_Z2se72lkQ1HDY3BwpZxn594PN13xPGkrMzD9L6hiierzryI8RqOvfDdmjoOQbDCnWPjdJrTfmmGTBxNaNFMEMwEgYDVR0TAQH_BAgwBgEB_wIBADAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0OBBYEFGJawquZrFsmMVbJIhqwXu_0umReMAoGCCqGSM49BAMDA2cAMGQCMHJn8nc1uEWmNEQGqPUbOWlysimUzYlCKd2QJqS-Rvh3CS9DDSLnZ2jdmBTTzkltywIwYWeBDosxeBpDiFg0SQRu3Xe_WtOh--TqNAa7RFvy5JehBF5-GItmhG0pn_qPsPYB"
+    }
+   },
+   {
+    "name": "exact retry after a lost response",
+    "record": {
+     "relayId": "r_3f0a9c2b7d5e1f48",
+     "oldSerial": "71ba231310aff865af9210a82529f4ab",
+     "oldSpki": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEjhvIQakNKLrLlu5LEfONVYItD94ecazIVa08YcqsEVSg6A-ZksFnHBvJtmfUsHuFMR01g7W7kPjNHv4HDxNHag",
+     "until": 1806105600000,
+     "issued": {
+      "cert": "MIICKzCCAbKgAwIBAgIQeJ9HWZ2h8TVoBhdEj1ZmCDAKBggqhkjOPQQDAzBLMSowKAYDVQQDDCFMdWNpZCBBZG1pbiBDb25zb2xlIG1hbmFnZW1lbnQgQ0ExHTAbBgNVBAoMFGNvbnNvbGUuYWNtZS5leGFtcGxlMB4XDTI2MTIyODAwMDAwMFoXDTI3MDMyODAwMDAwMFowHTEbMBkGA1UEAwwScl8zZjBhOWMyYjdkNWUxZjQ4MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEy_SBWMYskDs5hautQUCq_vJ35odVhaSxu63YI_8qF1yWJIhZAWnb1IEDPVRDh0Zmik8tR2LUH0kFuhZ0iBobY6OBpTCBojAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB_wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcDAjAtBgNVHREEJjAkhiJ1cm46bHVjaWQ6cmVsYXk6cl8zZjBhOWMyYjdkNWUxZjQ4MB0GA1UdDgQWBBSLUYVRF4QDuUyFyUzfdxJdpL0zODAfBgNVHSMEGDAWgBRiWsKrmaxbJjFWySIasF7v9LpkXjAKBggqhkjOPQQDAwNnADBkAjBlcqqFWLa7-FZ5kBHgieNHLyAvCNW8fjnD_v1eFryEFOSqfCzQRlflyixZRF3x9roCMCzJPhtb8rgMk8QvS8g2CfSxCipf7iVcSwHCNqRNj3-L86Jc28TkXFdiCGK2Pjb7ew",
+      "spkiNew": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEy_SBWMYskDs5hautQUCq_vJ35odVhaSxu63YI_8qF1yWJIhZAWnb1IEDPVRDh0Zmik8tR2LUH0kFuhZ0iBobYw",
+      "requestSha256": "38f1e3a9049ade89d805fe6e7171d41af8fe319c75de93807551386e20b78468"
+     },
+     "closed": false
+    },
+    "presented_serial_hex": "71ba231310aff865af9210a82529f4ab",
+    "presented_spki_hex": "3059301306072a8648ce3d020106082a8648ce3d030107034200048e1bc841a90d28bacb96ee4b11f38d55822d0fde1e71acc855ad3c61caac1154a0e80f9992c1671c1bc9b667d4b07b85311d3583b5bb90f8cd1efe070f13476a",
+    "body": {
+     "relayId": "r_3f0a9c2b7d5e1f48",
+     "spkiNew": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEy_SBWMYskDs5hautQUCq_vJ35odVhaSxu63YI_8qF1yWJIhZAWnb1IEDPVRDh0Zmik8tR2LUH0kFuhZ0iBobYw",
+     "sigOld": "MEYCIQCV1O-4lee6WUqCNITAlywHy9E0FYeAIIL5Mnmwy-mOUwIhAPWBPZGarLEsIsYjnT-71NJuxopiULK2-at9mZu-sztA",
+     "sigNew": "MEQCIHXBvZX82M3hxl2o8dqFpB1qsQUbx2sJX-hmVZVEoEu3AiA_CPd5yB48mQQ7VzziOahUG9-tyXGReDBW0l2kPY07Vw"
+    },
+    "now_ms": 1798416060000,
+    "ok": true,
+    "retry": true,
+    "why": null,
+    "code": null,
+    "answer": {
+     "cert": "MIICKzCCAbKgAwIBAgIQeJ9HWZ2h8TVoBhdEj1ZmCDAKBggqhkjOPQQDAzBLMSowKAYDVQQDDCFMdWNpZCBBZG1pbiBDb25zb2xlIG1hbmFnZW1lbnQgQ0ExHTAbBgNVBAoMFGNvbnNvbGUuYWNtZS5leGFtcGxlMB4XDTI2MTIyODAwMDAwMFoXDTI3MDMyODAwMDAwMFowHTEbMBkGA1UEAwwScl8zZjBhOWMyYjdkNWUxZjQ4MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEy_SBWMYskDs5hautQUCq_vJ35odVhaSxu63YI_8qF1yWJIhZAWnb1IEDPVRDh0Zmik8tR2LUH0kFuhZ0iBobY6OBpTCBojAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB_wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcDAjAtBgNVHREEJjAkhiJ1cm46bHVjaWQ6cmVsYXk6cl8zZjBhOWMyYjdkNWUxZjQ4MB0GA1UdDgQWBBSLUYVRF4QDuUyFyUzfdxJdpL0zODAfBgNVHSMEGDAWgBRiWsKrmaxbJjFWySIasF7v9LpkXjAKBggqhkjOPQQDAwNnADBkAjBlcqqFWLa7-FZ5kBHgieNHLyAvCNW8fjnD_v1eFryEFOSqfCzQRlflyixZRF3x9roCMCzJPhtb8rgMk8QvS8g2CfSxCipf7iVcSwHCNqRNj3-L86Jc28TkXFdiCGK2Pjb7ew",
+     "caCert": "MIICFTCCAZygAwIBAgIQahvisXnPREwGSc1O62lxfDAKBggqhkjOPQQDAzBLMSowKAYDVQQDDCFMdWNpZCBBZG1pbiBDb25zb2xlIG1hbmFnZW1lbnQgQ0ExHTAbBgNVBAoMFGNvbnNvbGUuYWNtZS5leGFtcGxlMB4XDTI2MTIxNzAwMDAwMFoXDTM2MTIxNzAwMDAwMFowSzEqMCgGA1UEAwwhTHVjaWQgQWRtaW4gQ29uc29sZSBtYW5hZ2VtZW50IENBMR0wGwYDVQQKDBRjb25zb2xlLmFjbWUuZXhhbXBsZTB2MBAGByqGSM49AgEGBSuBBAAiA2IABK4TBL8f4TUsyPcI-uUBOq2nBFwdyJJZxJTja_AntNAasHAfh_Z2se72lkQ1HDY3BwpZxn594PN13xPGkrMzD9L6hiierzryI8RqOvfDdmjoOQbDCnWPjdJrTfmmGTBxNaNFMEMwEgYDVR0TAQH_BAgwBgEB_wIBADAOBgNVHQ8BAf8EBAMCAQYwHQYDVR0OBBYEFGJawquZrFsmMVbJIhqwXu_0umReMAoGCCqGSM49BAMDA2cAMGQCMHJn8nc1uEWmNEQGqPUbOWlysimUzYlCKd2QJqS-Rvh3CS9DDSLnZ2jdmBTTzkltywIwYWeBDosxeBpDiFg0SQRu3Xe_WtOh--TqNAa7RFvy5JehBF5-GItmhG0pn_qPsPYB"
+    }
+   },
+   {
+    "name": "retry with another key after issue",
+    "record": {
+     "relayId": "r_3f0a9c2b7d5e1f48",
+     "oldSerial": "71ba231310aff865af9210a82529f4ab",
+     "oldSpki": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEjhvIQakNKLrLlu5LEfONVYItD94ecazIVa08YcqsEVSg6A-ZksFnHBvJtmfUsHuFMR01g7W7kPjNHv4HDxNHag",
+     "until": 1806105600000,
+     "issued": {
+      "cert": "MIICKzCCAbKgAwIBAgIQeJ9HWZ2h8TVoBhdEj1ZmCDAKBggqhkjOPQQDAzBLMSowKAYDVQQDDCFMdWNpZCBBZG1pbiBDb25zb2xlIG1hbmFnZW1lbnQgQ0ExHTAbBgNVBAoMFGNvbnNvbGUuYWNtZS5leGFtcGxlMB4XDTI2MTIyODAwMDAwMFoXDTI3MDMyODAwMDAwMFowHTEbMBkGA1UEAwwScl8zZjBhOWMyYjdkNWUxZjQ4MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEy_SBWMYskDs5hautQUCq_vJ35odVhaSxu63YI_8qF1yWJIhZAWnb1IEDPVRDh0Zmik8tR2LUH0kFuhZ0iBobY6OBpTCBojAMBgNVHRMBAf8EAjAAMA4GA1UdDwEB_wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcDAjAtBgNVHREEJjAkhiJ1cm46bHVjaWQ6cmVsYXk6cl8zZjBhOWMyYjdkNWUxZjQ4MB0GA1UdDgQWBBSLUYVRF4QDuUyFyUzfdxJdpL0zODAfBgNVHSMEGDAWgBRiWsKrmaxbJjFWySIasF7v9LpkXjAKBggqhkjOPQQDAwNnADBkAjBlcqqFWLa7-FZ5kBHgieNHLyAvCNW8fjnD_v1eFryEFOSqfCzQRlflyixZRF3x9roCMCzJPhtb8rgMk8QvS8g2CfSxCipf7iVcSwHCNqRNj3-L86Jc28TkXFdiCGK2Pjb7ew",
+      "spkiNew": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEy_SBWMYskDs5hautQUCq_vJ35odVhaSxu63YI_8qF1yWJIhZAWnb1IEDPVRDh0Zmik8tR2LUH0kFuhZ0iBobYw",
+      "requestSha256": "38f1e3a9049ade89d805fe6e7171d41af8fe319c75de93807551386e20b78468"
+     },
+     "closed": false
+    },
+    "presented_serial_hex": "71ba231310aff865af9210a82529f4ab",
+    "presented_spki_hex": "3059301306072a8648ce3d020106082a8648ce3d030107034200048e1bc841a90d28bacb96ee4b11f38d55822d0fde1e71acc855ad3c61caac1154a0e80f9992c1671c1bc9b667d4b07b85311d3583b5bb90f8cd1efe070f13476a",
+    "body": {
+     "relayId": "r_3f0a9c2b7d5e1f48",
+     "spkiNew": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEGk3st0ZiuAu42ZlY6w2Bl2CNEZXTl0uL6boCxMLh-ieyB5lOPBI5JaazYhtUEE3pZ1xvi1g1SFL5DHY0mmtgzQ",
+     "sigOld": "MEUCIQC9md8Qk0O9YNmeTkjYzGTnwCPwXPbfPK8N3S2PQSo-GwIgPur0vMEjuovhJ_El129mEq6u2yXOtged-JfJgoGiOec",
+     "sigNew": "MEUCIQC5dDk44bQVSoADN5GJRCWt0entd7soy4Q1bAb79vK1nQIgH5UoMi7MNOKvSLLNg228SN0KOVtZSv11T4Czw67WUDQ"
+    },
+    "now_ms": 1798416060000,
+    "ok": false,
+    "retry": false,
+    "why": "issued-different",
+    "code": "recovery-refused",
+    "answer": null
+   },
+   {
+    "name": "certificate minted by the old CA for another key",
+    "record": {
+     "relayId": "r_3f0a9c2b7d5e1f48",
+     "oldSerial": "71ba231310aff865af9210a82529f4ab",
+     "oldSpki": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEjhvIQakNKLrLlu5LEfONVYItD94ecazIVa08YcqsEVSg6A-ZksFnHBvJtmfUsHuFMR01g7W7kPjNHv4HDxNHag",
+     "until": 1806105600000,
+     "issued": null,
+     "closed": false
+    },
+    "presented_serial_hex": "71ba231310aff865af9210a82529f4ab",
+    "presented_spki_hex": "3059301306072a8648ce3d020106082a8648ce3d030107034200041a4decb74662b80bb8d99958eb0d8197608d1195d3974b8be9ba02c4c2e1fa27b207994e3c123925a6b3621b54104de9675c6f8b58354852f90c76349a6b60cd",
+    "body": {
+     "relayId": "r_3f0a9c2b7d5e1f48",
+     "spkiNew": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEy_SBWMYskDs5hautQUCq_vJ35odVhaSxu63YI_8qF1yWJIhZAWnb1IEDPVRDh0Zmik8tR2LUH0kFuhZ0iBobYw",
+     "sigOld": "MEYCIQCV1O-4lee6WUqCNITAlywHy9E0FYeAIIL5Mnmwy-mOUwIhAPWBPZGarLEsIsYjnT-71NJuxopiULK2-at9mZu-sztA",
+     "sigNew": "MEQCIHXBvZX82M3hxl2o8dqFpB1qsQUbx2sJX-hmVZVEoEu3AiA_CPd5yB48mQQ7VzziOahUG9-tyXGReDBW0l2kPY07Vw"
+    },
+    "now_ms": 1798416000000,
+    "ok": false,
+    "retry": false,
+    "why": "spki",
+    "code": "recovery-refused",
+    "answer": null
+   },
+   {
+    "name": "another serial",
+    "record": {
+     "relayId": "r_3f0a9c2b7d5e1f48",
+     "oldSerial": "71ba231310aff865af9210a82529f4ab",
+     "oldSpki": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEjhvIQakNKLrLlu5LEfONVYItD94ecazIVa08YcqsEVSg6A-ZksFnHBvJtmfUsHuFMR01g7W7kPjNHv4HDxNHag",
+     "until": 1806105600000,
+     "issued": null,
+     "closed": false
+    },
+    "presented_serial_hex": "6d8b7752ce3efbbc9e7d4735825f9e6c",
+    "presented_spki_hex": "3059301306072a8648ce3d020106082a8648ce3d030107034200048e1bc841a90d28bacb96ee4b11f38d55822d0fde1e71acc855ad3c61caac1154a0e80f9992c1671c1bc9b667d4b07b85311d3583b5bb90f8cd1efe070f13476a",
+    "body": {
+     "relayId": "r_3f0a9c2b7d5e1f48",
+     "spkiNew": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEy_SBWMYskDs5hautQUCq_vJ35odVhaSxu63YI_8qF1yWJIhZAWnb1IEDPVRDh0Zmik8tR2LUH0kFuhZ0iBobYw",
+     "sigOld": "MEYCIQCV1O-4lee6WUqCNITAlywHy9E0FYeAIIL5Mnmwy-mOUwIhAPWBPZGarLEsIsYjnT-71NJuxopiULK2-at9mZu-sztA",
+     "sigNew": "MEQCIHXBvZX82M3hxl2o8dqFpB1qsQUbx2sJX-hmVZVEoEu3AiA_CPd5yB48mQQ7VzziOahUG9-tyXGReDBW0l2kPY07Vw"
+    },
+    "now_ms": 1798416000000,
+    "ok": false,
+    "retry": false,
+    "why": "serial",
+    "code": "recovery-refused",
+    "answer": null
+   },
+   {
+    "name": "wrong sigOld",
+    "record": {
+     "relayId": "r_3f0a9c2b7d5e1f48",
+     "oldSerial": "71ba231310aff865af9210a82529f4ab",
+     "oldSpki": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEjhvIQakNKLrLlu5LEfONVYItD94ecazIVa08YcqsEVSg6A-ZksFnHBvJtmfUsHuFMR01g7W7kPjNHv4HDxNHag",
+     "until": 1806105600000,
+     "issued": null,
+     "closed": false
+    },
+    "presented_serial_hex": "71ba231310aff865af9210a82529f4ab",
+    "presented_spki_hex": "3059301306072a8648ce3d020106082a8648ce3d030107034200048e1bc841a90d28bacb96ee4b11f38d55822d0fde1e71acc855ad3c61caac1154a0e80f9992c1671c1bc9b667d4b07b85311d3583b5bb90f8cd1efe070f13476a",
+    "body": {
+     "relayId": "r_3f0a9c2b7d5e1f48",
+     "spkiNew": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEy_SBWMYskDs5hautQUCq_vJ35odVhaSxu63YI_8qF1yWJIhZAWnb1IEDPVRDh0Zmik8tR2LUH0kFuhZ0iBobYw",
+     "sigOld": "MEUCIQD6ymCtRafPgV7Wi_3lm2zEdBBVei0ZBI67E5NdyoC3_QIgNqGslYAgWiAQ2xHxSjpkp41tC5tlLI6N1r-3zVMM1c8",
+     "sigNew": "MEQCIHXBvZX82M3hxl2o8dqFpB1qsQUbx2sJX-hmVZVEoEu3AiA_CPd5yB48mQQ7VzziOahUG9-tyXGReDBW0l2kPY07Vw"
+    },
+    "now_ms": 1798416000000,
+    "ok": false,
+    "retry": false,
+    "why": "sig-old",
+    "code": "recovery-refused",
+    "answer": null
+   },
+   {
+    "name": "missing sigNew",
+    "record": {
+     "relayId": "r_3f0a9c2b7d5e1f48",
+     "oldSerial": "71ba231310aff865af9210a82529f4ab",
+     "oldSpki": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEjhvIQakNKLrLlu5LEfONVYItD94ecazIVa08YcqsEVSg6A-ZksFnHBvJtmfUsHuFMR01g7W7kPjNHv4HDxNHag",
+     "until": 1806105600000,
+     "issued": null,
+     "closed": false
+    },
+    "presented_serial_hex": "71ba231310aff865af9210a82529f4ab",
+    "presented_spki_hex": "3059301306072a8648ce3d020106082a8648ce3d030107034200048e1bc841a90d28bacb96ee4b11f38d55822d0fde1e71acc855ad3c61caac1154a0e80f9992c1671c1bc9b667d4b07b85311d3583b5bb90f8cd1efe070f13476a",
+    "body": {
+     "relayId": "r_3f0a9c2b7d5e1f48",
+     "spkiNew": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEy_SBWMYskDs5hautQUCq_vJ35odVhaSxu63YI_8qF1yWJIhZAWnb1IEDPVRDh0Zmik8tR2LUH0kFuhZ0iBobYw",
+     "sigOld": "MEYCIQCV1O-4lee6WUqCNITAlywHy9E0FYeAIIL5Mnmwy-mOUwIhAPWBPZGarLEsIsYjnT-71NJuxopiULK2-at9mZu-sztA"
+    },
+    "now_ms": 1798416000000,
+    "ok": false,
+    "retry": false,
+    "why": "sig-new",
+    "code": "recovery-refused",
+    "answer": null
+   },
+   {
+    "name": "wrong sigNew",
+    "record": {
+     "relayId": "r_3f0a9c2b7d5e1f48",
+     "oldSerial": "71ba231310aff865af9210a82529f4ab",
+     "oldSpki": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEjhvIQakNKLrLlu5LEfONVYItD94ecazIVa08YcqsEVSg6A-ZksFnHBvJtmfUsHuFMR01g7W7kPjNHv4HDxNHag",
+     "until": 1806105600000,
+     "issued": null,
+     "closed": false
+    },
+    "presented_serial_hex": "71ba231310aff865af9210a82529f4ab",
+    "presented_spki_hex": "3059301306072a8648ce3d020106082a8648ce3d030107034200048e1bc841a90d28bacb96ee4b11f38d55822d0fde1e71acc855ad3c61caac1154a0e80f9992c1671c1bc9b667d4b07b85311d3583b5bb90f8cd1efe070f13476a",
+    "body": {
+     "relayId": "r_3f0a9c2b7d5e1f48",
+     "spkiNew": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEy_SBWMYskDs5hautQUCq_vJ35odVhaSxu63YI_8qF1yWJIhZAWnb1IEDPVRDh0Zmik8tR2LUH0kFuhZ0iBobYw",
+     "sigOld": "MEYCIQCV1O-4lee6WUqCNITAlywHy9E0FYeAIIL5Mnmwy-mOUwIhAPWBPZGarLEsIsYjnT-71NJuxopiULK2-at9mZu-sztA",
+     "sigNew": "MEUCIQD6ymCtRafPgV7Wi_3lm2zEdBBVei0ZBI67E5NdyoC3_QIgNqGslYAgWiAQ2xHxSjpkp41tC5tlLI6N1r-3zVMM1c8"
+    },
+    "now_ms": 1798416000000,
+    "ok": false,
+    "retry": false,
+    "why": "sig-new",
+    "code": "recovery-refused",
+    "answer": null
+   },
+   {
+    "name": "after until",
+    "record": {
+     "relayId": "r_3f0a9c2b7d5e1f48",
+     "oldSerial": "71ba231310aff865af9210a82529f4ab",
+     "oldSpki": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEjhvIQakNKLrLlu5LEfONVYItD94ecazIVa08YcqsEVSg6A-ZksFnHBvJtmfUsHuFMR01g7W7kPjNHv4HDxNHag",
+     "until": 1806105600000,
+     "issued": null,
+     "closed": false
+    },
+    "presented_serial_hex": "71ba231310aff865af9210a82529f4ab",
+    "presented_spki_hex": "3059301306072a8648ce3d020106082a8648ce3d030107034200048e1bc841a90d28bacb96ee4b11f38d55822d0fde1e71acc855ad3c61caac1154a0e80f9992c1671c1bc9b667d4b07b85311d3583b5bb90f8cd1efe070f13476a",
+    "body": {
+     "relayId": "r_3f0a9c2b7d5e1f48",
+     "spkiNew": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEy_SBWMYskDs5hautQUCq_vJ35odVhaSxu63YI_8qF1yWJIhZAWnb1IEDPVRDh0Zmik8tR2LUH0kFuhZ0iBobYw",
+     "sigOld": "MEYCIQCV1O-4lee6WUqCNITAlywHy9E0FYeAIIL5Mnmwy-mOUwIhAPWBPZGarLEsIsYjnT-71NJuxopiULK2-at9mZu-sztA",
+     "sigNew": "MEQCIHXBvZX82M3hxl2o8dqFpB1qsQUbx2sJX-hmVZVEoEu3AiA_CPd5yB48mQQ7VzziOahUG9-tyXGReDBW0l2kPY07Vw"
+    },
+    "now_ms": 1806105600001,
+    "ok": false,
+    "retry": false,
+    "why": "expired",
+    "code": "recovery-refused",
+    "answer": null
+   },
+   {
+    "name": "after the first normal connection",
+    "record": {
+     "relayId": "r_3f0a9c2b7d5e1f48",
+     "oldSerial": "71ba231310aff865af9210a82529f4ab",
+     "oldSpki": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEjhvIQakNKLrLlu5LEfONVYItD94ecazIVa08YcqsEVSg6A-ZksFnHBvJtmfUsHuFMR01g7W7kPjNHv4HDxNHag",
+     "until": 1806105600000,
+     "issued": null,
+     "closed": true
+    },
+    "presented_serial_hex": "71ba231310aff865af9210a82529f4ab",
+    "presented_spki_hex": "3059301306072a8648ce3d020106082a8648ce3d030107034200048e1bc841a90d28bacb96ee4b11f38d55822d0fde1e71acc855ad3c61caac1154a0e80f9992c1671c1bc9b667d4b07b85311d3583b5bb90f8cd1efe070f13476a",
+    "body": {
+     "relayId": "r_3f0a9c2b7d5e1f48",
+     "spkiNew": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEy_SBWMYskDs5hautQUCq_vJ35odVhaSxu63YI_8qF1yWJIhZAWnb1IEDPVRDh0Zmik8tR2LUH0kFuhZ0iBobYw",
+     "sigOld": "MEYCIQCV1O-4lee6WUqCNITAlywHy9E0FYeAIIL5Mnmwy-mOUwIhAPWBPZGarLEsIsYjnT-71NJuxopiULK2-at9mZu-sztA",
+     "sigNew": "MEQCIHXBvZX82M3hxl2o8dqFpB1qsQUbx2sJX-hmVZVEoEu3AiA_CPd5yB48mQQ7VzziOahUG9-tyXGReDBW0l2kPY07Vw"
+    },
+    "now_ms": 1798419600000,
+    "ok": false,
+    "retry": false,
+    "why": "closed",
+    "code": "recovery-refused",
+    "answer": null
+   },
+   {
+    "name": "no record for this relay",
+    "record": null,
+    "presented_serial_hex": "71ba231310aff865af9210a82529f4ab",
+    "presented_spki_hex": "3059301306072a8648ce3d020106082a8648ce3d030107034200048e1bc841a90d28bacb96ee4b11f38d55822d0fde1e71acc855ad3c61caac1154a0e80f9992c1671c1bc9b667d4b07b85311d3583b5bb90f8cd1efe070f13476a",
+    "body": {
+     "relayId": "r_3f0a9c2b7d5e1f48",
+     "spkiNew": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEy_SBWMYskDs5hautQUCq_vJ35odVhaSxu63YI_8qF1yWJIhZAWnb1IEDPVRDh0Zmik8tR2LUH0kFuhZ0iBobYw",
+     "sigOld": "MEYCIQCV1O-4lee6WUqCNITAlywHy9E0FYeAIIL5Mnmwy-mOUwIhAPWBPZGarLEsIsYjnT-71NJuxopiULK2-at9mZu-sztA",
+     "sigNew": "MEQCIHXBvZX82M3hxl2o8dqFpB1qsQUbx2sJX-hmVZVEoEu3AiA_CPd5yB48mQQ7VzziOahUG9-tyXGReDBW0l2kPY07Vw"
+    },
+    "now_ms": 1798416000000,
+    "ok": false,
+    "retry": false,
+    "why": "no-record",
+    "code": "recovery-refused",
+    "answer": null
+   }
+  ]
+ }
+}

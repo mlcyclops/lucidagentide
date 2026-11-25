@@ -19,6 +19,23 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+/// AC-2a 4.11 and 9.1 (`Hub::fleet_counts`): the relay's people, devices and calls, as counts for `meet/counts`.
+#[derive(Clone, Debug, Default)]
+pub struct FleetCounts {
+    /// Every principal the relay holds (directory) or sees online.
+    pub principals: Vec<String>,
+    /// The principals online now.
+    pub online: HashSet<String>,
+    /// Every (principal, device) known or online.
+    pub devices: Vec<(String, String)>,
+    pub devices_online: usize,
+    pub revoked: usize,
+    /// Rooms with 2 or more participants.
+    pub calls_active: usize,
+    pub participants: usize,
+    pub enrollments_waiting: usize,
+}
+
 // Scheduled meetings and conversations (channels, group chats, threads, pins, search): child modules, so they share
 // the hub's one lock and its private state.
 #[path = "meet_meetings.rs"]
@@ -56,9 +73,21 @@ pub mod pc;
 // PC-1 section 2: canvases and lists (/v1/docs/*).
 #[path = "meet_pc_docs.rs"]
 mod pc_docs;
+// AI-1: who may use org AI, the personal-access audit and AI history (`ai:` conversations).
+#[path = "meet_ai.rs"]
+pub mod ai;
+// WA-1 (web access): verified guests and guest rules, guests inside encryption, captions for others, web sessions.
+#[path = "meet_web_access.rs"]
+pub mod wa;
+// API-1 revision 4 5.1: the relay end of `api-compliance-read`.
+#[path = "meet_compliance.rs"]
+pub mod compliance;
 
 pub const PEER_TIMEOUT: f64 = 40.0;
 pub const SESSION_TIMEOUT: f64 = 40.0;
+/// PR-1 1.2: a push-registered person whose device was seen within this many days shows away (mobile).
+pub const PRESENCE_MOBILE_DAYS: f64 = 7.0;
+const ACTIVE_ERROR: &str = "active must be true or false";
 const CHAT_KEEP: usize = 200;
 const QUEUE_KEEP: usize = 500;
 const PEER_MAX_PER_ROOM: usize = 8;
@@ -83,6 +112,8 @@ const CALL_REACT_EVERY: f64 = 0.5;
 const STAGE_ACTIONS: [&str; 13] = ["present", "stop", "request", "cancel", "grant", "deny", "hand", "make_host", "mute", "remove", "react", "spotlight", "cohost"];
 const NOT_HOST: &str = "only the host can do that";
 const SAVE_EVERY: f64 = 2.0;
+/// NT-1: the ring timer and the delayed pushes run this often (seconds).
+const NT_TICK: f64 = 1.0;
 const REAP_EVERY: f64 = 5.0;
 const PRUNE_EVERY: f64 = 3600.0;
 const STATE_FILE: &str = "state.json";
@@ -346,6 +377,13 @@ pub struct Peer {
     /// to the relay ("" until it publishes). Live only, never logged.
     epk: String,
     epk_sig: String,
+    /// WA-1 section 5.1: the join's `caps` (None: an app that sent none, which captions itself) and how many others
+    /// it may caption (`caption_others_max`).
+    caps: Option<Vec<String>>,
+    cap_max: i64,
+    /// CD-1: the presence session id its join proved (`session`), "" when none. Copy detection skips this peer for
+    /// a request that proves the same live session. Live only.
+    session: String,
 }
 
 impl Peer {
@@ -364,6 +402,22 @@ pub struct Session {
     pub address: String,
     pub client: Obj,
     waiters: i64,
+    /// PR-1 1.1: the person is using this device (hello `active`, `/v1/activity`).
+    pub active: bool,
+}
+
+/// The NT-1 release of the apps: a session of an older `hub` or `ios` app is not told of an invitation that does
+/// not ring (MV-2).
+const NT1_APPS: &str = "0.97.0";
+
+/// MV-2: the session's client is a pre-NT-1 app (`hub` or `ios` below NT1_APPS).
+fn pre_nt1(client: &Obj) -> bool {
+    matches!(pj::s(client, "app").as_str(), "hub" | "ios") && m::version_key(&pj::s(client, "version")) < m::version_key(NT1_APPS)
+}
+
+/// MV-2: whether a session with this client hears of the invitation (a silent one skips a pre-NT-1 app).
+fn hears_invite(client: &Obj, inv: &Obj) -> bool {
+    inv.get("ring") != Some(&Value::Bool(false)) || !pre_nt1(client)
 }
 
 fn push(seq: &mut i64, events: &mut VecDeque<Obj>, event: &Obj) {
@@ -388,6 +442,16 @@ struct Stay {
     chat_stay: String,
     /// The newest signed catch-up option of the call's chat (meet_chat_e2ee::ce_catchup).
     chat_catchup: Option<Obj>,
+    /// WA-1 section 5.1: seat -> the seat captioning it (null: nobody), the captioner service asked, and removed.
+    captioning: Obj,
+    caption_requested: bool,
+    captioner_removed: bool,
+}
+
+impl Stay {
+    fn new(start: f64, seen: IndexMap<String, f64>, late_history: bool) -> Stay {
+        Stay { start, seen, late_history, chat_stay: String::new(), chat_catchup: None, captioning: Obj::new(), caption_requested: false, captioner_removed: false }
+    }
 }
 
 struct Moved {
@@ -403,7 +467,17 @@ struct GoneQueue {
 }
 
 type Lines = IndexMap<String, Vec<Obj>>;
-type PState = (bool, String, Vec<(String, String, String)>);
+/// PR-1 1.1: a hello's or `/v1/activity`'s `active`; a missing one is `absent` (hello: true) or refused (None).
+pub fn parse_active(v: Option<&Value>, absent: Option<bool>) -> R<bool> {
+    match (v, absent) {
+        (None, Some(d)) => Ok(d),
+        (Some(Value::Bool(b)), _) => Ok(*b),
+        _ => bad(ACTIVE_ERROR),
+    }
+}
+
+/// (online, room, devices, presence, mobile).
+type PState = (bool, String, Vec<(String, String, String)>, &'static str, bool);
 
 pub struct State {
     pub peers: IndexMap<String, Peer>,
@@ -422,13 +496,15 @@ pub struct State {
     consumed_seeds: Obj,
     seed_requests: Obj,
     seeded: Obj,
-    denied: Obj,
+    pub(crate) denied: Obj,
     moved: HashMap<String, Moved>,
     room_seq: HashMap<String, i64>,
     stays: HashMap<String, Stay>,
     gone: HashMap<String, GoneQueue>,
     pub dirty: bool,
     last_prune: f64,
+    /// PR-1 1.4: when (wall seconds) the reaper last looked for an away (mobile) that ran out.
+    mobile_checked: f64,
     history_s: f64,
     mail_s: f64,
     /// relay.json `recording_enabled` and `organizations` (principal -> {id, label}), set at start.
@@ -484,15 +560,19 @@ pub struct State {
     emoji: Obj,
     /// In memory: parity wave A's settings and the emoji images without a state folder.
     pa: parity::Parity,
-    /// principal -> {device: {token, env, ts, serial}}: the iPhone devices registered for alert pushes.
+    /// principal -> {device: {token, env, ts, serial, seal, sk, seal_prev, sk_prev, voip, callkit}}: the iPhone devices
+    /// registered for pushes (NT-1 section 3.2; the seal keys are guarded like push.secret).
     push_tokens: Obj,
-    /// In memory: the APNs sender (None: push is off), the thread-id secret and the push rate book.
+    /// In memory: the APNs sender (None: push is off), the thread-id secret, the push rate books, the ring buckets and
+    /// the NT-1 timers.
     pu: push::Push,
     /// In memory: parity wave C's settings, the verified org policy store, SSO answers and app icons without a state
     /// folder (persisted state: ext["pc"]).
     pc: pc::Pc,
     /// In memory: the canvases' and cursors' rate counters.
     pc_docs: pc_docs::DocsRate,
+    /// In memory: WA-1's settings, web port sessions and challenges, guest conflicts (persisted state: ext["wa"]).
+    wa: wa::Wa,
 }
 
 /// _empty_stage. `spotlight`: the peer everyone sees large ("" for none); `cohosts`: the co-organizers' principals.
@@ -725,6 +805,7 @@ impl State {
             out.insert("cert".into(), Value::from(p.cert.clone()));
         }
         self.sfu_member(p, &mut out);
+        self.wa_member(p, &mut out); // WA-1: a guest's key, bundle, verification, admission, rules
         out
     }
 
@@ -751,11 +832,14 @@ impl State {
     }
 
     /// _person: a room peer as join answers, join events and the stage name it ({peer, name, principal, org}, plus
-    /// `guest: true` for a web guest).
+    /// `guest: true`, `email` and `email_verified` for a web guest).
     fn person(&self, p: &Peer) -> Obj {
         let mut out = with(&p.public(), obj([("org", self.org(&p.who.principal))]));
         if p.who.guest {
+            let rec = self.guests.rec.get(&guests::guest_id(&p.who.principal));
             out.insert("guest".into(), Value::Bool(true));
+            out.insert("email".into(), Value::from(rec.map(|r| r.email.clone()).unwrap_or_default()));
+            out.insert("email_verified".into(), Value::Bool(rec.is_some_and(|r| r.email_verified)));
         }
         out
     }
@@ -775,6 +859,8 @@ impl State {
             ("devices", Self::devices_value(&state.2)),
             ("org", self.org(principal)),
             ("status", self.status_of(principal)),
+            ("presence", Value::from(state.3)),
+            ("mobile", Value::Bool(state.4)),
         ])
     }
 
@@ -820,6 +906,7 @@ impl State {
             self.control_stage_view(room, v);
             self.guests_stage_view(room, v);
             self.sfu_stage_view(room, v);
+            self.wa_stage_view(room, v);
         }
         view
     }
@@ -937,13 +1024,31 @@ impl State {
 
     fn seen(&mut self, who: &Identity) {
         // the console server, web guests, bridge connectors and services (apps, archives, SSO) are not people
-        if who.console || who.guest || who.connector || who.is_service() {
+        if who.is_console() || who.guest || who.connector || who.is_service() {
             return;
         }
         let now = pj::now();
         let mut devices = as_obj(self.directory.get(&who.principal)).and_then(|e| as_obj(e.get("devices"))).cloned().unwrap_or_default();
         if !who.device.is_empty() {
-            devices.insert(who.device.clone(), Value::Object(obj([("label", Value::from(who.device_label.clone())), ("last_seen", f(now))])));
+            let mut d = obj([("label", Value::from(who.device_label.clone())), ("last_seen", f(now))]);
+            // AC-1 2.4 seats: when the record began, and the certificate it was last seen with
+            let old = devices.get(&who.device).and_then(Value::as_object).cloned().unwrap_or_default();
+            d.insert("added".into(), old.get("added").cloned().unwrap_or_else(|| f(now)));
+            if !who.serial.is_empty() {
+                d.insert("serial".into(), Value::from(m::serial(&who.serial)));
+                d.insert("not_before".into(), Value::from(who.not_before));
+                d.insert("not_after".into(), Value::from(who.not_after));
+            } else {
+                for k in ["serial", "not_before", "not_after"] {
+                    if let Some(v) = old.get(k) {
+                        d.insert(k.into(), v.clone());
+                    }
+                }
+            }
+            if who.kind == "web" {
+                d.insert("web".into(), Value::Bool(true)); // WA-1 4.5: never a history share's target
+            }
+            devices.insert(who.device.clone(), Value::Object(d));
         }
         let mut entry = obj([("name", Value::from(who.name.clone())), ("last_seen", f(now))]);
         if !devices.is_empty() {
@@ -988,17 +1093,78 @@ impl State {
 
     fn pstate(&self, principal: &str) -> PState {
         let devices = self.devices(principal);
+        let (presence, mobile) = self.presence_of(principal);
         if let Some(p) = self.peers.values().find(|p| p.who.principal == principal) {
-            return (true, p.room.clone(), devices);
+            return (true, p.room.clone(), devices, presence, mobile);
         }
         if self.sessions.values().any(|s| s.who.principal == principal) {
-            return (true, String::new(), devices);
+            return (true, String::new(), devices, presence, mobile);
         }
-        (false, String::new(), devices)
+        (false, String::new(), devices, presence, mobile)
+    }
+
+    /// PR-1 1.2: a person's automatic `(presence, mobile)`.
+    fn presence_of(&self, principal: &str) -> (&'static str, bool) {
+        if self.peers.values().any(|p| p.who.principal == principal) {
+            return ("available", false);
+        }
+        let mut live = self.sessions.values().filter(|s| s.who.principal == principal).peekable();
+        if live.peek().is_some() {
+            return if live.any(|s| s.active) { ("available", false) } else { ("away", false) };
+        }
+        if self.pu_on() && self.mobile_seen(principal) >= pj::now() - PRESENCE_MOBILE_DAYS * 86400.0 {
+            return ("away", true);
+        }
+        ("offline", false)
+    }
+
+    /// The newest directory `last_seen` of this person's push-registered devices (-inf without one).
+    fn mobile_seen(&self, principal: &str) -> f64 {
+        let Some(registered) = self.push_tokens.get(principal).and_then(Value::as_object) else { return f64::NEG_INFINITY };
+        let seen = self.directory.get(principal).and_then(|e| e.get("devices")).and_then(Value::as_object);
+        registered
+            .keys()
+            .filter_map(|d| seen.and_then(|s| s.get(d)).and_then(Value::as_object).map(|i| pj::num(i, "last_seen")))
+            .fold(f64::NEG_INFINITY, f64::max)
+    }
+
+    /// A `presence` event about this person to every session when their state changed since `before` (a push
+    /// registration added or removed, an away (mobile) that ran out).
+    pub(crate) fn presence_changed(&mut self, principal: &str, before: &PState) {
+        if self.pstate(principal) != *before {
+            self.tell_presence(principal);
+        }
+    }
+
+    /// PR-1 1.4: at most once an hour, the people whose away (mobile) ran out since the last check (their newest
+    /// registered device passed PRESENCE_MOBILE_DAYS) are announced.
+    fn mobile_expire(&mut self) {
+        let now = pj::now();
+        if now - self.mobile_checked < PRUNE_EVERY {
+            return;
+        }
+        let (from, to) = (self.mobile_checked - PRESENCE_MOBILE_DAYS * 86400.0, now - PRESENCE_MOBILE_DAYS * 86400.0);
+        self.mobile_checked = now;
+        if !self.pu_on() {
+            return;
+        }
+        let ran_out: Vec<String> = self
+            .push_tokens
+            .keys()
+            .filter(|p| !self.peers.values().any(|x| x.who.principal == **p) && !self.sessions.values().any(|s| s.who.principal == **p))
+            .filter(|p| {
+                let seen = self.mobile_seen(p);
+                seen >= from && seen < to
+            })
+            .cloned()
+            .collect();
+        for p in ran_out {
+            self.tell_presence(&p);
+        }
     }
 
     fn announce(&mut self, who: &Identity, before: &PState) {
-        if who.console || who.guest || who.connector || who.is_service() {
+        if who.is_console() || who.guest || who.connector || who.is_service() {
             return;
         }
         let after = self.pstate(&who.principal);
@@ -1017,17 +1183,28 @@ impl State {
         }
     }
 
-    /// _check_copy: a device certificate active right now from another address is refused (409).
-    fn check_copy(&mut self, who: &Identity, address: &str) -> R<()> {
+    /// CD-1: `proof` if it names a live presence session of this principal and device, else "".
+    fn proven_session(&self, who: &Identity, proof: &str) -> String {
+        match self.sessions.get(proof) {
+            Some(s) if !proof.is_empty() && !who.device.is_empty() && s.who.principal == who.principal && s.who.device == who.device => proof.to_string(),
+            _ => String::new(),
+        }
+    }
+
+    /// _check_copy: a device certificate active right now from another address is refused (409). CD-1: `proof` (a
+    /// join's `session`, a hello's `resume`) naming a live session of this principal and device exempts that session
+    /// and the peers joined with it; any other value is ignored.
+    fn check_copy(&mut self, who: &Identity, address: &str, proof: &str) -> R<()> {
         if who.device.is_empty() || address.is_empty() {
             return Ok(());
         }
+        let proof = self.proven_session(who, proof);
         let now = pj::mono();
         let others: Vec<(String, String, f64, String)> = self
             .sessions
             .values()
-            .map(|s| (s.who.principal.clone(), s.who.device.clone(), s.last_seen, s.address.clone()))
-            .chain(self.peers.values().map(|p| (p.who.principal.clone(), p.who.device.clone(), p.last_seen, p.address.clone())))
+            .map(|s| (s.who.principal.clone(), s.who.device.clone(), s.last_seen, if !proof.is_empty() && s.session_id == proof { String::new() } else { s.address.clone() }))
+            .chain(self.peers.values().map(|p| (p.who.principal.clone(), p.who.device.clone(), p.last_seen, if !proof.is_empty() && p.session == proof { String::new() } else { p.address.clone() })))
             .collect();
         let labels: Vec<String> = self.sessions.values().map(|s| s.who.device_label.clone()).chain(self.peers.values().map(|p| p.who.device_label.clone())).collect();
         for (i, (p, d, last, addr)) in others.iter().enumerate() {
@@ -1058,7 +1235,7 @@ impl State {
     pub fn online(&self) -> IndexMap<String, Obj> {
         let mut out: IndexMap<String, Obj> = IndexMap::new();
         let mut add = |who: &Identity, since: f64, room: &str| {
-            if who.console || who.guest || who.connector || who.is_service() {
+            if who.is_console() || who.guest || who.connector || who.is_service() {
                 return;
             }
             match out.get_mut(&who.principal) {
@@ -1081,6 +1258,9 @@ impl State {
             e.insert("devices".into(), Self::devices_value(&self.devices(principal)));
             e.insert("org".into(), self.org(principal));
             e.insert("status".into(), self.status_of(principal));
+            let (presence, mobile) = self.presence_of(principal);
+            e.insert("presence".into(), Value::from(presence));
+            e.insert("mobile".into(), Value::Bool(mobile));
         }
         out
     }
@@ -1140,6 +1320,7 @@ impl State {
                 let by = pj::text_of(&person, "principal");
                 self.stage_event(room, if organizer { "organizer" } else { "cohost" }, &by, Some(&id));
             }
+            self.wa_recaption(room);
         }
     }
 
@@ -1227,6 +1408,8 @@ impl State {
             peer.tally.summary(pj::mono())
         ));
         if end_stay && !self.peers.values().any(|p| p.room == peer.room) {
+            // NT-1 section 3.5: the inviter left and nobody is in the room: their open invitations to it are cancelled
+            self.nt_left(&peer.who.principal, &peer.room);
             self.stages.remove(&peer.room);
             self.pa_attend_end(&peer.room);
             self.wave3_room_empty(&peer.room);
@@ -1254,6 +1437,11 @@ impl State {
 
     /// _session: the caller's live presence session.
     fn session(&self, id: &str, who: &Identity) -> R<()> {
+        // AC-1 (I8): the Admin Console's in-process identity (Hub::check_console_admin; never from a certificate) has
+        // no presence session; the per-principal rules that follow still apply to its principal
+        if who.is_console() {
+            return Ok(());
+        }
         match self.sessions.get(id) {
             None => Err(E::Gone("not connected (the relay ended this session); say hello again".into())),
             Some(s) if s.who.principal != who.principal => forbidden("that session belongs to someone else"),
@@ -1272,6 +1460,11 @@ impl State {
 
     fn check_admin(&self, session: &str, who: &Identity) -> R<()> {
         self.session(session, who)?;
+        // AC-1 4.9: a console user manager's in-process reader identity (check_console_reader); console_meet.rs
+        // passes it to read functions only
+        if who.kind == m::CONSOLE_READER_KIND {
+            return Ok(());
+        }
         if !self.admins.contains(&who.principal) {
             return forbidden("only the person who issues certificates can do that");
         }
@@ -1428,6 +1621,7 @@ impl State {
         self.control_left(peer, why);
         self.sfu_left(peer, why);
         self.guests_left(peer, why);
+        self.wa_left(peer, why);
     }
 
     /// _wave3_room_empty: the last one left a room.
@@ -1437,6 +1631,7 @@ impl State {
         self.control_room_empty(room);
         self.sfu_room_empty(room);
         self.guests_room_empty(room);
+        self.wa_room_empty(room);
     }
 
     /// _wave3_prune: the periodic prune (and the one at load), before the relay's own retention.
@@ -1451,6 +1646,7 @@ impl State {
         self.ce_prune(now);
         self.pa_prune(now);
         self.pc_prune(now);
+        self.ai_prune(now);
     }
 
     /// _wave3_each("may_join"): a slice may refuse a join (before any seat changes). `ext`: the join's body.
@@ -1458,7 +1654,8 @@ impl State {
         self.breakout_may_join(room, who)?;
         self.sfu_may_join(room, who, ext)?;
         self.guests_may_join(room, who)?;
-        self.bridge_may_join(who)
+        self.bridge_may_join(who)?;
+        self.wa_may_join(room, who, ext)
     }
 
     /// _wave3_each("stay_created"): the first join into an empty room started a stay.
@@ -1475,7 +1672,7 @@ impl State {
     /// _wave3_join_extra: what the slices add to (or replace in) a join answer.
     fn wave3_join_extra(&mut self, room: &str, peer_id: &str) -> Obj {
         let mut out = self.breakout_join_extra(room, peer_id);
-        for part in [self.sfu_join_extra(room, peer_id), self.guests_join_extra(room, peer_id), self.ce_join_extra(room)] {
+        for part in [self.sfu_join_extra(room, peer_id), self.guests_join_extra(room, peer_id), self.ce_join_extra(room), self.wa_join_extra(room)] {
             for (k, v) in part {
                 out.insert(k, v);
             }
@@ -1493,7 +1690,8 @@ impl Hub {
         st.guests_configure(s)?;
         st.bridge_configure(s)?;
         st.pa_configure(s);
-        st.ce_configure(s)
+        st.ce_configure(s)?;
+        st.wa_configure(s)
     }
 
     /// _wave3_each("tick"), every reap: the media server's check against seats (on its own thread) and the guests'
@@ -1507,6 +1705,7 @@ impl Hub {
         if st.guests_on() {
             st.guests_sweep();
         }
+        st.wa_tick(pj::now());
         drop(st);
         self.wake();
     }
@@ -1698,9 +1897,42 @@ pub struct Hub {
     state_dir: Option<PathBuf>,
     save_lock: Mutex<()>,
     stop: AtomicBool,
+    /// AC-1: the Admin Console's hooks (anchor latching, request observation) and its device blocks.
+    console_hooks: Mutex<Option<Arc<dyn ConsoleHooks>>>,
+    denied_until: Mutex<HashMap<String, f64>>,
+    /// AC-1 2.4 (R4-1, R4-2): the Meeting Hub service gate and seats, installed at start before the ports listen.
+    gate: Mutex<Option<Arc<crate::meet_license::MeetGate>>>,
+}
+
+/// What the Admin Console wants to hear from the hub (contract 3.2 latching, 3.8 observation).
+pub trait ConsoleHooks: Send + Sync {
+    /// Certificate serials the relay now holds revoked.
+    fn revoked(&self, serials: &[String]);
+    /// An outcome a `meet.*` request waits for: `kind` "meet.approve", "meet.revoke" or "meet.invite".
+    fn observed(&self, kind: &str, target: &Obj, by: &str, link: Option<&str>);
+    /// AC-1 4.9 `check_console_reader`: an active console user manager or admin (R4-8).
+    fn reader(&self, _email: &str) -> bool {
+        false
+    }
+    /// AC-1 2.4: an active console admin (protected from losing a seat, R3-M6).
+    fn console_admin(&self, _principal: &str) -> bool {
+        false
+    }
+    /// The active console admins' emails (seat and license notices, I12).
+    fn admin_emails(&self) -> Vec<String> {
+        Vec::new()
+    }
+    /// An audit entry from the relay itself (actor `relay`, I13).
+    fn audit(&self, _action: &str, _target: &str, _detail: Value) {}
+    /// An audit entry for something the host's operator did offline (actor `operator`): `license.time-reset`.
+    fn audit_operator(&self, _action: &str, _target: &str, _detail: Value) {}
+    /// A mail through the console's mailer (I12).
+    fn mail(&self, _kind: &str, _to: &str, _args: &[(&str, String)]) {}
 }
 
 type Body<'a> = Option<&'a Value>;
+/// One checked caption line: its text and its optional numbers.
+type CaptionLine = (String, Option<i64>, Option<i64>, Option<i64>);
 
 impl Hub {
     pub fn new(state_dir: Option<PathBuf>, admins: &[String], history_hours: f64, mail_days: f64, channel_days: f64, signer: Option<Arc<SignerClient>>, links: Arc<LinkStats>) -> Hub {
@@ -1735,6 +1967,7 @@ impl Hub {
             gone: HashMap::new(),
             dirty: false,
             last_prune: pj::mono(),
+            mobile_checked: pj::now(),
             history_s: history_hours * 3600.0,
             mail_s: mail_days * 86400.0,
             recording_enabled: true,
@@ -1766,8 +1999,9 @@ impl Hub {
             pu: push::Push::new(state_dir.as_deref()),
             pc: pc::Pc::new(state_dir.as_deref()),
             pc_docs: pc_docs::DocsRate::default(),
+            wa: wa::Wa::new(),
         };
-        let hub = Hub { st: Mutex::new(st), cond: Condvar::new(), signer, links, state_dir, save_lock: Mutex::new(()), stop: AtomicBool::new(false) };
+        let hub = Hub { st: Mutex::new(st), cond: Condvar::new(), signer, links, state_dir, save_lock: Mutex::new(()), stop: AtomicBool::new(false), console_hooks: Mutex::new(None), denied_until: Mutex::new(HashMap::new()), gate: Mutex::new(None) };
         if hub.state_dir.is_some() {
             hub.load();
         }
@@ -1896,9 +2130,17 @@ impl Hub {
         let _ = std::fs::rename(path, PathBuf::from(bad));
     }
 
-    /// Write state.json now (tmp file, then rename).
+    /// Write state.json now (tmp file, then rename); a failed write is logged and left to the upkeep's next save.
     pub fn save(&self) {
-        let Some(path) = self.path() else { return };
+        if let Err(e) = self.save_synced() {
+            log_warn(&e);
+        }
+    }
+
+    /// Write state.json now (tmp file synced, then renamed, then the folder synced). Err when it is not on disk: the
+    /// state stays dirty, so the upkeep writes it again. Without a state folder there is nothing to write (Ok).
+    pub fn save_synced(&self) -> Result<(), String> {
+        let Some(path) = self.path() else { return Ok(()) };
         let _g = self.save_lock.lock();
         let data = {
             let mut st = self.st.lock();
@@ -1924,32 +2166,45 @@ impl Hub {
             fh.flush()?;
             fh.sync_all()?;
             drop(fh);
-            std::fs::rename(&tmp, &path)
+            std::fs::rename(&tmp, &path)?;
+            #[cfg(unix)]
+            if let Some(d) = path.parent() {
+                if let Ok(d) = std::fs::File::open(d) {
+                    let _ = d.sync_all();
+                }
+            }
+            Ok(())
         })();
-        if let Err(e) = result {
-            log_warn(&format!("cannot write {}: {e}", path.display()));
+        result.map_err(|e| {
             self.st.lock().dirty = true;
-        }
+            format!("cannot write {}: {e}", path.display())
+        })
     }
 
-    /// Background upkeep: reap every REAP_EVERY s, save at most every SAVE_EVERY s when something changed.
+    /// Background upkeep: the NT-1 ring timer and delayed pushes every NT_TICK s (at most 1 s late), reap every
+    /// REAP_EVERY s, save at most every SAVE_EVERY s when something changed.
     pub fn start(self: &Arc<Self>) {
         let hub = self.clone();
         let _ = std::thread::Builder::new().name("relay-upkeep".into()).spawn(move || {
             let mut last_reap = pj::mono();
+            let mut last_save = pj::mono();
             loop {
-                std::thread::sleep(Duration::from_secs_f64(SAVE_EVERY));
+                std::thread::sleep(Duration::from_secs_f64(NT_TICK));
                 if hub.stop.load(Ordering::Relaxed) {
                     return;
                 }
                 let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    hub.push_tick();
                     if pj::mono() - last_reap >= REAP_EVERY {
                         last_reap = pj::mono();
                         hub.reap();
                         hub.wave3_tick();
                     }
-                    if hub.st.lock().dirty {
-                        hub.save();
+                    if pj::mono() - last_save >= SAVE_EVERY {
+                        last_save = pj::mono();
+                        if hub.st.lock().dirty {
+                            hub.save();
+                        }
                     }
                 }));
                 if r.is_err() {
@@ -1990,7 +2245,10 @@ impl Hub {
         st.moved.retain(|_, v| now - v.at <= PEER_TIMEOUT);
         // a status whose `until` came goes back to automatic
         st.pa_status_sweep();
+        st.mobile_expire();
         let wall = pj::now();
+        // ID-1 2.11: a stale status or a suspension closes sessions itself
+        st.pc_id_sweep(wall);
         let rooms: Vec<String> = st.stages.keys().cloned().collect();
         for room in rooms {
             // the granted person never presented
@@ -2043,7 +2301,10 @@ impl Hub {
 
     #[allow(clippy::too_many_arguments)]
     fn join_locked(&self, st: &mut State, room: &str, who: &Identity, address: &str, late_history: bool, client: &Obj, ext: &Obj) -> R<(Obj, String)> {
-        st.check_copy(who, address)?;
+        let (caps, cap_max) = wa::caps(ext)?;
+        let proof = ext.get("session").and_then(Value::as_str).unwrap_or("");
+        st.check_copy(who, address, proof)?;
+        let joined_session = st.proven_session(who, proof);
         st.wave3_may_join(room, who, ext)?;
         let mine: Vec<String> = st.peers.values().filter(|p| p.who.principal == who.principal && p.room == room).map(|p| p.peer_id.clone()).collect();
         let cap = st.wave3_cap(room);
@@ -2102,6 +2363,9 @@ impl Hub {
             e2ee: ext.get("e2ee") == Some(&Value::Bool(true)),
             epk: String::new(),
             epk_sig: String::new(),
+            caps,
+            cap_max,
+            session: joined_session,
         };
         let mut members = st.members(room);
         let recording: Vec<Value> = st.peers.values().filter(|p| p.room == room && p.recording).map(|p| Value::from(p.peer_id.clone())).collect();
@@ -2119,7 +2383,7 @@ impl Hub {
         let now = pj::now();
         let creates = !st.stays.contains_key(room);
         if creates {
-            st.stays.insert(room.to_string(), Stay { start: now, seen: IndexMap::new(), late_history, chat_stay: String::new(), chat_catchup: None });
+            st.stays.insert(room.to_string(), Stay::new(now, IndexMap::new(), late_history));
             st.wave3_stay_created(room, who, ext);
             if late_history {
                 log_info(&format!("options room={room} principal={} late_history=on why=created", who.principal));
@@ -2155,6 +2419,7 @@ impl Hub {
                 st.stage_event(room, "join", &who.principal, Some(&peer_id));
             }
         }
+        st.wa_joined(room, &peer_id);
         let stage_view = st.stage_view_ext(room);
         let log = st.rooms.get(room).cloned().unwrap_or_default();
         let chats: Vec<&Obj> = log.iter().filter(|l| pj::text_of(l, "kind") == "chat").collect();
@@ -2182,12 +2447,8 @@ impl Hub {
             ("ts", f(pj::now())),
         ]);
         st.room_log(room, &mut line);
-        if let Some(pending) = st.invites.get_mut(&who.principal) {
-            pending.retain(|i| pj::text_of(i, "room") != room);
-            if pending.is_empty() {
-                st.invites.shift_remove(&who.principal);
-            }
-        }
+        // NT-1 section 3.5: the person's invitations to this room are answered (they stay, settled, joinable)
+        st.nt_joined(who, room);
         st.announce(who, &before);
         let mut out_missed = obj([("since", since.unwrap_or(Value::Null)), ("lines", Value::Array(missed))]);
         if late_join {
@@ -2375,6 +2636,8 @@ impl Hub {
         }
         st.room_log(&room, &mut line);
         st.broadcast(&room, &line, None);
+        // AC-2a 9.2: one chat message relayed.
+        crate::fleet_probe::counters().message(1);
         if !mentioned.is_empty() {
             let event = obj([
                 ("type", Value::from("mention")),
@@ -2842,14 +3105,15 @@ impl Hub {
         st.owned(peer_id, who)?;
         st.sfu_caption_check(peer_id, std::iter::once(text))?;
         let room = st.peers[peer_id].room.clone();
-        let (line, repeat) = Self::caption_line(&mut st, peer_id, who, text, cseq, age, dur)?;
+        let (line, repeat) = Self::caption_line(&mut st, peer_id, who, text, cseq, age, dur, None)?;
         drop(st);
         self.wake();
         Self::caption_logged(&room, who, text, &line, repeat);
         Ok(line)
     }
 
-    pub fn captions(&self, peer_id: &str, who: &Identity, lines: Body, weak: Option<bool>, sent_ms: Body) -> R<Obj> {
+    /// `for_`: the seat whose speech the caller captions (WA-1 section 5.2), only from its assigned captioner.
+    pub fn captions(&self, peer_id: &str, who: &Identity, lines: Body, weak: Option<bool>, sent_ms: Body, for_: Body) -> R<Obj> {
         let Some(Value::Array(lines)) = lines else { return bad("lines must be a list") };
         if lines.is_empty() || lines.len() > CAPTIONS_BATCH_MAX {
             return bad(format!("send 1 to {CAPTIONS_BATCH_MAX} lines at a time"));
@@ -2859,6 +3123,10 @@ impl Hub {
         let mut done: Vec<(String, Obj, bool)> = Vec::new();
         let mut st = self.st.lock();
         st.owned(peer_id, who)?;
+        let target = match for_ {
+            Some(t) => Some(st.wa_caption_for(peer_id, t)?),
+            None => None,
+        };
         st.sfu_caption_check(peer_id, lines.iter().filter_map(Value::as_object).map(|o| pj::s(o, "text")).filter(|t| !t.trim().is_empty()))?;
         let room = st.peers[peer_id].room.clone();
         st.report_weak(peer_id, weak);
@@ -2873,7 +3141,7 @@ impl Hub {
         }
         for item in lines {
             let raw = item.as_object().and_then(|o| o.get("cseq"));
-            let checked = (|| -> R<(String, Option<i64>, Option<i64>, Option<i64>)> {
+            let checked = (|| -> R<CaptionLine> {
                 let Some(o) = item.as_object() else { return bad("each line must be an object") };
                 let t = pj::s(o, "text").trim().to_string();
                 if t.is_empty() {
@@ -2896,7 +3164,7 @@ impl Hub {
                     out.push(Value::Object(obj([("cseq", c), ("refused", Value::from(e.message()))])));
                 }
                 Ok((t, c, age, dur)) => {
-                    let (line, repeat) = match Self::caption_line(&mut st, peer_id, who, &t, c, age, dur) {
+                    let (line, repeat) = match Self::caption_line(&mut st, peer_id, who, &t, c, age, dur, target.as_deref()) {
                         Ok(stored) => stored,
                         Err(e) => {
                             // a late joiner's refusal ends the batch, after any weak report it carried
@@ -2918,7 +3186,10 @@ impl Hub {
         Ok(obj([("lines", Value::Array(out))]))
     }
 
-    fn caption_line(st: &mut State, peer_id: &str, who: &Identity, text: &str, cseq: Option<i64>, age: Option<i64>, dur: Option<i64>) -> R<(Obj, bool)> {
+    /// `target`: the seat whose speech the captioner `peer_id` captions (WA-1 5.2): the line is that seat's, with
+    /// `peer` (the target) and `by` (the captioner).
+    #[allow(clippy::too_many_arguments)]
+    fn caption_line(st: &mut State, peer_id: &str, who: &Identity, text: &str, cseq: Option<i64>, age: Option<i64>, dur: Option<i64>, target: Option<&str>) -> R<(Obj, bool)> {
         if st.peers[peer_id].admission_pending {
             return forbidden(ADMISSION_FIRST);
         }
@@ -2928,16 +3199,23 @@ impl Hub {
             }
         }
         let room = st.peers[peer_id].room.clone();
+        let speaker = target.and_then(|t| st.peers.get(t)).map(|p| (p.peer_id.clone(), p.who.name.clone(), p.who.principal.clone()));
+        let (from, name, principal) = speaker.unwrap_or_else(|| (peer_id.to_string(), who.name.clone(), who.principal.clone()));
         let mut line = obj([
             ("type", Value::from("caption")),
             ("kind", Value::from("caption")),
             ("id", Value::from(pj::token_hex(6))),
-            ("from", Value::from(peer_id)),
-            ("name", Value::from(who.name.clone())),
-            ("principal", Value::from(who.principal.clone())),
+            ("from", Value::from(from.clone())),
+            ("name", Value::from(name)),
+            ("principal", Value::from(principal)),
             ("text", Value::from(text)),
             ("ts", f(pj::now())),
         ]);
+        if target.is_some() {
+            line.insert("peer".into(), Value::from(from));
+            line.insert("by".into(), Value::from(peer_id));
+            line.insert("by_name".into(), Value::from(who.name.clone()));
+        }
         if let Some(c) = cseq {
             line.insert("cseq".into(), Value::from(c));
         }
@@ -3030,6 +3308,9 @@ impl Hub {
         }
         let room = st.peers[peer_id].room.clone();
         if st.peers[peer_id].recording_request.is_empty() {
+            if st.wa_any_rule(&room, "record", "refuse") {
+                return Err(E::Conflict(wa::RECORD_REFUSED.into())); // WA-1 section 3.3
+            }
             if !acknowledged {
                 return forbidden("acknowledge the recording policy before requesting consent");
             }
@@ -3107,7 +3388,7 @@ impl Hub {
         let stay = st.stays.entry(room.clone()).or_insert_with(|| {
             let mut seen = IndexMap::new();
             seen.insert(who.principal.clone(), now);
-            Stay { start: now, seen, late_history: false, chat_stay: String::new(), chat_catchup: None }
+            Stay::new(now, seen, false)
         });
         let changed = stay.late_history != late;
         let attendance = Value::Bool(st.pa_attendance_on());
@@ -3214,20 +3495,34 @@ impl Hub {
 
     // ── presence ─────────────────────────────────────────────────────────────────────────────────────────────
 
+    #[cfg(test)]
     pub fn hello(&self, who: &Identity, address: &str, client: &Obj) -> R<Obj> {
+        self.hello_active(who, address, client, true)
+    }
+
+    /// hello with PR-1 1.1's `active` (false: the app opens its session while not on screen).
+    pub fn hello_active(&self, who: &Identity, address: &str, client: &Obj, active: bool) -> R<Obj> {
+        self.hello_resume(who, address, client, active, "")
+    }
+
+    /// hello with CD-1's `resume`: the session id this device held before; a live one of this principal and device is
+    /// exempt from copy detection, is replaced, and its peers move to the new session.
+    pub fn hello_resume(&self, who: &Identity, address: &str, client: &Obj, active: bool, resume: &str) -> R<Obj> {
         if who.seed {
             return forbidden(m::FINISH_SETUP);
         }
         if who.connector {
             return forbidden(bridge::ROUTES_ONLY);
         }
-        if who.is_service() {
+        if who.is_service() && who.kind != "captioner" {
+            // WA-1 5.3: the captioner's session is its inbox (caption_request)
             return forbidden(pc::routes_only(&who.kind));
         }
         let client = m::client(Some(&Value::Object(client.clone())));
         let mut st = self.st.lock();
         let r = (|| -> R<(Obj, String)> {
-            st.check_copy(who, address)?;
+            st.check_copy(who, address, resume)?;
+            let resumed = st.proven_session(who, resume);
             let before = st.pstate(&who.principal);
             if who.own_device() {
                 let old: Vec<String> = st.sessions.values().filter(|s| s.who.principal == who.principal && s.who.device == who.device).map(|s| s.session_id.clone()).collect();
@@ -3246,9 +3541,15 @@ impl Hub {
                 address: address.to_string(),
                 client: client.clone(),
                 waiters: 0,
+                active,
             };
             let sid = session.session_id.clone();
             st.sessions.insert(sid.clone(), session);
+            if !resumed.is_empty() {
+                for p in st.peers.values_mut().filter(|p| p.session == resumed) {
+                    p.session = sid.clone();
+                }
+            }
             st.announce(who, &before);
             let now = pj::now();
             let online = st.online();
@@ -3261,6 +3562,7 @@ impl Hub {
                     let e = e.as_object().cloned().unwrap_or_default();
                     let on = online.get(p);
                     let name = pj::s(&e, "name");
+                    let (presence, mobile) = st.presence_of(p);
                     Value::Object(obj([
                         ("principal", Value::from(p.clone())),
                         ("name", Value::from(if name.is_empty() { p.clone() } else { name })),
@@ -3269,10 +3571,12 @@ impl Hub {
                         ("devices", on.and_then(|o| o.get("devices").cloned()).unwrap_or(Value::Array(Vec::new()))),
                         ("org", st.org(p)),
                         ("status", st.status_of(p)),
+                        ("presence", Value::from(presence)),
+                        ("mobile", Value::Bool(mobile)),
                     ]))
                 })
                 .collect();
-            let invites: Vec<Value> = st.invites.get(&who.principal).map(|l| l.iter().filter(|i| pj::num(i, "ts") > now - INVITE_TTL).map(|i| Value::Object(i.clone())).collect()).unwrap_or_default();
+            let invites: Vec<Value> = st.invites.get(&who.principal).map(|l| l.iter().filter(|i| pj::num(i, "ts") > now - INVITE_TTL && hears_invite(&client, i)).map(|i| Value::Object(i.clone())).collect()).unwrap_or_default();
             let renewed = st.renewed.get(&m::key(&who.principal, &who.device)).cloned().unwrap_or(Value::Null);
             let admin = st.admins.contains(&who.principal);
             let mut reply = obj([
@@ -3297,8 +3601,13 @@ impl Hub {
                 ("attendance", Value::Bool(st.pa_attendance_on())),
                 ("push", Value::Bool(st.pu_on())),
             ]);
+            // NT-1: push_voip, notify_previews and the invitations settled in the last 2 hours
+            reply.extend(st.nt_hello(&who.principal));
             reply.extend(st.ce_hello());
             reply.extend(st.pc_hello());
+            if who.kind == "captioner" {
+                reply = obj([("session", reply["session"].clone()), ("you", reply["you"].clone())]);
+            }
             Ok((reply, sid))
         })();
         drop(st);
@@ -3325,6 +3634,8 @@ impl Hub {
             s.last_seen = pj::mono();
             s.waiters += 1;
         }
+        // NT-1 section 3.6: live for push while the latest poll started less than 15 s ago
+        st.nt_polled(session);
         let pending = |q: &VecDeque<Obj>| -> Vec<Value> { q.iter().filter(|e| seq_of(e) > after).map(|e| Value::Object(e.clone())).collect() };
         let out = loop {
             let found = match st.sessions.get(session) {
@@ -3358,6 +3669,30 @@ impl Hub {
         drop(st);
         self.wake();
         Ok(obj([("ok", Value::Bool(true))]))
+    }
+
+    /// PR-1 1.1 `POST /v1/activity {session, active}`: whether the person is using this device. `{ok, presence,
+    /// mobile}` (the caller's own); every session hears a `presence` event when that changed the person's state.
+    pub fn activity(&self, session: &str, who: &Identity, active: Body) -> R<Obj> {
+        let mut st = self.st.lock();
+        st.session(session, who)?;
+        let active = parse_active(active, None)?;
+        let before = st.pstate(&who.principal);
+        let changed = match st.sessions.get_mut(session) {
+            Some(s) if s.active != active => {
+                s.active = active;
+                true
+            }
+            _ => false,
+        };
+        st.announce(who, &before);
+        let (presence, mobile) = st.presence_of(&who.principal);
+        drop(st);
+        self.wake();
+        if changed {
+            log_info(&format!("activity principal={} session={session} active={}", who.principal, if active { "yes" } else { "no" }));
+        }
+        Ok(obj([("ok", Value::Bool(true)), ("presence", Value::from(presence)), ("mobile", Value::Bool(mobile))]))
     }
 
     // ── direct messages and reactions ────────────────────────────────────────────────────────────────────────
@@ -3408,6 +3743,8 @@ impl Hub {
         if ts > pj::as_num(marks.get(&with_)).unwrap_or(0.0) {
             marks.insert(with_.clone(), f(ts));
             st.dirty = true;
+            // NT-1: the reader's other sessions clear that conversation's notifications
+            st.tell(std::slice::from_ref(&who.principal), &obj([("type", Value::from("read")), ("conv", Value::from(format!("dm:{with_}")))]), Some(session));
         }
         let seen = obj_mut(&mut st.receipts, &who.principal);
         let mut told: Option<Value> = None;
@@ -3685,7 +4022,7 @@ impl Hub {
         if !missing.is_empty() {
             return Err(E::NotFound(format!("not known on this relay: {}", missing.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", "))));
         }
-        let now = pj::now();
+        let now = st.nt_now();
         if let Some(crossed) = Self::crossed_call(&st, &who.principal, &targets, &room, now) {
             let into = crossed.get("room").cloned().unwrap_or(Value::Null);
             let merged = obj([
@@ -3698,23 +4035,36 @@ impl Hub {
             log_info(&format!("invite merged from={} to={} room={room} into={}", who.principal, targets[0], pj::py_str(&into)));
             return Ok(merged);
         }
+        // NT-1 section 3.5: each invite's kind (call or live), whether it rings (the ring bucket of section 3.7) and the
+        // ring left (`ring_ms_left`, the full 45 s now) for the invitee's event and the inviter's answer
         let mut out = Vec::new();
         for t in &targets {
+            let id = pj::token_hex(8);
+            let (kind, others) = st.nt_kind(&who.principal, t, &room, now);
+            let ring = st.nt_ring(&who.principal, t, &room, &id);
             let inv = obj([
-                ("id", Value::from(pj::token_hex(8))),
+                ("id", Value::from(id)),
                 ("from", Value::from(who.principal.clone())),
                 ("from_name", Value::from(who.name.clone())),
                 ("to", Value::from(t.clone())),
                 ("room", Value::from(room.clone())),
                 ("ts", f(now)),
                 ("host", host.clone().map(Value::Object).unwrap_or(Value::Null)),
+                ("kind", Value::from(kind)),
+                ("ring", Value::Bool(ring)),
             ]);
             let mut pending: Vec<Obj> = st.invites.get(t).cloned().unwrap_or_default().into_iter().filter(|i| !(pj::text_of(i, "room") == room && pj::text_of(i, "from") == who.principal)).collect();
             pending.push(inv.clone());
             st.invites.insert(t.clone(), pending);
-            st.tell(std::slice::from_ref(t), &with(&inv, obj([("type", Value::from("invite"))])), None);
-            st.pu_invite(&who.principal, t, &room);
-            out.push(Value::Object(inv));
+            let shown = with(&inv, obj([("ring_ms_left", Value::from((push::RING_SECONDS * 1000.0) as i64))]));
+            let event = with(&shown, obj([("type", Value::from("invite"))]));
+            for s in st.sessions.values_mut().filter(|s| s.who.principal == *t && hears_invite(&s.client, &inv)) {
+                push(&mut s.seq, &mut s.events, &event);
+            }
+            if ring {
+                st.nt_call(&inv, others);
+            }
+            out.push(Value::Object(shown));
         }
         st.dirty = true;
         drop(st);
@@ -3780,12 +4130,255 @@ impl Hub {
             out.push(serial);
         }
         st.dirty = true;
+        drop(st);
+        // AC-1 3.2: the console latches every passkey anchored to a denied serial before it answers anything else
+        self.console_revoked(&out);
         out
     }
 
     pub fn is_denied(&self, serial: &str) -> bool {
         let s = m::serial(serial);
         !s.is_empty() && self.st.lock().denied.contains_key(&s)
+    }
+
+    /// AC-2a 4.11 `meet/counts` and 9.1: what this relay holds, as counts and the principals and devices to count with
+    /// the console's blocks and seats. People are the directory's principals and everyone online (never the console,
+    /// guests, connectors or services); devices those of admin_devices.
+    pub fn fleet_counts(&self) -> FleetCounts {
+        let st = self.st.lock();
+        let person = |w: &Identity| !(w.is_console() || w.guest || w.connector || w.is_service());
+        let mut devices: HashSet<(String, String)> = HashSet::new();
+        let mut online_devices: HashSet<(String, String)> = HashSet::new();
+        for w in st.sessions.values().map(|s| &s.who).chain(st.peers.values().map(|p| &p.who)) {
+            if !w.device.is_empty() && person(w) {
+                online_devices.insert((w.principal.clone(), w.device.clone()));
+            }
+        }
+        let mut revoked = 0;
+        for (principal, entry) in &st.directory {
+            let Some(list) = entry.as_object().and_then(|e| e.get("devices")).and_then(Value::as_object) else { continue };
+            for (device, info) in list {
+                let Some(info) = info.as_object() else { continue };
+                devices.insert((principal.clone(), device.clone()));
+                let serial = m::serial_of(info.get("serial"));
+                revoked += usize::from(!serial.is_empty() && st.denied.contains_key(&serial));
+            }
+        }
+        devices.extend(online_devices.iter().cloned());
+        let online: HashSet<String> = st.online().into_keys().collect();
+        let mut principals: HashSet<String> = st.directory.keys().cloned().collect();
+        principals.extend(online.iter().cloned());
+        let mut rooms: HashMap<&str, usize> = HashMap::new();
+        for p in st.peers.values().filter(|p| !p.who.is_console()) {
+            *rooms.entry(p.room.as_str()).or_default() += 1;
+        }
+        let waiting = st.enrollments.values().filter_map(Value::as_object).filter(|r| pj::text_of(r, "state") == "waiting").count()
+            + st.seed_requests.len()
+            + st.renewals.values().filter_map(Value::as_object).filter(|r| pj::truthy(r.get("needs_admin"))).count();
+        FleetCounts {
+            principals: principals.into_iter().collect(),
+            online,
+            devices: devices.into_iter().collect(),
+            devices_online: online_devices.len(),
+            revoked,
+            calls_active: rooms.values().filter(|n| **n >= 2).count(),
+            participants: rooms.values().sum(),
+            enrollments_waiting: waiting,
+        }
+    }
+
+    // ── AC-1: the Admin Console's hooks (contract 3.2, 3.8, 4.9) ─────────────────────────────────────────────
+
+    /// check_console_admin (I8): the same rule as check_admin (the principal is in relay.json `admins`) without a
+    /// presence session or client certificate; Ok is the `console` Identity the Hub functions are called with.
+    pub fn check_console_admin(&self, principal: &str) -> R<Identity> {
+        let who = Identity::console_admin(principal);
+        if who.principal.is_empty() || !self.st.lock().admins.contains(&who.principal) {
+            return forbidden("only the person who issues certificates can do that");
+        }
+        Ok(who)
+    }
+
+    /// check_console_reader (4.9, I14): an active console user manager or admin may read through the same functions
+    /// with the `console` Identity; reads only (every write still goes through check_console_admin).
+    pub fn check_console_reader(&self, email: &str) -> R<Identity> {
+        let who = Identity::console_reader(email);
+        if who.principal.is_empty() || !self.console_hooks().is_some_and(|h| h.reader(&who.principal)) {
+            return forbidden("only an admin or user manager of this console can read this");
+        }
+        Ok(who)
+    }
+
+    pub fn console_hooks_installed(&self) -> Option<Arc<dyn ConsoleHooks>> {
+        self.console_hooks()
+    }
+
+    /// Whether `principal` is in relay.json `admins` now.
+    pub fn is_admin(&self, principal: &str) -> bool {
+        self.st.lock().admins.contains(&principal.trim().to_lowercase())
+    }
+
+    /// The certificate serials the relay knows for one principal's devices (directory and live sessions): the
+    /// anchors a Meet admin's passkey may have (3.2, decision 14).
+    pub fn device_serials(&self, principal: &str) -> HashSet<String> {
+        let principal = principal.trim().to_lowercase();
+        let st = self.st.lock();
+        let mut out: HashSet<String> = HashSet::new();
+        if let Some(devices) = st.directory.get(&principal).and_then(|e| e.get("devices")).and_then(Value::as_object) {
+            for d in devices.values() {
+                let s = m::serial_of(d.get("serial"));
+                if !s.is_empty() {
+                    out.insert(s);
+                }
+            }
+        }
+        for who in st.sessions.values().map(|s| &s.who).chain(st.peers.values().map(|p| &p.who)) {
+            if who.principal == principal && !who.serial.is_empty() {
+                out.insert(m::serial(&who.serial));
+            }
+        }
+        out
+    }
+
+    /// Every serial in the denied set (anchor latching reads it at start and on each change).
+    pub fn denied_serials(&self) -> HashSet<String> {
+        self.st.lock().denied.keys().cloned().collect()
+    }
+
+    /// AC-1 2.4: install the service gate (once, at start, before the ports listen).
+    pub fn set_gate(&self, gate: Arc<crate::meet_license::MeetGate>) {
+        *self.gate.lock() = Some(gate);
+    }
+
+    pub fn gate(&self) -> Option<Arc<crate::meet_license::MeetGate>> {
+        self.gate.lock().clone()
+    }
+
+    /// AC-1 2.4 seats: the principals with at least one device certificate the relay knows that is neither revoked
+    /// nor expired at `now` (seconds). The device store is the directory: each device record keeps `serial`,
+    /// `not_before` and `not_after` of the certificate it was last seen with (records from before AC-1 have none and
+    /// count while no denied entry names that principal and device).
+    pub fn seat_live(&self, now: i64) -> Vec<String> {
+        let st = self.st.lock();
+        let denied_devices: HashSet<(String, String)> = st.denied.values().filter_map(Value::as_object).map(|d| (pj::s(d, "principal"), pj::s(d, "device"))).collect();
+        let mut out: Vec<String> = st
+            .directory
+            .iter()
+            .filter(|(principal, e)| {
+                e.get("devices").and_then(Value::as_object).is_some_and(|d| {
+                    d.iter().any(|(device, dev)| {
+                        let serial = m::serial_of(dev.get("serial"));
+                        if serial.is_empty() {
+                            return !denied_devices.contains(&((*principal).clone(), device.clone()));
+                        }
+                        let alive = dev.get("not_after").and_then(Value::as_i64).map(|na| na == 0 || na > now).unwrap_or(true);
+                        !st.denied.contains_key(&serial) && alive
+                    })
+                })
+            })
+            .map(|(p, _)| p.clone())
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// AC-1 2.4 "`firstSeen` at the upgrade" (R3-M5): every principal with devices and the earliest persisted
+    /// timestamp the relay holds for it, in milliseconds: the device record's `added` (seconds, AC-1 records), the
+    /// certificate's `not_before` (seconds) and the `ts` (seconds) of the principal's enrollments. `last_seen` is
+    /// not a creation time and is never used. None when there is no such record.
+    pub fn seat_records(&self) -> Vec<(String, Option<i64>)> {
+        let st = self.st.lock();
+        let mut out = Vec::new();
+        for (principal, e) in &st.directory {
+            let Some(devices) = e.get("devices").and_then(Value::as_object).filter(|d| !d.is_empty()) else { continue };
+            let mut first: Option<f64> = None;
+            let mut take = |v: Option<f64>| {
+                if let Some(v) = v.filter(|v| *v > 0.0) {
+                    first = Some(first.map_or(v, |f| f.min(v)));
+                }
+            };
+            for d in devices.values() {
+                take(d.get("added").and_then(Value::as_f64));
+                take(d.get("not_before").and_then(Value::as_f64));
+            }
+            for r in st.enrollments.values().filter_map(Value::as_object) {
+                if pj::s(r, "principal") == *principal {
+                    take(r.get("ts").and_then(Value::as_f64));
+                }
+            }
+            out.push((principal.clone(), first.map(|s| (s * 1000.0) as i64)));
+        }
+        out
+    }
+
+    /// AC-1 2.4: an unseated principal's sessions close (their certificates stay).
+    pub fn drop_principal(&self, principal: &str) -> i64 {
+        let wanted: HashSet<String> = {
+            let st = self.st.lock();
+            st.sessions.values().map(|s| &s.who).chain(st.peers.values().map(|p| &p.who)).filter(|w| w.principal == principal && !w.serial.is_empty()).map(|w| m::serial(&w.serial)).collect()
+        };
+        if wanted.is_empty() {
+            return 0;
+        }
+        let n = self.st.lock().drop_matching(&wanted);
+        self.wake();
+        n
+    }
+
+    /// Install the Admin Console's hooks (once, at start).
+    pub fn set_console_hooks(&self, hooks: Arc<dyn ConsoleHooks>) {
+        *self.console_hooks.lock() = Some(hooks);
+    }
+
+    fn console_hooks(&self) -> Option<Arc<dyn ConsoleHooks>> {
+        self.console_hooks.lock().clone()
+    }
+
+    /// Serials newly revoked (the denied set, a CRL the relay holds, /v1/admin/revoke): the console latches every
+    /// passkey anchored to one (3.2). A Meet block is never one.
+    pub fn console_revoked(&self, serials: &[String]) {
+        if serials.is_empty() {
+            return;
+        }
+        if let Some(h) = self.console_hooks() {
+            h.revoked(serials);
+        }
+    }
+
+    /// An outcome the console observes for its `meet.*` requests (3.8): `kind` is the request kind, `target` what was
+    /// done, `by` the Meet admin principal, `link` the optional `console_request` the app sent.
+    pub fn console_observed(&self, kind: &str, target: &Obj, by: &str, link: Option<&str>) {
+        if let Some(h) = self.console_hooks() {
+            h.observed(kind, target, by, link);
+        }
+    }
+
+    /// AC-1 Meet blocks (4.9): the `denied_until` mirror the console's block store keeps; never the denied set.
+    pub fn set_blocks(&self, blocks: HashMap<String, f64>) {
+        *self.denied_until.lock() = blocks;
+    }
+
+    /// Whether this device is blocked now (`principal|device` until a time in seconds).
+    pub fn is_blocked(&self, who: &Identity) -> bool {
+        if who.device.is_empty() || who.is_console() {
+            return false;
+        }
+        let now = pj::now();
+        self.denied_until.lock().get(&m::key(&who.principal, &who.device)).map(|until| *until > now).unwrap_or(false)
+    }
+
+    /// End every live session and peer of one device (a block closes them; it revokes nothing).
+    pub fn drop_device(&self, principal: &str, device: &str) -> i64 {
+        let wanted: HashSet<String> = {
+            let st = self.st.lock();
+            st.sessions.values().map(|s| &s.who).chain(st.peers.values().map(|p| &p.who)).filter(|w| w.principal == principal && w.device == device && !w.serial.is_empty()).map(|w| m::serial(&w.serial)).collect()
+        };
+        if wanted.is_empty() {
+            return 0;
+        }
+        let n = self.st.lock().drop_matching(&wanted);
+        self.wake();
+        n
     }
 
     /// drop_serials: end every peer and session whose certificate serial is listed (their push registrations go too).
@@ -3797,6 +4390,7 @@ impl Hub {
         let mut st = self.st.lock();
         let n = st.drop_matching(&wanted);
         st.pu_drop_serials(&wanted);
+        st.wa_drop_serials(&wanted); // WA-1: web port sessions go at once
         drop(st);
         self.wake();
         n
@@ -3893,7 +4487,7 @@ impl Hub {
     }
 
     fn rows_by_ts(rows: &Obj, keep: impl Fn(&Obj) -> bool) -> Vec<Obj> {
-        let mut out: Vec<Obj> = rows.values().filter_map(Value::as_object).filter(|r| keep(*r)).cloned().collect();
+        let mut out: Vec<Obj> = rows.values().filter_map(Value::as_object).filter(|r| keep(r)).cloned().collect();
         out.sort_by(|a, b| pj::num(a, "ts").partial_cmp(&pj::num(b, "ts")).unwrap_or(std::cmp::Ordering::Equal));
         out
     }
@@ -4065,7 +4659,7 @@ impl Hub {
             if !cert_emails(&cert).contains(&principal) {
                 return bad("the certificate is for a different email");
             }
-            if Value::from(m::uri_value(&cert.names.uris, m::DEVICE_URI_PREFIX)) != device {
+            if m::uri_value(&cert.names.uris, m::DEVICE_URI_PREFIX) != device {
                 return bad("the certificate is not for the device that asked");
             }
             if cert.spki != load_csr(Some(&csr_pem))?.spki {
@@ -4249,7 +4843,7 @@ impl Hub {
         let (enrolls, seeds, renews) = {
             let st = self.st.lock();
             st.check_admin(session, who)?;
-            let pick = |rows: &Obj, keep: &dyn Fn(&Obj) -> bool| -> Vec<Obj> { rows.values().filter_map(Value::as_object).filter(|r| keep(*r)).cloned().collect() };
+            let pick = |rows: &Obj, keep: &dyn Fn(&Obj) -> bool| -> Vec<Obj> { rows.values().filter_map(Value::as_object).filter(|r| keep(r)).cloned().collect() };
             (pick(&st.enrollments, &|r| pj::text_of(r, "state") == "waiting"), pick(&st.seed_requests, &|_| true), pick(&st.renewals, &|r| pj::truthy(r.get("needs_admin"))))
         };
         let get = |r: &Obj, k: &str| r.get(k).cloned().unwrap_or(Value::from(""));
@@ -4523,7 +5117,7 @@ mod tests {
 
     #[test]
     fn state_json_round_trips_in_python_text() {
-        let text = "{\"v\": 2, \"directory\": {\"ann@x\": {\"name\": \"Ann\", \"last_seen\": 1.5}}, \"dms\": {}, \"read\": {}, \"invites\": {}, \"rooms\": {}, \"left\": {}, \"renewals\": {}, \"renewed\": {}, \"enrollments\": {}, \"consumed_seeds\": {}, \"seed_requests\": {}, \"seeded\": {}, \"denied\": {}, \"organizations\": {\"ben@x\": null, \"cy@x\": {\"id\": \"o\", \"label\": \"O\"}}, \"status\": {\"ann@x\": {\"state\": \"busy\", \"text\": \"\", \"until\": 4102444800000}, \"ben@x\": {\"state\": \"away\", \"text\": \"\"}}, \"receipts\": {\"ann@x\": {\"ben@x\": 2.5}}, \"meetings\": {\"m-abcdefgh23\": {\"id\": \"m-abcdefgh23\", \"room\": \"m-abcdefgh23\", \"title\": \"Weekly\", \"description\": \"\", \"start\": 1700000000.0, \"end\": 1700001800.0, \"recurrence\": \"weekly\", \"tz\": \"Europe/Paris\", \"organizer\": {\"principal\": \"ann@x\", \"name\": \"Ann\"}, \"attendees\": [{\"principal\": \"ben@x\", \"name\": \"Ben\", \"response\": \"none\"}], \"created\": 1.5, \"updated\": 1.5, \"canceled\": null}}, \"channels\": {\"c-01\": {\"id\": \"c-01\", \"kind\": \"public\", \"name\": \"general\", \"topic\": \"\", \"created_by\": \"ann@x\", \"members\": [\"ann@x\"], \"created\": 1.5, \"archived\": null, \"last\": 1.5, \"e2ee\": true, \"bridgeable\": false, \"e2ee_since\": 1500}}, \"channel_messages\": {\"c-01\": [{\"id\": \"m1\", \"channel\": \"c-01\", \"from\": \"ann@x\", \"from_name\": \"Ann\", \"from_org\": null, \"text\": \"hi\", \"ts\": 1.5, \"reactions\": {}}]}, \"channel_read\": {\"ann@x\": {\"c-01\": 1.5}}, \"prefs\": {\"ann@x\": {\"rev\": 2, \"notify\": {\"dm:ben@x\": \"off\"}, \"sections\": [{\"id\": \"s-0123abcd\", \"name\": \"Team\", \"convs\": [\"dm:ben@x\"]}], \"channel_default\": \"mentions\"}}, \"emoji\": {\"party\": {\"name\": \"party\", \"hash\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\", \"type\": \"png\", \"org\": null, \"by\": \"ann@x\", \"ts\": 1500}}, \"attendance\": {\"ops\": [{\"id\": \"0123456789abcdef\", \"start\": 4102444000000, \"end\": 4102444800000, \"people\": [{\"principal\": \"ann@x\", \"name\": \"Ann\", \"org\": null, \"joins\": [[4102444000000, 4102444800000]], \"role\": \"host\"}]}]}, \"push_tokens\": {\"ann@x\": {\"aaaaaaaaaaaaaaaa\": {\"token\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\", \"env\": \"sandbox\", \"ts\": 1700000000000, \"serial\": \"1a\"}}}, \"ext\": {\"files\": {\"v\": 1, \"files\": {}}, \"guests\": {\"revoked\": {}, \"blocked\": {}}, \"bridge\": {\"v\": 1, \"policies\": {}, \"links\": {}, \"codes\": {}, \"connectors\": {}, \"seq\": 0, \"outbox\": {}, \"map\": {}, \"offered\": {}}, \"ce\": {\"v\": 1, \"since\": 1500, \"seq\": 0, \"bundles\": {}, \"wraps\": {}, \"logs\": {}}, \"pc\": {\"v\": 1, \"policies\": [], \"holds\": [], \"kept\": {}, \"sso\": {}, \"adds\": [], \"docs\": {}, \"signer_policy\": null}}}";
+        let text = "{\"v\": 2, \"directory\": {\"ann@x\": {\"name\": \"Ann\", \"last_seen\": 1.5}}, \"dms\": {}, \"read\": {}, \"invites\": {}, \"rooms\": {}, \"left\": {}, \"renewals\": {}, \"renewed\": {}, \"enrollments\": {}, \"consumed_seeds\": {}, \"seed_requests\": {}, \"seeded\": {}, \"denied\": {}, \"organizations\": {\"ben@x\": null, \"cy@x\": {\"id\": \"o\", \"label\": \"O\"}}, \"status\": {\"ann@x\": {\"state\": \"busy\", \"text\": \"\", \"until\": 4102444800000}, \"ben@x\": {\"state\": \"away\", \"text\": \"\"}}, \"receipts\": {\"ann@x\": {\"ben@x\": 2.5}}, \"meetings\": {\"m-abcdefgh23\": {\"id\": \"m-abcdefgh23\", \"room\": \"m-abcdefgh23\", \"title\": \"Weekly\", \"description\": \"\", \"start\": 1700000000.0, \"end\": 1700001800.0, \"recurrence\": \"weekly\", \"tz\": \"Europe/Paris\", \"organizer\": {\"principal\": \"ann@x\", \"name\": \"Ann\"}, \"attendees\": [{\"principal\": \"ben@x\", \"name\": \"Ben\", \"response\": \"none\"}], \"created\": 1.5, \"updated\": 1.5, \"canceled\": null}}, \"channels\": {\"c-01\": {\"id\": \"c-01\", \"kind\": \"public\", \"name\": \"general\", \"topic\": \"\", \"created_by\": \"ann@x\", \"members\": [\"ann@x\"], \"created\": 1.5, \"archived\": null, \"last\": 1.5, \"e2ee\": true, \"bridgeable\": false, \"e2ee_since\": 1500}}, \"channel_messages\": {\"c-01\": [{\"id\": \"m1\", \"channel\": \"c-01\", \"from\": \"ann@x\", \"from_name\": \"Ann\", \"from_org\": null, \"text\": \"hi\", \"ts\": 1.5, \"reactions\": {}}]}, \"channel_read\": {\"ann@x\": {\"c-01\": 1.5}}, \"prefs\": {\"ann@x\": {\"rev\": 2, \"notify\": {\"dm:ben@x\": \"off\"}, \"sections\": [{\"id\": \"s-0123abcd\", \"name\": \"Team\", \"convs\": [\"dm:ben@x\"]}], \"channel_default\": \"mentions\"}}, \"emoji\": {\"party\": {\"name\": \"party\", \"hash\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\", \"type\": \"png\", \"org\": null, \"by\": \"ann@x\", \"ts\": 1500}}, \"attendance\": {\"ops\": [{\"id\": \"0123456789abcdef\", \"start\": 4102444000000, \"end\": 4102444800000, \"people\": [{\"principal\": \"ann@x\", \"name\": \"Ann\", \"org\": null, \"joins\": [[4102444000000, 4102444800000]], \"role\": \"host\"}]}]}, \"push_tokens\": {\"ann@x\": {\"aaaaaaaaaaaaaaaa\": {\"token\": \"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\", \"env\": \"sandbox\", \"ts\": 1700000000000, \"serial\": \"1a\", \"seal\": \"BI2v5YHwWUGbhOdhiQ3+w8TpAkRe9LcJA7pzR9JxIttNKHIyizRAXX5o3tD/EcIKYpNmh5Ct9aJ6I8UdyL9fGrc=\", \"sk\": \"d197f269\", \"seal_prev\": \"\", \"sk_prev\": \"\", \"voip\": \"\", \"callkit\": true}}}, \"ext\": {\"files\": {\"v\": 1, \"files\": {}}, \"guests\": {\"revoked\": {}, \"blocked\": {}}, \"bridge\": {\"v\": 1, \"policies\": {}, \"links\": {}, \"codes\": {}, \"connectors\": {}, \"seq\": 0, \"outbox\": {}, \"map\": {}, \"offered\": {}}, \"ce\": {\"v\": 1, \"since\": 1500, \"seq\": 0, \"bundles\": {}, \"wraps\": {}, \"logs\": {}}, \"pc\": {\"v\": 1, \"policies\": [], \"holds\": [], \"kept\": {}, \"sso\": {}, \"adds\": [], \"docs\": {}, \"proposals\": {}, \"suspended\": {}, \"stale\": {}, \"lowerings\": {}, \"signer_policy\": null, \"maps\": []}}}";
         let dir = std::env::temp_dir().join(format!("meet-state-{}", pj::token_hex(4)));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("state.json"), text).unwrap();
@@ -4649,7 +5243,7 @@ mod tests {
         let cy = who("cy@x", "cccccccccccccccc");
         let joined = h.join("ops", &cy, "", false, None).unwrap();
         let c = peer_of(&joined);
-        assert_eq!(keys(&joined), ["peer", "you", "members", "chat", "missed", "recording", "recording_notices", "admission_pending", "rseq", "options", "stage", "chat_stay", "chat_e2ee"]);
+        assert_eq!(keys(&joined), ["peer", "you", "members", "chat", "missed", "recording", "recording_notices", "admission_pending", "rseq", "options", "stage", "chat_stay", "chat_e2ee", "stay"]);
         assert_eq!((&joined["members"], &joined["chat"], &joined["missed"], &joined["stage"]), (&json!([]), &json!([]), &json!({}), &Value::Null));
         assert_eq!((&joined["recording"], &joined["admission_pending"]), (&json!([a]), &json!(true)));
         assert_eq!(joined["recording_notices"][0]["on"], json!(true));
@@ -4657,7 +5251,7 @@ mod tests {
 
         assert_eq!(refusal(h.say(&c, &cy, "hi", None, None, None)), format!("403 {ADMISSION_FIRST}"));
         assert_eq!(refusal(h.caption(&c, &cy, "hi", None, None, None)), format!("403 {ADMISSION_FIRST}"));
-        assert_eq!(refusal(h.captions(&c, &cy, Some(&json!([{"text": "hi"}])), None, None)), format!("403 {ADMISSION_FIRST}"));
+        assert_eq!(refusal(h.captions(&c, &cy, Some(&json!([{"text": "hi"}])), None, None, None)), format!("403 {ADMISSION_FIRST}"));
         assert_eq!(refusal(h.room_captions(&c, &cy, "0", "10")), format!("403 {ADMISSION_FIRST}"));
         assert_eq!(refusal(h.room_history(&json!("ops"), &cy, &json!(0), 10)), format!("403 {ADMISSION_FIRST}"));
         assert_eq!(refusal(h.signal(&c, &cy, &a, json!({}))), "403 recording consent is required before joining media");
@@ -4799,5 +5393,94 @@ mod tests {
         let text = pj::dumps(&lines_value(&h.st.lock().rooms));
         assert!(!text.contains("first draft") && !text.contains("final words"));
         assert_eq!(refusal(h.say(&b, &ben, "x", Some(&json!(id)), None, None)), "400 that message was deleted");
+    }
+
+    /// AC-2a 16.1 f-relay: the `messages` counter moves with a relayed chat message (and not with a refused one), and
+    /// `fleet_counts` sees the call.
+    #[test]
+    fn ac2a_a_chat_message_moves_the_messages_counter_and_the_call_is_counted() {
+        let h = hub();
+        let ann = who("ann@x", "aaaaaaaaaaaaaaaa");
+        let ben = who("ben@x", "bbbbbbbbbbbbbbbb");
+        let a = peer_of(&h.join("ops", &ann, "", false, None).unwrap());
+        let b = peer_of(&h.join("ops", &ben, "", false, None).unwrap());
+        let counters = crate::fleet_probe::counters();
+        let before = counters.messages_total();
+        assert!(h.say(&a, &ann, "hi", None, None, None).is_err(), "a refused line is no message");
+        h.st.lock().peers.get_mut(&b).unwrap().who.guest = true;
+        h.say(&a, &ann, "hi", None, None, None).unwrap();
+        // other tests run at once and may add more; this one added at least its one line
+        assert!(counters.messages_total() > before);
+        let c = h.fleet_counts();
+        assert_eq!((c.calls_active, c.participants), (1, 2));
+        assert!(c.online.contains("ann@x"));
+    }
+
+    // ── CD-1: copy detection with a session proof ───────────────────────────────────────────────────────────
+
+    const COPY: &str = "409 this device's certificate is already signed in from another computer";
+
+    fn conflicts(h: &Hub) -> usize {
+        h.st.lock().sessions.values().flat_map(|s| s.events.iter()).filter(|e| pj::text_of(e, "type") == "device_conflict").count()
+    }
+
+    fn sid(o: &Obj) -> String {
+        o["session"].as_str().unwrap().to_string()
+    }
+
+    fn body(session: &str) -> Obj {
+        obj([("session", Value::from(session))])
+    }
+
+    #[test]
+    fn cd1_a_join_from_another_address_with_the_live_session_is_accepted() {
+        let h = hub();
+        let ben = who("ben@x", "bbbbbbbbbbbbbbbb");
+        let s = sid(&h.hello(&ben, "198.51.100.1", &Obj::new()).unwrap());
+        let p = peer_of(&h.join("ops", &ben, "203.0.113.9", false, Some(&body(&s))).unwrap());
+        assert_eq!(conflicts(&h), 0);
+        assert_eq!(h.st.lock().peers[&p].session, s);
+        // a non-string session is ignored like an absent one
+        let b = obj([("session", json!(5))]);
+        assert_eq!(refusal(h.join("ops2", &ben, "192.0.2.7", false, Some(&b))), COPY);
+    }
+
+    #[test]
+    fn cd1_a_join_from_another_address_without_the_session_is_refused() {
+        let h = hub();
+        let ben = who("ben@x", "bbbbbbbbbbbbbbbb");
+        h.hello(&ben, "198.51.100.1", &Obj::new()).unwrap();
+        assert_eq!(refusal(h.join("ops", &ben, "203.0.113.9", false, None)), COPY);
+        assert_eq!(refusal(h.join("ops", &ben, "203.0.113.9", false, Some(&body("nope")))), COPY);
+        assert!(conflicts(&h) > 0);
+    }
+
+    #[test]
+    fn cd1_a_hello_with_resume_replaces_the_session_and_moves_its_peers() {
+        let h = hub();
+        let ben = who("ben@x", "bbbbbbbbbbbbbbbb");
+        let s1 = sid(&h.hello(&ben, "198.51.100.1", &Obj::new()).unwrap());
+        let p = peer_of(&h.join("ops", &ben, "203.0.113.9", false, Some(&body(&s1))).unwrap());
+        let s2 = sid(&h.hello_resume(&ben, "192.0.2.7", &Obj::new(), true, &s1).unwrap());
+        assert_eq!(conflicts(&h), 0);
+        let st = h.st.lock();
+        assert!(!st.sessions.contains_key(&s1));
+        assert!(st.sessions.contains_key(&s2));
+        assert_eq!(st.peers[&p].session, s2);
+    }
+
+    #[test]
+    fn cd1_a_resume_of_someone_elses_session_does_not_help() {
+        let h = hub();
+        let ben = who("ben@x", "bbbbbbbbbbbbbbbb");
+        let cy = who("cy@x", "cccccccccccccccc");
+        let ben_other = who("ben@x", "dddddddddddddddd");
+        h.hello(&ben, "198.51.100.1", &Obj::new()).unwrap();
+        let theirs = sid(&h.hello(&cy, "192.0.2.7", &Obj::new()).unwrap());
+        let other_device = sid(&h.hello(&ben_other, "192.0.2.8", &Obj::new()).unwrap());
+        assert_eq!(refusal(h.hello_resume(&ben, "203.0.113.9", &Obj::new(), true, &theirs)), COPY);
+        assert_eq!(refusal(h.hello_resume(&ben, "203.0.113.9", &Obj::new(), true, &other_device)), COPY);
+        assert_eq!(refusal(h.join("ops", &ben, "203.0.113.9", false, Some(&body(&theirs)))), COPY);
+        assert!(conflicts(&h) > 0);
     }
 }

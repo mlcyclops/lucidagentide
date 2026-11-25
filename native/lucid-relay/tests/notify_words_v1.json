@@ -1,0 +1,709 @@
+{
+ "version": 1,
+ "contract": "NT-1 revision 4, section 7",
+ "fixture": {
+  "sender": "Ben Brown",
+  "principal": "ben@acme.test",
+  "group": "Launch crew",
+  "channel": "#design",
+  "title": "Weekly sync",
+  "start_s": 1794927600,
+  "tz": "UTC",
+  "when": "Tue, Nov 17, 3:00 PM",
+  "time": "3:00 PM"
+ },
+ "message": [
+  {
+   "name": "dm_plain",
+   "conv_kind": "dm",
+   "case": "plain",
+   "sender": "Ben Brown",
+   "conv": "",
+   "text": "Can you review the deck before 3?",
+   "desktop": {
+    "title": "Ben Brown",
+    "body": "Can you review the deck before 3?"
+   },
+   "ios": {
+    "title": "Ben Brown",
+    "subtitle": "",
+    "body": "Can you review the deck before 3?"
+   }
+  },
+  {
+   "name": "dm_previews_off",
+   "conv_kind": "dm",
+   "case": "previews_off",
+   "sender": "Ben Brown",
+   "conv": "",
+   "text": null,
+   "desktop": {
+    "title": "Ben Brown",
+    "body": "Sent you a message"
+   },
+   "ios": {
+    "title": "Ben Brown",
+    "subtitle": "",
+    "body": "Sent you a message"
+   }
+  },
+  {
+   "name": "dm_not_verified",
+   "conv_kind": "dm",
+   "case": "not_verified",
+   "sender": "Ben Brown",
+   "conv": "",
+   "text": null,
+   "desktop": {
+    "title": "Ben Brown",
+    "body": "Sent a message"
+   },
+   "ios": {
+    "title": "Ben Brown",
+    "subtitle": "",
+    "body": "Sent a message"
+   }
+  },
+  {
+   "name": "group_plain",
+   "conv_kind": "group",
+   "case": "plain",
+   "sender": "Ben Brown",
+   "conv": "Launch crew",
+   "text": "Can you review the deck before 3?",
+   "desktop": {
+    "title": "Ben Brown in Launch crew",
+    "body": "Can you review the deck before 3?"
+   },
+   "ios": {
+    "title": "Ben Brown",
+    "subtitle": "Launch crew",
+    "body": "Can you review the deck before 3?"
+   }
+  },
+  {
+   "name": "group_mention",
+   "conv_kind": "group",
+   "case": "mention",
+   "sender": "Ben Brown",
+   "conv": "Launch crew",
+   "text": "Can you review the deck before 3?",
+   "desktop": {
+    "title": "Ben Brown mentioned you in Launch crew",
+    "body": "Can you review the deck before 3?"
+   },
+   "ios": {
+    "title": "Ben Brown",
+    "subtitle": "Mentioned you in Launch crew",
+    "body": "Can you review the deck before 3?"
+   }
+  },
+  {
+   "name": "group_reply",
+   "conv_kind": "group",
+   "case": "reply",
+   "sender": "Ben Brown",
+   "conv": "Launch crew",
+   "text": "Can you review the deck before 3?",
+   "desktop": {
+    "title": "Ben Brown replied to you in Launch crew",
+    "body": "Can you review the deck before 3?"
+   },
+   "ios": {
+    "title": "Ben Brown",
+    "subtitle": "Replied to you in Launch crew",
+    "body": "Can you review the deck before 3?"
+   }
+  },
+  {
+   "name": "group_previews_off",
+   "conv_kind": "group",
+   "case": "previews_off",
+   "sender": "Ben Brown",
+   "conv": "Launch crew",
+   "text": null,
+   "desktop": {
+    "title": "Ben Brown in Launch crew",
+    "body": "Sent a message"
+   },
+   "ios": {
+    "title": "Ben Brown",
+    "subtitle": "Launch crew",
+    "body": "Sent a message"
+   }
+  },
+  {
+   "name": "group_not_verified",
+   "conv_kind": "group",
+   "case": "not_verified",
+   "sender": "Ben Brown",
+   "conv": "Launch crew",
+   "text": null,
+   "desktop": {
+    "title": "Ben Brown in Launch crew",
+    "body": "Sent a message"
+   },
+   "ios": {
+    "title": "Ben Brown",
+    "subtitle": "Launch crew",
+    "body": "Sent a message"
+   }
+  },
+  {
+   "name": "channel_plain",
+   "conv_kind": "channel",
+   "case": "plain",
+   "sender": "Ben Brown",
+   "conv": "#design",
+   "text": "Can you review the deck before 3?",
+   "desktop": {
+    "title": "Ben Brown in #design",
+    "body": "Can you review the deck before 3?"
+   },
+   "ios": {
+    "title": "Ben Brown",
+    "subtitle": "#design",
+    "body": "Can you review the deck before 3?"
+   }
+  },
+  {
+   "name": "channel_mention",
+   "conv_kind": "channel",
+   "case": "mention",
+   "sender": "Ben Brown",
+   "conv": "#design",
+   "text": "Can you review the deck before 3?",
+   "desktop": {
+    "title": "Ben Brown mentioned you in #design",
+    "body": "Can you review the deck before 3?"
+   },
+   "ios": {
+    "title": "Ben Brown",
+    "subtitle": "Mentioned you in #design",
+    "body": "Can you review the deck before 3?"
+   }
+  },
+  {
+   "name": "channel_reply",
+   "conv_kind": "channel",
+   "case": "reply",
+   "sender": "Ben Brown",
+   "conv": "#design",
+   "text": "Can you review the deck before 3?",
+   "desktop": {
+    "title": "Ben Brown replied to you in #design",
+    "body": "Can you review the deck before 3?"
+   },
+   "ios": {
+    "title": "Ben Brown",
+    "subtitle": "Replied to you in #design",
+    "body": "Can you review the deck before 3?"
+   }
+  },
+  {
+   "name": "channel_previews_off",
+   "conv_kind": "channel",
+   "case": "previews_off",
+   "sender": "Ben Brown",
+   "conv": "#design",
+   "text": null,
+   "desktop": {
+    "title": "Ben Brown in #design",
+    "body": "Sent a message"
+   },
+   "ios": {
+    "title": "Ben Brown",
+    "subtitle": "#design",
+    "body": "Sent a message"
+   }
+  },
+  {
+   "name": "channel_not_verified",
+   "conv_kind": "channel",
+   "case": "not_verified",
+   "sender": "Ben Brown",
+   "conv": "#design",
+   "text": null,
+   "desktop": {
+    "title": "Ben Brown in #design",
+    "body": "Sent a message"
+   },
+   "ios": {
+    "title": "Ben Brown",
+    "subtitle": "#design",
+    "body": "Sent a message"
+   }
+  }
+ ],
+ "call": [
+  {
+   "name": "call_dm",
+   "kind": "call",
+   "conv_kind": "dm",
+   "sender": "Ben Brown",
+   "conv": "",
+   "title": "",
+   "others": 0,
+   "desktop": {
+    "title": "Ben Brown is calling",
+    "body": "Lucid Meet call",
+    "buttons": [
+     "Answer",
+     "Decline"
+    ],
+    "buttons_in_call": [
+     "Leave and answer",
+     "Decline"
+    ]
+   },
+   "ios": {
+    "callkit": "Ben Brown"
+   }
+  },
+  {
+   "name": "call_group",
+   "kind": "call",
+   "conv_kind": "group",
+   "sender": "Ben Brown",
+   "conv": "Launch crew",
+   "title": "",
+   "others": 0,
+   "desktop": {
+    "title": "Ben Brown is calling",
+    "body": "Call in Launch crew",
+    "buttons": [
+     "Answer",
+     "Decline"
+    ],
+    "buttons_in_call": [
+     "Leave and answer",
+     "Decline"
+    ]
+   },
+   "ios": {
+    "callkit": "Ben Brown in Launch crew"
+   }
+  },
+  {
+   "name": "call_channel",
+   "kind": "call",
+   "conv_kind": "channel",
+   "sender": "Ben Brown",
+   "conv": "#design",
+   "title": "",
+   "others": 0,
+   "desktop": {
+    "title": "Ben Brown is calling",
+    "body": "Call in #design",
+    "buttons": [
+     "Answer",
+     "Decline"
+    ],
+    "buttons_in_call": [
+     "Leave and answer",
+     "Decline"
+    ]
+   },
+   "ios": {
+    "callkit": "Ben Brown in #design"
+   }
+  },
+  {
+   "name": "live_meeting",
+   "kind": "live",
+   "conv_kind": "channel",
+   "sender": "Ben Brown",
+   "conv": "#design",
+   "title": "Weekly sync",
+   "others": 3,
+   "desktop": {
+    "title": "Ben Brown invited you to join a call",
+    "body": "Weekly sync is in progress",
+    "buttons": [
+     "Join",
+     "Dismiss"
+    ],
+    "buttons_in_call": [
+     "Leave and join",
+     "Dismiss"
+    ]
+   },
+   "ios": {
+    "callkit": "Ben Brown: Weekly sync"
+   }
+  },
+  {
+   "name": "live_one_other",
+   "kind": "live",
+   "conv_kind": "group",
+   "sender": "Ben Brown",
+   "conv": "Launch crew",
+   "title": "",
+   "others": 1,
+   "desktop": {
+    "title": "Ben Brown invited you to join a call",
+    "body": "2 people are in the call",
+    "buttons": [
+     "Join",
+     "Dismiss"
+    ],
+    "buttons_in_call": [
+     "Leave and join",
+     "Dismiss"
+    ]
+   },
+   "ios": {
+    "callkit": "Ben Brown: call in progress"
+   }
+  },
+  {
+   "name": "live_many",
+   "kind": "live",
+   "conv_kind": "channel",
+   "sender": "Ben Brown",
+   "conv": "#design",
+   "title": "",
+   "others": 11,
+   "desktop": {
+    "title": "Ben Brown invited you to join a call",
+    "body": "12 people are in the call",
+    "buttons": [
+     "Join",
+     "Dismiss"
+    ],
+    "buttons_in_call": [
+     "Leave and join",
+     "Dismiss"
+    ]
+   },
+   "ios": {
+    "callkit": "Ben Brown: call in progress"
+   }
+  },
+  {
+   "name": "missed_dm",
+   "kind": "missed",
+   "conv_kind": "dm",
+   "sender": "Ben Brown",
+   "conv": "",
+   "title": "",
+   "others": 0,
+   "desktop": {
+    "title": "Missed call from Ben Brown",
+    "body": "Lucid Meet call",
+    "buttons": [
+     "Call back"
+    ],
+    "buttons_in_call": [
+     "Call back"
+    ]
+   },
+   "ios": {
+    "title": "Missed call from Ben Brown",
+    "body": "Lucid Meet call"
+   }
+  },
+  {
+   "name": "missed_group",
+   "kind": "missed",
+   "conv_kind": "group",
+   "sender": "Ben Brown",
+   "conv": "Launch crew",
+   "title": "",
+   "others": 0,
+   "desktop": {
+    "title": "Missed call from Ben Brown",
+    "body": "Call in Launch crew",
+    "buttons": [
+     "Call back"
+    ],
+    "buttons_in_call": [
+     "Call back"
+    ]
+   },
+   "ios": {
+    "title": "Missed call from Ben Brown",
+    "body": "Call in Launch crew"
+   }
+  },
+  {
+   "name": "missed_channel",
+   "kind": "missed",
+   "conv_kind": "channel",
+   "sender": "Ben Brown",
+   "conv": "#design",
+   "title": "",
+   "others": 0,
+   "desktop": {
+    "title": "Missed call from Ben Brown",
+    "body": "Call in #design",
+    "buttons": [
+     "Call back"
+    ],
+    "buttons_in_call": [
+     "Call back"
+    ]
+   },
+   "ios": {
+    "title": "Missed call from Ben Brown",
+    "body": "Call in #design"
+   }
+  }
+ ],
+ "meeting": [
+  {
+   "name": "invite_title",
+   "kind": "invite",
+   "sender": "Ben Brown",
+   "title": "Weekly sync",
+   "start_s": 1794927600,
+   "when": "Tue, Nov 17, 3:00 PM",
+   "time": "3:00 PM",
+   "desktop": {
+    "title": "Meeting invite from Ben Brown",
+    "body": "Weekly sync, Tue, Nov 17, 3:00 PM",
+    "buttons": [
+     "Accept",
+     "Maybe",
+     "Decline"
+    ]
+   },
+   "ios": {
+    "title": "Meeting invite from Ben Brown",
+    "body": "Weekly sync, Tue, Nov 17, 3:00 PM"
+   }
+  },
+  {
+   "name": "invite_no_title",
+   "kind": "invite",
+   "sender": "Ben Brown",
+   "title": "",
+   "start_s": 1794927600,
+   "when": "Tue, Nov 17, 3:00 PM",
+   "time": "3:00 PM",
+   "desktop": {
+    "title": "Meeting invite from Ben Brown",
+    "body": "Tue, Nov 17, 3:00 PM",
+    "buttons": [
+     "Accept",
+     "Maybe",
+     "Decline"
+    ]
+   },
+   "ios": {
+    "title": "Meeting invite from Ben Brown",
+    "body": "Tue, Nov 17, 3:00 PM"
+   }
+  },
+  {
+   "name": "update_title",
+   "kind": "update",
+   "sender": "Ben Brown",
+   "title": "Weekly sync",
+   "start_s": 1794927600,
+   "when": "Tue, Nov 17, 3:00 PM",
+   "time": "3:00 PM",
+   "desktop": {
+    "title": "Ben Brown changed Weekly sync",
+    "body": "Now Tue, Nov 17, 3:00 PM",
+    "buttons": [
+     "Open"
+    ]
+   },
+   "ios": {
+    "title": "Ben Brown changed Weekly sync",
+    "body": "Now Tue, Nov 17, 3:00 PM"
+   }
+  },
+  {
+   "name": "update_no_title",
+   "kind": "update",
+   "sender": "Ben Brown",
+   "title": "",
+   "start_s": 1794927600,
+   "when": "Tue, Nov 17, 3:00 PM",
+   "time": "3:00 PM",
+   "desktop": {
+    "title": "Ben Brown changed a meeting",
+    "body": "Now Tue, Nov 17, 3:00 PM",
+    "buttons": [
+     "Open"
+    ]
+   },
+   "ios": {
+    "title": "Ben Brown changed a meeting",
+    "body": "Now Tue, Nov 17, 3:00 PM"
+   }
+  },
+  {
+   "name": "cancel_title",
+   "kind": "cancel",
+   "sender": "Ben Brown",
+   "title": "Weekly sync",
+   "start_s": 1794927600,
+   "when": "Tue, Nov 17, 3:00 PM",
+   "time": "3:00 PM",
+   "desktop": {
+    "title": "Ben Brown canceled Weekly sync",
+    "body": "Tue, Nov 17, 3:00 PM",
+    "buttons": []
+   },
+   "ios": {
+    "title": "Ben Brown canceled Weekly sync",
+    "body": "Tue, Nov 17, 3:00 PM"
+   }
+  },
+  {
+   "name": "cancel_no_title",
+   "kind": "cancel",
+   "sender": "Ben Brown",
+   "title": "",
+   "start_s": 1794927600,
+   "when": "Tue, Nov 17, 3:00 PM",
+   "time": "3:00 PM",
+   "desktop": {
+    "title": "Ben Brown canceled a meeting",
+    "body": "Tue, Nov 17, 3:00 PM",
+    "buttons": []
+   },
+   "ios": {
+    "title": "Ben Brown canceled a meeting",
+    "body": "Tue, Nov 17, 3:00 PM"
+   }
+  },
+  {
+   "name": "remind_title",
+   "kind": "remind",
+   "sender": "Ben Brown",
+   "title": "Weekly sync",
+   "start_s": 1794927600,
+   "when": "Tue, Nov 17, 3:00 PM",
+   "time": "3:00 PM",
+   "desktop": {
+    "title": "Weekly sync starts in 5 minutes",
+    "body": "3:00 PM, organized by Ben Brown",
+    "buttons": [
+     "Join",
+     "Dismiss"
+    ]
+   },
+   "ios": {
+    "title": "Weekly sync starts in 5 minutes",
+    "body": "3:00 PM, organized by Ben Brown"
+   }
+  },
+  {
+   "name": "remind_no_title",
+   "kind": "remind",
+   "sender": "Ben Brown",
+   "title": "",
+   "start_s": 1794927600,
+   "when": "Tue, Nov 17, 3:00 PM",
+   "time": "3:00 PM",
+   "desktop": {
+    "title": "A meeting starts in 5 minutes",
+    "body": "3:00 PM, organized by Ben Brown",
+    "buttons": [
+     "Join",
+     "Dismiss"
+    ]
+   },
+   "ios": {
+    "title": "A meeting starts in 5 minutes",
+    "body": "3:00 PM, organized by Ben Brown"
+   }
+  }
+ ],
+ "caller_notice": [
+  {
+   "sender": "Ben Brown",
+   "text": "Ben Brown can't be rung right now. They will see your invitation."
+  }
+ ],
+ "fallback": [
+  {
+   "kind": "msg",
+   "category": "msg",
+   "body": "New message"
+  },
+  {
+   "kind": "call",
+   "category": "call",
+   "body": "Incoming call"
+  },
+  {
+   "kind": "live",
+   "category": "call",
+   "body": "Invitation to join a call"
+  },
+  {
+   "kind": "missed",
+   "category": "missed",
+   "body": "Missed call"
+  },
+  {
+   "kind": "invite",
+   "category": "mtg",
+   "body": "New meeting invite"
+  },
+  {
+   "kind": "update",
+   "category": "mtg",
+   "body": "Meeting changed"
+  },
+  {
+   "kind": "cancel",
+   "category": "mtg",
+   "body": "Meeting canceled"
+  },
+  {
+   "kind": "remind",
+   "category": "remind",
+   "body": "Meeting starts in 5 minutes"
+  }
+ ],
+ "fallback_title": {
+  "ios": "Lucid Meet",
+  "desktop": "Lucid Meeting Hub"
+ },
+ "say": [
+  {
+   "kind": "call",
+   "title": "Ben Brown is calling",
+   "body": "Lucid Meet call",
+   "role": "alert",
+   "text": "Ben Brown is calling. Lucid Meet call. Answer or Decline."
+  },
+  {
+   "kind": "live",
+   "title": "Ben Brown invited you to join a call",
+   "body": "4 people are in the call",
+   "role": "alert",
+   "text": "Ben Brown invited you to join a call. 4 people are in the call. Join or Dismiss."
+  },
+  {
+   "kind": "msg",
+   "title": "Ben Brown",
+   "body": "Can you review the deck before 3?",
+   "role": "polite",
+   "text": "Ben Brown: Can you review the deck before 3?"
+  }
+ ],
+ "notice": [
+  {
+   "name": "reply_not_sent_open",
+   "sender": "Ben Brown",
+   "text": "Your reply to Ben Brown was not sent. Open Lucid to send it."
+  },
+  {
+   "name": "reply_not_sent",
+   "sender": "Ben Brown",
+   "text": "Your reply to Ben Brown was not sent."
+  },
+  {
+   "name": "test_notification",
+   "title": "Lucid Meeting Hub",
+   "text": "Notifications are working."
+  }
+ ]
+}

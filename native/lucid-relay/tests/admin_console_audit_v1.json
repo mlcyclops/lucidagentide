@@ -1,0 +1,1299 @@
+{
+ "version": 1,
+ "contract": "AC-1 revision 4.2",
+ "about": "Section 6. hash = SHA-256(lp(\"lucid-console-audit-v1\", prev as 32 raw bytes, canonical_json(entry without hash))); the first entry ever has a prev of 64 zeros. canonical_json is CE-1 canonical JSON with null written as null. Lines here are the canonical JSON of each entry with its hash; a verifier re-encodes, so any JSON layout of the same values verifies. 'expect' is what tools/verify_console_audit.py answers: through is the last seq that verifies, broken_at the seq expected at the first line that does not, line that line (1-based), why one of parse, keys, form, seq, prev, anchor, hash.",
+ "domain": "lucid-console-audit-v1",
+ "keys": [
+  "seq",
+  "ts",
+  "actor",
+  "role",
+  "ip",
+  "action",
+  "target",
+  "result",
+  "approval",
+  "stepup",
+  "detail",
+  "prev",
+  "hash"
+ ],
+ "zero_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+ "entries": [
+  {
+   "seq": 1,
+   "ts": 1763300000123,
+   "actor": "alice@acme.example",
+   "role": "admin",
+   "ip": "203.0.113.7",
+   "action": "admins.invite",
+   "target": "erin@acme.example",
+   "result": "ok",
+   "approval": null,
+   "stepup": true,
+   "detail": {
+    "role": "viewer"
+   },
+   "prev": "0000000000000000000000000000000000000000000000000000000000000000",
+   "hash": "c1bc033f151549a56b7decd27e9f59577c6a3f14b669e3a3ff92851fe0931159",
+   "canonical": "{\"action\":\"admins.invite\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"role\":\"viewer\"},\"ip\":\"203.0.113.7\",\"prev\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":1,\"stepup\":true,\"target\":\"erin@acme.example\",\"ts\":1763300000123}"
+  },
+  {
+   "seq": 2,
+   "ts": 1763300060456,
+   "actor": "alice@acme.example",
+   "role": "admin",
+   "ip": "203.0.113.7",
+   "action": "admins.remove",
+   "target": "bob@acme.example",
+   "result": "ok",
+   "approval": "ap_0123456789abcdef",
+   "stepup": true,
+   "detail": {
+    "reason": "Left the company"
+   },
+   "prev": "c1bc033f151549a56b7decd27e9f59577c6a3f14b669e3a3ff92851fe0931159",
+   "hash": "3350f3308905833385361978838e9bcaf52a3e6dbe14ec27284708ef3df8d8c2",
+   "canonical": "{\"action\":\"admins.remove\",\"actor\":\"alice@acme.example\",\"approval\":\"ap_0123456789abcdef\",\"detail\":{\"reason\":\"Left the company\"},\"ip\":\"203.0.113.7\",\"prev\":\"c1bc033f151549a56b7decd27e9f59577c6a3f14b669e3a3ff92851fe0931159\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":2,\"stepup\":true,\"target\":\"bob@acme.example\",\"ts\":1763300060456}"
+  },
+  {
+   "seq": 3,
+   "ts": 1763300100000,
+   "actor": "relay",
+   "role": null,
+   "ip": null,
+   "action": "refusals.summary",
+   "target": null,
+   "result": "summary",
+   "approval": null,
+   "stepup": false,
+   "detail": {
+    "count": 1412,
+    "codes": {
+     "signin-refused": 12,
+     "source": 1400
+    },
+    "sources": 37
+   },
+   "prev": "3350f3308905833385361978838e9bcaf52a3e6dbe14ec27284708ef3df8d8c2",
+   "hash": "d84e8570a255d8c0a4840224338bfd27baf49d4bcfb17f4734a69b08b22e3c5b",
+   "canonical": "{\"action\":\"refusals.summary\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"codes\":{\"signin-refused\":12,\"source\":1400},\"count\":1412,\"sources\":37},\"ip\":null,\"prev\":\"3350f3308905833385361978838e9bcaf52a3e6dbe14ec27284708ef3df8d8c2\",\"result\":\"summary\",\"role\":null,\"seq\":3,\"stepup\":false,\"target\":null,\"ts\":1763300100000}"
+  }
+ ],
+ "chain": {
+  "lines": [
+   "{\"action\":\"admins.invite\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"role\":\"viewer\"},\"hash\":\"c1bc033f151549a56b7decd27e9f59577c6a3f14b669e3a3ff92851fe0931159\",\"ip\":\"203.0.113.7\",\"prev\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":1,\"stepup\":true,\"target\":\"erin@acme.example\",\"ts\":1763300000123}",
+   "{\"action\":\"admins.remove\",\"actor\":\"alice@acme.example\",\"approval\":\"ap_0123456789abcdef\",\"detail\":{\"reason\":\"Left the company\"},\"hash\":\"3350f3308905833385361978838e9bcaf52a3e6dbe14ec27284708ef3df8d8c2\",\"ip\":\"203.0.113.7\",\"prev\":\"c1bc033f151549a56b7decd27e9f59577c6a3f14b669e3a3ff92851fe0931159\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":2,\"stepup\":true,\"target\":\"bob@acme.example\",\"ts\":1763300060456}",
+   "{\"action\":\"refusals.summary\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"codes\":{\"signin-refused\":12,\"source\":1400},\"count\":1412,\"sources\":37},\"hash\":\"d84e8570a255d8c0a4840224338bfd27baf49d4bcfb17f4734a69b08b22e3c5b\",\"ip\":null,\"prev\":\"3350f3308905833385361978838e9bcaf52a3e6dbe14ec27284708ef3df8d8c2\",\"result\":\"summary\",\"role\":null,\"seq\":3,\"stepup\":false,\"target\":null,\"ts\":1763300100000}",
+   "{\"action\":\"refusals.summary\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"codes\":{\"rate\":75},\"count\":75},\"hash\":\"5435f3d5105183515c0b0609d7df61cce945b0ae40c60141661614b0c15a41a4\",\"ip\":\"203.0.113.7\",\"prev\":\"d84e8570a255d8c0a4840224338bfd27baf49d4bcfb17f4734a69b08b22e3c5b\",\"result\":\"summary\",\"role\":\"admin\",\"seq\":4,\"stepup\":false,\"target\":null,\"ts\":1763300160000}",
+   "{\"action\":\"spokes.block\",\"actor\":\"carol@acme.example\",\"approval\":null,\"detail\":{\"code\":\"stepup-needed\"},\"hash\":\"621aa89aa04443cf502e896145227a18051d6d871fab1271c822deec94b8039a\",\"ip\":\"2001:db8::7\",\"prev\":\"5435f3d5105183515c0b0609d7df61cce945b0ae40c60141661614b0c15a41a4\",\"result\":\"refused\",\"role\":\"admin\",\"seq\":5,\"stepup\":false,\"target\":\"n_0123456789abcdef0123456789abcdef\",\"ts\":1763300181818}",
+   "{\"action\":\"admins.suspend\",\"actor\":\"carol@acme.example\",\"approval\":\"ap_fedcba9876543210\",\"detail\":{\"reason\":\"Laptop lost in Z\u00fcrich\"},\"hash\":\"f3e5fef38262df7b49e1b976df1eaa9cd88cc04adc37a9b87d2255abef8d8a3d\",\"ip\":\"2001:db8::7\",\"prev\":\"621aa89aa04443cf502e896145227a18051d6d871fab1271c822deec94b8039a\",\"result\":\"waiting\",\"role\":\"admin\",\"seq\":6,\"stepup\":true,\"target\":\"dave@acme.example\",\"ts\":1763300222222}"
+  ],
+  "expect": {
+   "verified": true,
+   "anchored": true,
+   "first": 1,
+   "through": 6,
+   "broken_at": null,
+   "line": null,
+   "why": null
+  }
+ },
+ "global_refusal_summary": {
+  "seq": 3,
+  "note": "actor relay, one entry a minute at most, sources counted and never named"
+ },
+ "person_refusal_summary": {
+  "seq": 4
+ },
+ "changed": [
+  {
+   "field": "seq",
+   "line": "{\"action\":\"admins.remove\",\"actor\":\"alice@acme.example\",\"approval\":\"ap_0123456789abcdef\",\"detail\":{\"reason\":\"Left the company\"},\"hash\":\"3350f3308905833385361978838e9bcaf52a3e6dbe14ec27284708ef3df8d8c2\",\"ip\":\"203.0.113.7\",\"prev\":\"c1bc033f151549a56b7decd27e9f59577c6a3f14b669e3a3ff92851fe0931159\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":3,\"stepup\":true,\"target\":\"bob@acme.example\",\"ts\":1763300060456}",
+   "expect": {
+    "verified": false,
+    "anchored": true,
+    "first": 1,
+    "through": 1,
+    "broken_at": 2,
+    "line": 2,
+    "why": "seq"
+   }
+  },
+  {
+   "field": "ts",
+   "line": "{\"action\":\"admins.remove\",\"actor\":\"alice@acme.example\",\"approval\":\"ap_0123456789abcdef\",\"detail\":{\"reason\":\"Left the company\"},\"hash\":\"3350f3308905833385361978838e9bcaf52a3e6dbe14ec27284708ef3df8d8c2\",\"ip\":\"203.0.113.7\",\"prev\":\"c1bc033f151549a56b7decd27e9f59577c6a3f14b669e3a3ff92851fe0931159\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":2,\"stepup\":true,\"target\":\"bob@acme.example\",\"ts\":1763300060457}",
+   "expect": {
+    "verified": false,
+    "anchored": true,
+    "first": 1,
+    "through": 1,
+    "broken_at": 2,
+    "line": 2,
+    "why": "hash"
+   }
+  },
+  {
+   "field": "actor",
+   "line": "{\"action\":\"admins.remove\",\"actor\":\"alice@acme.exampld\",\"approval\":\"ap_0123456789abcdef\",\"detail\":{\"reason\":\"Left the company\"},\"hash\":\"3350f3308905833385361978838e9bcaf52a3e6dbe14ec27284708ef3df8d8c2\",\"ip\":\"203.0.113.7\",\"prev\":\"c1bc033f151549a56b7decd27e9f59577c6a3f14b669e3a3ff92851fe0931159\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":2,\"stepup\":true,\"target\":\"bob@acme.example\",\"ts\":1763300060456}",
+   "expect": {
+    "verified": false,
+    "anchored": true,
+    "first": 1,
+    "through": 1,
+    "broken_at": 2,
+    "line": 2,
+    "why": "hash"
+   }
+  },
+  {
+   "field": "role",
+   "line": "{\"action\":\"admins.remove\",\"actor\":\"alice@acme.example\",\"approval\":\"ap_0123456789abcdef\",\"detail\":{\"reason\":\"Left the company\"},\"hash\":\"3350f3308905833385361978838e9bcaf52a3e6dbe14ec27284708ef3df8d8c2\",\"ip\":\"203.0.113.7\",\"prev\":\"c1bc033f151549a56b7decd27e9f59577c6a3f14b669e3a3ff92851fe0931159\",\"result\":\"ok\",\"role\":\"admio\",\"seq\":2,\"stepup\":true,\"target\":\"bob@acme.example\",\"ts\":1763300060456}",
+   "expect": {
+    "verified": false,
+    "anchored": true,
+    "first": 1,
+    "through": 1,
+    "broken_at": 2,
+    "line": 2,
+    "why": "hash"
+   }
+  },
+  {
+   "field": "ip",
+   "line": "{\"action\":\"admins.remove\",\"actor\":\"alice@acme.example\",\"approval\":\"ap_0123456789abcdef\",\"detail\":{\"reason\":\"Left the company\"},\"hash\":\"3350f3308905833385361978838e9bcaf52a3e6dbe14ec27284708ef3df8d8c2\",\"ip\":\"203.0.113.6\",\"prev\":\"c1bc033f151549a56b7decd27e9f59577c6a3f14b669e3a3ff92851fe0931159\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":2,\"stepup\":true,\"target\":\"bob@acme.example\",\"ts\":1763300060456}",
+   "expect": {
+    "verified": false,
+    "anchored": true,
+    "first": 1,
+    "through": 1,
+    "broken_at": 2,
+    "line": 2,
+    "why": "hash"
+   }
+  },
+  {
+   "field": "action",
+   "line": "{\"action\":\"admins.removd\",\"actor\":\"alice@acme.example\",\"approval\":\"ap_0123456789abcdef\",\"detail\":{\"reason\":\"Left the company\"},\"hash\":\"3350f3308905833385361978838e9bcaf52a3e6dbe14ec27284708ef3df8d8c2\",\"ip\":\"203.0.113.7\",\"prev\":\"c1bc033f151549a56b7decd27e9f59577c6a3f14b669e3a3ff92851fe0931159\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":2,\"stepup\":true,\"target\":\"bob@acme.example\",\"ts\":1763300060456}",
+   "expect": {
+    "verified": false,
+    "anchored": true,
+    "first": 1,
+    "through": 1,
+    "broken_at": 2,
+    "line": 2,
+    "why": "hash"
+   }
+  },
+  {
+   "field": "target",
+   "line": "{\"action\":\"admins.remove\",\"actor\":\"alice@acme.example\",\"approval\":\"ap_0123456789abcdef\",\"detail\":{\"reason\":\"Left the company\"},\"hash\":\"3350f3308905833385361978838e9bcaf52a3e6dbe14ec27284708ef3df8d8c2\",\"ip\":\"203.0.113.7\",\"prev\":\"c1bc033f151549a56b7decd27e9f59577c6a3f14b669e3a3ff92851fe0931159\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":2,\"stepup\":true,\"target\":\"bob@acme.exampld\",\"ts\":1763300060456}",
+   "expect": {
+    "verified": false,
+    "anchored": true,
+    "first": 1,
+    "through": 1,
+    "broken_at": 2,
+    "line": 2,
+    "why": "hash"
+   }
+  },
+  {
+   "field": "result",
+   "line": "{\"action\":\"admins.remove\",\"actor\":\"alice@acme.example\",\"approval\":\"ap_0123456789abcdef\",\"detail\":{\"reason\":\"Left the company\"},\"hash\":\"3350f3308905833385361978838e9bcaf52a3e6dbe14ec27284708ef3df8d8c2\",\"ip\":\"203.0.113.7\",\"prev\":\"c1bc033f151549a56b7decd27e9f59577c6a3f14b669e3a3ff92851fe0931159\",\"result\":\"oj\",\"role\":\"admin\",\"seq\":2,\"stepup\":true,\"target\":\"bob@acme.example\",\"ts\":1763300060456}",
+   "expect": {
+    "verified": false,
+    "anchored": true,
+    "first": 1,
+    "through": 1,
+    "broken_at": 2,
+    "line": 2,
+    "why": "hash"
+   }
+  },
+  {
+   "field": "approval",
+   "line": "{\"action\":\"admins.remove\",\"actor\":\"alice@acme.example\",\"approval\":\"ap_0123456789abcdeg\",\"detail\":{\"reason\":\"Left the company\"},\"hash\":\"3350f3308905833385361978838e9bcaf52a3e6dbe14ec27284708ef3df8d8c2\",\"ip\":\"203.0.113.7\",\"prev\":\"c1bc033f151549a56b7decd27e9f59577c6a3f14b669e3a3ff92851fe0931159\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":2,\"stepup\":true,\"target\":\"bob@acme.example\",\"ts\":1763300060456}",
+   "expect": {
+    "verified": false,
+    "anchored": true,
+    "first": 1,
+    "through": 1,
+    "broken_at": 2,
+    "line": 2,
+    "why": "hash"
+   }
+  },
+  {
+   "field": "stepup",
+   "line": "{\"action\":\"admins.remove\",\"actor\":\"alice@acme.example\",\"approval\":\"ap_0123456789abcdef\",\"detail\":{\"reason\":\"Left the company\"},\"hash\":\"3350f3308905833385361978838e9bcaf52a3e6dbe14ec27284708ef3df8d8c2\",\"ip\":\"203.0.113.7\",\"prev\":\"c1bc033f151549a56b7decd27e9f59577c6a3f14b669e3a3ff92851fe0931159\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":2,\"stepup\":false,\"target\":\"bob@acme.example\",\"ts\":1763300060456}",
+   "expect": {
+    "verified": false,
+    "anchored": true,
+    "first": 1,
+    "through": 1,
+    "broken_at": 2,
+    "line": 2,
+    "why": "hash"
+   }
+  },
+  {
+   "field": "detail",
+   "line": "{\"action\":\"admins.remove\",\"actor\":\"alice@acme.example\",\"approval\":\"ap_0123456789abcdef\",\"detail\":{\"reason\":\"Left the companx\"},\"hash\":\"3350f3308905833385361978838e9bcaf52a3e6dbe14ec27284708ef3df8d8c2\",\"ip\":\"203.0.113.7\",\"prev\":\"c1bc033f151549a56b7decd27e9f59577c6a3f14b669e3a3ff92851fe0931159\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":2,\"stepup\":true,\"target\":\"bob@acme.example\",\"ts\":1763300060456}",
+   "expect": {
+    "verified": false,
+    "anchored": true,
+    "first": 1,
+    "through": 1,
+    "broken_at": 2,
+    "line": 2,
+    "why": "hash"
+   }
+  },
+  {
+   "field": "prev",
+   "line": "{\"action\":\"admins.remove\",\"actor\":\"alice@acme.example\",\"approval\":\"ap_0123456789abcdef\",\"detail\":{\"reason\":\"Left the company\"},\"hash\":\"3350f3308905833385361978838e9bcaf52a3e6dbe14ec27284708ef3df8d8c2\",\"ip\":\"203.0.113.7\",\"prev\":\"c1bc033f151549a56b7decd27e9f59577c6a3f14b669e3a3ff92851fe0931158\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":2,\"stepup\":true,\"target\":\"bob@acme.example\",\"ts\":1763300060456}",
+   "expect": {
+    "verified": false,
+    "anchored": true,
+    "first": 1,
+    "through": 1,
+    "broken_at": 2,
+    "line": 2,
+    "why": "prev"
+   }
+  },
+  {
+   "field": "hash",
+   "line": "{\"action\":\"admins.remove\",\"actor\":\"alice@acme.example\",\"approval\":\"ap_0123456789abcdef\",\"detail\":{\"reason\":\"Left the company\"},\"hash\":\"3350f3308905833385361978838e9bcaf52a3e6dbe14ec27284708ef3df8d8c3\",\"ip\":\"203.0.113.7\",\"prev\":\"c1bc033f151549a56b7decd27e9f59577c6a3f14b669e3a3ff92851fe0931159\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":2,\"stepup\":true,\"target\":\"bob@acme.example\",\"ts\":1763300060456}",
+   "expect": {
+    "verified": false,
+    "anchored": true,
+    "first": 1,
+    "through": 1,
+    "broken_at": 2,
+    "line": 2,
+    "why": "hash"
+   }
+  }
+ ],
+ "removed": {
+  "lines": [
+   "{\"action\":\"admins.invite\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"role\":\"viewer\"},\"hash\":\"c1bc033f151549a56b7decd27e9f59577c6a3f14b669e3a3ff92851fe0931159\",\"ip\":\"203.0.113.7\",\"prev\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":1,\"stepup\":true,\"target\":\"erin@acme.example\",\"ts\":1763300000123}",
+   "{\"action\":\"refusals.summary\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"codes\":{\"signin-refused\":12,\"source\":1400},\"count\":1412,\"sources\":37},\"hash\":\"d84e8570a255d8c0a4840224338bfd27baf49d4bcfb17f4734a69b08b22e3c5b\",\"ip\":null,\"prev\":\"3350f3308905833385361978838e9bcaf52a3e6dbe14ec27284708ef3df8d8c2\",\"result\":\"summary\",\"role\":null,\"seq\":3,\"stepup\":false,\"target\":null,\"ts\":1763300100000}"
+  ],
+  "expect": {
+   "verified": false,
+   "anchored": true,
+   "first": 1,
+   "through": 1,
+   "broken_at": 2,
+   "line": 2,
+   "why": "seq"
+  }
+ },
+ "reordered": {
+  "lines": [
+   "{\"action\":\"admins.invite\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"role\":\"viewer\"},\"hash\":\"c1bc033f151549a56b7decd27e9f59577c6a3f14b669e3a3ff92851fe0931159\",\"ip\":\"203.0.113.7\",\"prev\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":1,\"stepup\":true,\"target\":\"erin@acme.example\",\"ts\":1763300000123}",
+   "{\"action\":\"refusals.summary\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"codes\":{\"signin-refused\":12,\"source\":1400},\"count\":1412,\"sources\":37},\"hash\":\"d84e8570a255d8c0a4840224338bfd27baf49d4bcfb17f4734a69b08b22e3c5b\",\"ip\":null,\"prev\":\"3350f3308905833385361978838e9bcaf52a3e6dbe14ec27284708ef3df8d8c2\",\"result\":\"summary\",\"role\":null,\"seq\":3,\"stepup\":false,\"target\":null,\"ts\":1763300100000}",
+   "{\"action\":\"admins.remove\",\"actor\":\"alice@acme.example\",\"approval\":\"ap_0123456789abcdef\",\"detail\":{\"reason\":\"Left the company\"},\"hash\":\"3350f3308905833385361978838e9bcaf52a3e6dbe14ec27284708ef3df8d8c2\",\"ip\":\"203.0.113.7\",\"prev\":\"c1bc033f151549a56b7decd27e9f59577c6a3f14b669e3a3ff92851fe0931159\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":2,\"stepup\":true,\"target\":\"bob@acme.example\",\"ts\":1763300060456}"
+  ],
+  "expect": {
+   "verified": false,
+   "anchored": true,
+   "first": 1,
+   "through": 1,
+   "broken_at": 2,
+   "line": 2,
+   "why": "seq"
+  }
+ },
+ "segments": {
+  "files": {
+   "console-audit-000001.jsonl": "{\"action\":\"admins.invite\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"role\":\"viewer\"},\"hash\":\"c1bc033f151549a56b7decd27e9f59577c6a3f14b669e3a3ff92851fe0931159\",\"ip\":\"203.0.113.7\",\"prev\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":1,\"stepup\":true,\"target\":\"erin@acme.example\",\"ts\":1763300000123}\n{\"action\":\"admins.remove\",\"actor\":\"alice@acme.example\",\"approval\":\"ap_0123456789abcdef\",\"detail\":{\"reason\":\"Left the company\"},\"hash\":\"3350f3308905833385361978838e9bcaf52a3e6dbe14ec27284708ef3df8d8c2\",\"ip\":\"203.0.113.7\",\"prev\":\"c1bc033f151549a56b7decd27e9f59577c6a3f14b669e3a3ff92851fe0931159\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":2,\"stepup\":true,\"target\":\"bob@acme.example\",\"ts\":1763300060456}\n{\"action\":\"refusals.summary\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"codes\":{\"signin-refused\":12,\"source\":1400},\"count\":1412,\"sources\":37},\"hash\":\"d84e8570a255d8c0a4840224338bfd27baf49d4bcfb17f4734a69b08b22e3c5b\",\"ip\":null,\"prev\":\"3350f3308905833385361978838e9bcaf52a3e6dbe14ec27284708ef3df8d8c2\",\"result\":\"summary\",\"role\":null,\"seq\":3,\"stepup\":false,\"target\":null,\"ts\":1763300100000}\n",
+   "console-audit-000002.jsonl": "{\"action\":\"refusals.summary\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"codes\":{\"rate\":75},\"count\":75},\"hash\":\"5435f3d5105183515c0b0609d7df61cce945b0ae40c60141661614b0c15a41a4\",\"ip\":\"203.0.113.7\",\"prev\":\"d84e8570a255d8c0a4840224338bfd27baf49d4bcfb17f4734a69b08b22e3c5b\",\"result\":\"summary\",\"role\":\"admin\",\"seq\":4,\"stepup\":false,\"target\":null,\"ts\":1763300160000}\n{\"action\":\"spokes.block\",\"actor\":\"carol@acme.example\",\"approval\":null,\"detail\":{\"code\":\"stepup-needed\"},\"hash\":\"621aa89aa04443cf502e896145227a18051d6d871fab1271c822deec94b8039a\",\"ip\":\"2001:db8::7\",\"prev\":\"5435f3d5105183515c0b0609d7df61cce945b0ae40c60141661614b0c15a41a4\",\"result\":\"refused\",\"role\":\"admin\",\"seq\":5,\"stepup\":false,\"target\":\"n_0123456789abcdef0123456789abcdef\",\"ts\":1763300181818}\n{\"action\":\"admins.suspend\",\"actor\":\"carol@acme.example\",\"approval\":\"ap_fedcba9876543210\",\"detail\":{\"reason\":\"Laptop lost in Z\u00fcrich\"},\"hash\":\"f3e5fef38262df7b49e1b976df1eaa9cd88cc04adc37a9b87d2255abef8d8a3d\",\"ip\":\"2001:db8::7\",\"prev\":\"621aa89aa04443cf502e896145227a18051d6d871fab1271c822deec94b8039a\",\"result\":\"waiting\",\"role\":\"admin\",\"seq\":6,\"stepup\":true,\"target\":\"dave@acme.example\",\"ts\":1763300222222}\n"
+  },
+  "together": {
+   "verified": true,
+   "anchored": true,
+   "first": 1,
+   "through": 6,
+   "broken_at": null,
+   "line": null,
+   "why": null
+  },
+  "second_alone": {
+   "verified": true,
+   "anchored": false,
+   "first": 4,
+   "through": 6,
+   "broken_at": null,
+   "line": null,
+   "why": null
+  },
+  "second_with_prev": {
+   "verified": true,
+   "anchored": true,
+   "first": 4,
+   "through": 6,
+   "broken_at": null,
+   "line": null,
+   "why": null
+  }
+ },
+ "dropped_front": {
+  "head": {
+   "seq": 6,
+   "hash": "f3e5fef38262df7b49e1b976df1eaa9cd88cc04adc37a9b87d2255abef8d8a3d",
+   "segment": 2,
+   "dropped": {
+    "through_seq": 3,
+    "hash": "d84e8570a255d8c0a4840224338bfd27baf49d4bcfb17f4734a69b08b22e3c5b"
+   },
+   "exportedThrough": 0
+  },
+  "segment": "console-audit-000002.jsonl",
+  "expect": {
+   "verified": true,
+   "anchored": true,
+   "first": 4,
+   "through": 6,
+   "broken_at": null,
+   "line": null,
+   "why": null
+  },
+  "wrong_dropped": {
+   "through_seq": 3,
+   "hash": "d84e8570a255d8c0a4840224338bfd27baf49d4bcfb17f4734a69b08b22e3c5a"
+  },
+  "expect_wrong": {
+   "verified": false,
+   "anchored": true,
+   "first": null,
+   "through": 3,
+   "broken_at": 4,
+   "line": 1,
+   "why": "anchor"
+  }
+ },
+ "torn_tail": {
+  "segment": "{\"action\":\"admins.invite\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"role\":\"viewer\"},\"hash\":\"c1bc033f151549a56b7decd27e9f59577c6a3f14b669e3a3ff92851fe0931159\",\"ip\":\"203.0.113.7\",\"prev\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":1,\"stepup\":true,\"target\":\"erin@acme.example\",\"ts\":1763300000123}\n{\"action\":\"admins.remove\",\"actor\":\"alice@acme.example\",\"approval\":\"ap_0123456789abcdef\",\"detail\":{\"reason\":\"Left the company\"},\"hash\":\"3350f3308905833385361978838e9bcaf52a3e6dbe14ec27284708ef3df8d8c2\",\"ip\":\"203.0.113.7\",\"prev\":\"c1bc033f151549a56b7decd27e9f59577c6a3f14b669e3a3ff92851fe0931159\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":2,\"stepup\":true,\"target\":\"bob@acme.example\",\"ts\":1763300060456}\n{\"action\":\"refusals.summary\",\"actor\":\"re",
+  "kept": "{\"action\":\"admins.invite\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"role\":\"viewer\"},\"hash\":\"c1bc033f151549a56b7decd27e9f59577c6a3f14b669e3a3ff92851fe0931159\",\"ip\":\"203.0.113.7\",\"prev\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":1,\"stepup\":true,\"target\":\"erin@acme.example\",\"ts\":1763300000123}\n{\"action\":\"admins.remove\",\"actor\":\"alice@acme.example\",\"approval\":\"ap_0123456789abcdef\",\"detail\":{\"reason\":\"Left the company\"},\"hash\":\"3350f3308905833385361978838e9bcaf52a3e6dbe14ec27284708ef3df8d8c2\",\"ip\":\"203.0.113.7\",\"prev\":\"c1bc033f151549a56b7decd27e9f59577c6a3f14b669e3a3ff92851fe0931159\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":2,\"stepup\":true,\"target\":\"bob@acme.example\",\"ts\":1763300060456}\n",
+  "moved": "{\"action\":\"refusals.summary\",\"actor\":\"re",
+  "torn": {
+   "torn_sha256": "d43d04db0b0b79620becd3ac6d810d2b18a114c2538abfba920d7462564ac27b",
+   "torn_lines": 1
+  },
+  "expect": {
+   "verified": false,
+   "through": 2,
+   "broken_at": 3,
+   "line": 3,
+   "why": "parse"
+  },
+  "restart": {
+   "seq": 3,
+   "ts": 1763300300000,
+   "actor": "alice@acme.example",
+   "role": "admin",
+   "ip": "203.0.113.7",
+   "action": "audit.restart",
+   "target": null,
+   "result": "ok",
+   "approval": null,
+   "stepup": true,
+   "detail": {
+    "after_torn": true,
+    "torn_lines": 1,
+    "torn_sha256": "d43d04db0b0b79620becd3ac6d810d2b18a114c2538abfba920d7462564ac27b"
+   },
+   "prev": "3350f3308905833385361978838e9bcaf52a3e6dbe14ec27284708ef3df8d8c2",
+   "hash": "43dc46796c895e0fcdcc02c89573d2c72c150386c5ea5eecb4ef2a8047e9db22"
+  }
+ },
+ "broken_middle": {
+  "segment": "{\"action\":\"admins.invite\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"role\":\"viewer\"},\"hash\":\"c1bc033f151549a56b7decd27e9f59577c6a3f14b669e3a3ff92851fe0931159\",\"ip\":\"203.0.113.7\",\"prev\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":1,\"stepup\":true,\"target\":\"erin@acme.example\",\"ts\":1763300000123}\n{\"action\":\"admins.re########ctor\":\"alice@acme.example\",\"approval\":\"ap_0123456789abcdef\",\"detail\":{\"reason\":\"Left the company\"},\"hash\":\"3350f3308905833385361978838e9bcaf52a3e6dbe14ec27284708ef3df8d8c2\",\"ip\":\"203.0.113.7\",\"prev\":\"c1bc033f151549a56b7decd27e9f59577c6a3f14b669e3a3ff92851fe0931159\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":2,\"stepup\":true,\"target\":\"bob@acme.example\",\"ts\":1763300060456}\n{\"action\":\"refusals.summary\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"codes\":{\"signin-refused\":12,\"source\":1400},\"count\":1412,\"sources\":37},\"hash\":\"d84e8570a255d8c0a4840224338bfd27baf49d4bcfb17f4734a69b08b22e3c5b\",\"ip\":null,\"prev\":\"3350f3308905833385361978838e9bcaf52a3e6dbe14ec27284708ef3df8d8c2\",\"result\":\"summary\",\"role\":null,\"seq\":3,\"stepup\":false,\"target\":null,\"ts\":1763300100000}\n",
+  "kept": "{\"action\":\"admins.invite\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"role\":\"viewer\"},\"hash\":\"c1bc033f151549a56b7decd27e9f59577c6a3f14b669e3a3ff92851fe0931159\",\"ip\":\"203.0.113.7\",\"prev\":\"0000000000000000000000000000000000000000000000000000000000000000\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":1,\"stepup\":true,\"target\":\"erin@acme.example\",\"ts\":1763300000123}\n",
+  "moved": "{\"action\":\"admins.re########ctor\":\"alice@acme.example\",\"approval\":\"ap_0123456789abcdef\",\"detail\":{\"reason\":\"Left the company\"},\"hash\":\"3350f3308905833385361978838e9bcaf52a3e6dbe14ec27284708ef3df8d8c2\",\"ip\":\"203.0.113.7\",\"prev\":\"c1bc033f151549a56b7decd27e9f59577c6a3f14b669e3a3ff92851fe0931159\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":2,\"stepup\":true,\"target\":\"bob@acme.example\",\"ts\":1763300060456}\n{\"action\":\"refusals.summary\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"codes\":{\"signin-refused\":12,\"source\":1400},\"count\":1412,\"sources\":37},\"hash\":\"d84e8570a255d8c0a4840224338bfd27baf49d4bcfb17f4734a69b08b22e3c5b\",\"ip\":null,\"prev\":\"3350f3308905833385361978838e9bcaf52a3e6dbe14ec27284708ef3df8d8c2\",\"result\":\"summary\",\"role\":null,\"seq\":3,\"stepup\":false,\"target\":null,\"ts\":1763300100000}\n",
+  "torn": {
+   "torn_sha256": "4c05465b324d1881a4f0b9483dc823fae1a1a59c1e71af8cb1d96d1bb9450e28",
+   "torn_lines": 2
+  },
+  "expect": {
+   "verified": false,
+   "through": 1,
+   "broken_at": 2,
+   "line": 2,
+   "why": "parse"
+  },
+  "restart": {
+   "seq": 2,
+   "ts": 1763300300000,
+   "actor": "alice@acme.example",
+   "role": "admin",
+   "ip": "203.0.113.7",
+   "action": "audit.restart",
+   "target": null,
+   "result": "ok",
+   "approval": null,
+   "stepup": true,
+   "detail": {
+    "after_torn": true,
+    "torn_lines": 2,
+    "torn_sha256": "4c05465b324d1881a4f0b9483dc823fae1a1a59c1e71af8cb1d96d1bb9450e28"
+   },
+   "prev": "c1bc033f151549a56b7decd27e9f59577c6a3f14b669e3a3ff92851fe0931159",
+   "hash": "3d5b8d1f9bb2de81fff056d263153db76f2eb2fd21a11f8b53d0924b371a159b"
+  }
+ },
+ "revision4": {
+  "about": "One entry of each revision 4 event (section 6), chained after entry 6 of 'chain'. Detail keys section 6 names are exact (signin.ok, settings.mds, settings.email with verified, meet.*, console.seal, license.service, license.reminder); the others are examples. approval \"single-admin-setting\" marks a second-admin action run with the two-person setting off (3.7).",
+  "after": {
+   "seq": 6,
+   "hash": "f3e5fef38262df7b49e1b976df1eaa9cd88cc04adc37a9b87d2255abef8d8a3d"
+  },
+  "events": [
+   "signin.ok",
+   "signin.locked",
+   "account.password",
+   "account.totp",
+   "account.totp-remove",
+   "account.security-key",
+   "account.mail",
+   "admins.reset-sign-in",
+   "recover.done",
+   "invites.resend",
+   "settings.profile",
+   "settings.two-person",
+   "settings.sign-in",
+   "settings.banner",
+   "settings.aaguids",
+   "settings.mds",
+   "settings.email",
+   "settings.email-test",
+   "settings.license-request-to",
+   "break-glass.create",
+   "two-person.off",
+   "meet.license.upgrade-period",
+   "meet.seats.clock",
+   "meet.seats.notice",
+   "meet.seats.pick",
+   "meet.seats.unseat",
+   "meet.seats.reseat",
+   "meet.seats.request",
+   "meet.seats.migrated",
+   "meet.clock.confirm",
+   "meet.clock.uncertain",
+   "console.seal",
+   "console.seal-lost",
+   "meet.seats.hold",
+   "meet.seats.release-hold",
+   "console.bootstrap",
+   "license.service",
+   "license.reminder",
+   "license.time-reset",
+   "license.reminders-unreadable"
+  ],
+  "entries": [
+   {
+    "seq": 7,
+    "ts": 1763400001000,
+    "actor": "alice@acme.example",
+    "role": "admin",
+    "ip": "203.0.113.7",
+    "action": "signin.ok",
+    "target": "alice@acme.example",
+    "result": "ok",
+    "approval": null,
+    "stepup": false,
+    "detail": {
+     "methods": [
+      "security-key"
+     ],
+     "rights": "admin",
+     "profile": "high",
+     "banner": true,
+     "breakGlass": false
+    },
+    "prev": "f3e5fef38262df7b49e1b976df1eaa9cd88cc04adc37a9b87d2255abef8d8a3d",
+    "hash": "aafc79270eedccb67bb507ec024cf2ef97d0a4caa1c09e9a63724aaf4344d8f6",
+    "canonical": "{\"action\":\"signin.ok\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"banner\":true,\"breakGlass\":false,\"methods\":[\"security-key\"],\"profile\":\"high\",\"rights\":\"admin\"},\"ip\":\"203.0.113.7\",\"prev\":\"f3e5fef38262df7b49e1b976df1eaa9cd88cc04adc37a9b87d2255abef8d8a3d\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":7,\"stepup\":false,\"target\":\"alice@acme.example\",\"ts\":1763400001000}"
+   },
+   {
+    "seq": 8,
+    "ts": 1763400002000,
+    "actor": "relay",
+    "role": null,
+    "ip": null,
+    "action": "signin.locked",
+    "target": "mallory@acme.example",
+    "result": "ok",
+    "approval": null,
+    "stepup": false,
+    "detail": null,
+    "prev": "aafc79270eedccb67bb507ec024cf2ef97d0a4caa1c09e9a63724aaf4344d8f6",
+    "hash": "2386034c75fedf27cb0900330eda8aeb9988696cc468db88b7a6acf2a2eefa42",
+    "canonical": "{\"action\":\"signin.locked\",\"actor\":\"relay\",\"approval\":null,\"detail\":null,\"ip\":null,\"prev\":\"aafc79270eedccb67bb507ec024cf2ef97d0a4caa1c09e9a63724aaf4344d8f6\",\"result\":\"ok\",\"role\":null,\"seq\":8,\"stepup\":false,\"target\":\"mallory@acme.example\",\"ts\":1763400002000}"
+   },
+   {
+    "seq": 9,
+    "ts": 1763400003000,
+    "actor": "alice@acme.example",
+    "role": "admin",
+    "ip": "203.0.113.7",
+    "action": "account.password",
+    "target": "alice@acme.example",
+    "result": "ok",
+    "approval": null,
+    "stepup": true,
+    "detail": null,
+    "prev": "2386034c75fedf27cb0900330eda8aeb9988696cc468db88b7a6acf2a2eefa42",
+    "hash": "2b3ed62de54b6ddc0968c705aad8fa7c047364491823e24548f0245a56e30171",
+    "canonical": "{\"action\":\"account.password\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":null,\"ip\":\"203.0.113.7\",\"prev\":\"2386034c75fedf27cb0900330eda8aeb9988696cc468db88b7a6acf2a2eefa42\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":9,\"stepup\":true,\"target\":\"alice@acme.example\",\"ts\":1763400003000}"
+   },
+   {
+    "seq": 10,
+    "ts": 1763400004000,
+    "actor": "vic@acme.example",
+    "role": "viewer",
+    "ip": "198.51.100.23",
+    "action": "account.totp",
+    "target": "vic@acme.example",
+    "result": "ok",
+    "approval": null,
+    "stepup": true,
+    "detail": null,
+    "prev": "2b3ed62de54b6ddc0968c705aad8fa7c047364491823e24548f0245a56e30171",
+    "hash": "52b7d5ff4aa0c2dbff1006414156fff1f5fc132d3589fa0c3830be2cbe22ea87",
+    "canonical": "{\"action\":\"account.totp\",\"actor\":\"vic@acme.example\",\"approval\":null,\"detail\":null,\"ip\":\"198.51.100.23\",\"prev\":\"2b3ed62de54b6ddc0968c705aad8fa7c047364491823e24548f0245a56e30171\",\"result\":\"ok\",\"role\":\"viewer\",\"seq\":10,\"stepup\":true,\"target\":\"vic@acme.example\",\"ts\":1763400004000}"
+   },
+   {
+    "seq": 11,
+    "ts": 1763400005000,
+    "actor": "vic@acme.example",
+    "role": "viewer",
+    "ip": "198.51.100.23",
+    "action": "account.totp-remove",
+    "target": "vic@acme.example",
+    "result": "ok",
+    "approval": null,
+    "stepup": true,
+    "detail": null,
+    "prev": "52b7d5ff4aa0c2dbff1006414156fff1f5fc132d3589fa0c3830be2cbe22ea87",
+    "hash": "36d8aab6450780f759ef4709ee4adb3557aa0b0ea30cf56b93399c8db71b90b1",
+    "canonical": "{\"action\":\"account.totp-remove\",\"actor\":\"vic@acme.example\",\"approval\":null,\"detail\":null,\"ip\":\"198.51.100.23\",\"prev\":\"52b7d5ff4aa0c2dbff1006414156fff1f5fc132d3589fa0c3830be2cbe22ea87\",\"result\":\"ok\",\"role\":\"viewer\",\"seq\":11,\"stepup\":true,\"target\":\"vic@acme.example\",\"ts\":1763400005000}"
+   },
+   {
+    "seq": 12,
+    "ts": 1763400006000,
+    "actor": "alice@acme.example",
+    "role": "admin",
+    "ip": "203.0.113.7",
+    "action": "account.security-key",
+    "target": "alice@acme.example",
+    "result": "ok",
+    "approval": null,
+    "stepup": true,
+    "detail": {
+     "credential_hint": "9f86d081884c7d65",
+     "state": "working",
+     "aaguid": "c5ef55ff-ad9a-4b9f-b580-adebafe026d0"
+    },
+    "prev": "36d8aab6450780f759ef4709ee4adb3557aa0b0ea30cf56b93399c8db71b90b1",
+    "hash": "5854c2f9d0aab7e61190d6cbf18fe64e59ffd1282ae15e9fe8b601a81b1bc3c5",
+    "canonical": "{\"action\":\"account.security-key\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"aaguid\":\"c5ef55ff-ad9a-4b9f-b580-adebafe026d0\",\"credential_hint\":\"9f86d081884c7d65\",\"state\":\"working\"},\"ip\":\"203.0.113.7\",\"prev\":\"36d8aab6450780f759ef4709ee4adb3557aa0b0ea30cf56b93399c8db71b90b1\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":12,\"stepup\":true,\"target\":\"alice@acme.example\",\"ts\":1763400006000}"
+   },
+   {
+    "seq": 13,
+    "ts": 1763400007000,
+    "actor": "alice@acme.example",
+    "role": "admin",
+    "ip": "203.0.113.7",
+    "action": "account.mail",
+    "target": "alice@acme.example",
+    "result": "ok",
+    "approval": null,
+    "stepup": false,
+    "detail": {
+     "kinds": [
+      "audit-broken",
+      "mail-failing"
+     ]
+    },
+    "prev": "5854c2f9d0aab7e61190d6cbf18fe64e59ffd1282ae15e9fe8b601a81b1bc3c5",
+    "hash": "c3b487f3bfabda4cd643bdbaffcb1ebbdcf497d8583be73ef2e9213d3c8a70c6",
+    "canonical": "{\"action\":\"account.mail\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"kinds\":[\"audit-broken\",\"mail-failing\"]},\"ip\":\"203.0.113.7\",\"prev\":\"5854c2f9d0aab7e61190d6cbf18fe64e59ffd1282ae15e9fe8b601a81b1bc3c5\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":13,\"stepup\":false,\"target\":\"alice@acme.example\",\"ts\":1763400007000}"
+   },
+   {
+    "seq": 14,
+    "ts": 1763400008000,
+    "actor": "alice@acme.example",
+    "role": "admin",
+    "ip": "203.0.113.7",
+    "action": "admins.reset-sign-in",
+    "target": "vic@acme.example",
+    "result": "ok",
+    "approval": null,
+    "stepup": true,
+    "detail": {
+     "reason": "Lost phone"
+    },
+    "prev": "c3b487f3bfabda4cd643bdbaffcb1ebbdcf497d8583be73ef2e9213d3c8a70c6",
+    "hash": "b71f9c9ef02b68aea493467abb66d7c2aa2185d805803be29f51d06eec01a03a",
+    "canonical": "{\"action\":\"admins.reset-sign-in\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"reason\":\"Lost phone\"},\"ip\":\"203.0.113.7\",\"prev\":\"c3b487f3bfabda4cd643bdbaffcb1ebbdcf497d8583be73ef2e9213d3c8a70c6\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":14,\"stepup\":true,\"target\":\"vic@acme.example\",\"ts\":1763400008000}"
+   },
+   {
+    "seq": 15,
+    "ts": 1763400009000,
+    "actor": "vic@acme.example",
+    "role": null,
+    "ip": "198.51.100.23",
+    "action": "recover.done",
+    "target": "vic@acme.example",
+    "result": "ok",
+    "approval": null,
+    "stepup": false,
+    "detail": null,
+    "prev": "b71f9c9ef02b68aea493467abb66d7c2aa2185d805803be29f51d06eec01a03a",
+    "hash": "f2638c8b4472081efb91c589ce653d5bfe74b21406e827412b3dec66920c5d0a",
+    "canonical": "{\"action\":\"recover.done\",\"actor\":\"vic@acme.example\",\"approval\":null,\"detail\":null,\"ip\":\"198.51.100.23\",\"prev\":\"b71f9c9ef02b68aea493467abb66d7c2aa2185d805803be29f51d06eec01a03a\",\"result\":\"ok\",\"role\":null,\"seq\":15,\"stepup\":false,\"target\":\"vic@acme.example\",\"ts\":1763400009000}"
+   },
+   {
+    "seq": 16,
+    "ts": 1763400010000,
+    "actor": "una@acme.example",
+    "role": "user-manager",
+    "ip": "198.51.100.9",
+    "action": "invites.resend",
+    "target": "erin@acme.example",
+    "result": "ok",
+    "approval": null,
+    "stepup": true,
+    "detail": {
+     "role": "viewer",
+     "mailed": true
+    },
+    "prev": "f2638c8b4472081efb91c589ce653d5bfe74b21406e827412b3dec66920c5d0a",
+    "hash": "77e092ca55a95233b78d00f2566b05ad3f6472b531c146d4bcbc722e72e24fd8",
+    "canonical": "{\"action\":\"invites.resend\",\"actor\":\"una@acme.example\",\"approval\":null,\"detail\":{\"mailed\":true,\"role\":\"viewer\"},\"ip\":\"198.51.100.9\",\"prev\":\"f2638c8b4472081efb91c589ce653d5bfe74b21406e827412b3dec66920c5d0a\",\"result\":\"ok\",\"role\":\"user-manager\",\"seq\":16,\"stepup\":true,\"target\":\"erin@acme.example\",\"ts\":1763400010000}"
+   },
+   {
+    "seq": 17,
+    "ts": 1763400011000,
+    "actor": "alice@acme.example",
+    "role": "admin",
+    "ip": "203.0.113.7",
+    "action": "settings.profile",
+    "target": "-",
+    "result": "ok",
+    "approval": "single-admin-setting",
+    "stepup": true,
+    "detail": {
+     "from": "high",
+     "to": "standard",
+     "downgraded": true,
+     "reason": "Contractors without security keys"
+    },
+    "prev": "77e092ca55a95233b78d00f2566b05ad3f6472b531c146d4bcbc722e72e24fd8",
+    "hash": "0e7baf5d7af631a79dc3cb89d0ae57944aff98b66987e73f5843f7fd28160a4c",
+    "canonical": "{\"action\":\"settings.profile\",\"actor\":\"alice@acme.example\",\"approval\":\"single-admin-setting\",\"detail\":{\"downgraded\":true,\"from\":\"high\",\"reason\":\"Contractors without security keys\",\"to\":\"standard\"},\"ip\":\"203.0.113.7\",\"prev\":\"77e092ca55a95233b78d00f2566b05ad3f6472b531c146d4bcbc722e72e24fd8\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":17,\"stepup\":true,\"target\":\"-\",\"ts\":1763400011000}"
+   },
+   {
+    "seq": 18,
+    "ts": 1763400012000,
+    "actor": "alice@acme.example",
+    "role": "admin",
+    "ip": "203.0.113.7",
+    "action": "settings.two-person",
+    "target": "-",
+    "result": "ok",
+    "approval": null,
+    "stepup": true,
+    "detail": {
+     "twoPerson": "on",
+     "reason": "Three admins now"
+    },
+    "prev": "0e7baf5d7af631a79dc3cb89d0ae57944aff98b66987e73f5843f7fd28160a4c",
+    "hash": "c998eb8c7311aeb9aecdfa374f57687872fceed21a98e32cb49c4d8e53342248",
+    "canonical": "{\"action\":\"settings.two-person\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"reason\":\"Three admins now\",\"twoPerson\":\"on\"},\"ip\":\"203.0.113.7\",\"prev\":\"0e7baf5d7af631a79dc3cb89d0ae57944aff98b66987e73f5843f7fd28160a4c\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":18,\"stepup\":true,\"target\":\"-\",\"ts\":1763400012000}"
+   },
+   {
+    "seq": 19,
+    "ts": 1763400013000,
+    "actor": "alice@acme.example",
+    "role": "admin",
+    "ip": "203.0.113.7",
+    "action": "settings.sign-in",
+    "target": "-",
+    "result": "ok",
+    "approval": null,
+    "stepup": true,
+    "detail": {
+     "requirePassword": true,
+     "reason": "Policy review"
+    },
+    "prev": "c998eb8c7311aeb9aecdfa374f57687872fceed21a98e32cb49c4d8e53342248",
+    "hash": "8f7217107f6237c2a6d934716e52edfddff1ab12f51eb928ec9654bb3772fd72",
+    "canonical": "{\"action\":\"settings.sign-in\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"reason\":\"Policy review\",\"requirePassword\":true},\"ip\":\"203.0.113.7\",\"prev\":\"c998eb8c7311aeb9aecdfa374f57687872fceed21a98e32cb49c4d8e53342248\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":19,\"stepup\":true,\"target\":\"-\",\"ts\":1763400013000}"
+   },
+   {
+    "seq": 20,
+    "ts": 1763400014000,
+    "actor": "alice@acme.example",
+    "role": "admin",
+    "ip": "203.0.113.7",
+    "action": "settings.banner",
+    "target": "-",
+    "result": "ok",
+    "approval": null,
+    "stepup": true,
+    "detail": null,
+    "prev": "8f7217107f6237c2a6d934716e52edfddff1ab12f51eb928ec9654bb3772fd72",
+    "hash": "d47ca59f633742552a7ec94d3655972bf94c83540d0ac1dc2cbfc621f416ab6f",
+    "canonical": "{\"action\":\"settings.banner\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":null,\"ip\":\"203.0.113.7\",\"prev\":\"8f7217107f6237c2a6d934716e52edfddff1ab12f51eb928ec9654bb3772fd72\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":20,\"stepup\":true,\"target\":\"-\",\"ts\":1763400014000}"
+   },
+   {
+    "seq": 21,
+    "ts": 1763400015000,
+    "actor": "alice@acme.example",
+    "role": "admin",
+    "ip": "203.0.113.7",
+    "action": "settings.aaguids",
+    "target": "-",
+    "result": "ok",
+    "approval": "single-admin-setting",
+    "stepup": true,
+    "detail": {
+     "aaguids": [
+      "c5ef55ff-ad9a-4b9f-b580-adebafe026d0"
+     ],
+     "reason": "Only the keys we bought"
+    },
+    "prev": "d47ca59f633742552a7ec94d3655972bf94c83540d0ac1dc2cbfc621f416ab6f",
+    "hash": "cf5890498c152fcc8fb8334d184ae80b664e890c4e8ad5fa013e5af7ca6807d3",
+    "canonical": "{\"action\":\"settings.aaguids\",\"actor\":\"alice@acme.example\",\"approval\":\"single-admin-setting\",\"detail\":{\"aaguids\":[\"c5ef55ff-ad9a-4b9f-b580-adebafe026d0\"],\"reason\":\"Only the keys we bought\"},\"ip\":\"203.0.113.7\",\"prev\":\"d47ca59f633742552a7ec94d3655972bf94c83540d0ac1dc2cbfc621f416ab6f\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":21,\"stepup\":true,\"target\":\"-\",\"ts\":1763400015000}"
+   },
+   {
+    "seq": 22,
+    "ts": 1763400016000,
+    "actor": "alice@acme.example",
+    "role": "admin",
+    "ip": "203.0.113.7",
+    "action": "settings.mds",
+    "target": "-",
+    "result": "ok",
+    "approval": null,
+    "stepup": true,
+    "detail": {
+     "no": 43,
+     "sha256": "abababababababababababababababababababababababababababababababab"
+    },
+    "prev": "cf5890498c152fcc8fb8334d184ae80b664e890c4e8ad5fa013e5af7ca6807d3",
+    "hash": "61b1454fdb3746f9890406a366cd4c86de0794d609cb508f884515ad60d6c150",
+    "canonical": "{\"action\":\"settings.mds\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"no\":43,\"sha256\":\"abababababababababababababababababababababababababababababababab\"},\"ip\":\"203.0.113.7\",\"prev\":\"cf5890498c152fcc8fb8334d184ae80b664e890c4e8ad5fa013e5af7ca6807d3\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":22,\"stepup\":true,\"target\":\"-\",\"ts\":1763400016000}"
+   },
+   {
+    "seq": 23,
+    "ts": 1763400017000,
+    "actor": "alice@acme.example",
+    "role": "admin",
+    "ip": "203.0.113.7",
+    "action": "settings.email",
+    "target": "-",
+    "result": "ok",
+    "approval": null,
+    "stepup": true,
+    "detail": {
+     "fields": [
+      "mode",
+      "smtp.host",
+      "smtp.password"
+     ],
+     "verified": true,
+     "reason": "New mail server"
+    },
+    "prev": "61b1454fdb3746f9890406a366cd4c86de0794d609cb508f884515ad60d6c150",
+    "hash": "5de09c78364558f4e0d6bef89e39c4e83e2f40c96e71f5815526c1212e1da0ed",
+    "canonical": "{\"action\":\"settings.email\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"fields\":[\"mode\",\"smtp.host\",\"smtp.password\"],\"reason\":\"New mail server\",\"verified\":true},\"ip\":\"203.0.113.7\",\"prev\":\"61b1454fdb3746f9890406a366cd4c86de0794d609cb508f884515ad60d6c150\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":23,\"stepup\":true,\"target\":\"-\",\"ts\":1763400017000}"
+   },
+   {
+    "seq": 24,
+    "ts": 1763400018000,
+    "actor": "alice@acme.example",
+    "role": "admin",
+    "ip": "203.0.113.7",
+    "action": "settings.email-test",
+    "target": "-",
+    "result": "ok",
+    "approval": null,
+    "stepup": false,
+    "detail": null,
+    "prev": "5de09c78364558f4e0d6bef89e39c4e83e2f40c96e71f5815526c1212e1da0ed",
+    "hash": "9a1ad8d05ca1c5c2cf569719519012ac83cbf77d5279a941071f7e61c704d50d",
+    "canonical": "{\"action\":\"settings.email-test\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":null,\"ip\":\"203.0.113.7\",\"prev\":\"5de09c78364558f4e0d6bef89e39c4e83e2f40c96e71f5815526c1212e1da0ed\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":24,\"stepup\":false,\"target\":\"-\",\"ts\":1763400018000}"
+   },
+   {
+    "seq": 25,
+    "ts": 1763400019000,
+    "actor": "alice@acme.example",
+    "role": "admin",
+    "ip": "203.0.113.7",
+    "action": "settings.license-request-to",
+    "target": "-",
+    "result": "ok",
+    "approval": null,
+    "stepup": true,
+    "detail": null,
+    "prev": "9a1ad8d05ca1c5c2cf569719519012ac83cbf77d5279a941071f7e61c704d50d",
+    "hash": "f6fe82b5e091044619e80e15712dca7cfbbe7186019dfd9997b79636e36b4949",
+    "canonical": "{\"action\":\"settings.license-request-to\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":null,\"ip\":\"203.0.113.7\",\"prev\":\"9a1ad8d05ca1c5c2cf569719519012ac83cbf77d5279a941071f7e61c704d50d\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":25,\"stepup\":true,\"target\":\"-\",\"ts\":1763400019000}"
+   },
+   {
+    "seq": 26,
+    "ts": 1763400020000,
+    "actor": "operator",
+    "role": null,
+    "ip": null,
+    "action": "break-glass.create",
+    "target": "keep@acme.example",
+    "result": "ok",
+    "approval": null,
+    "stepup": false,
+    "detail": {
+     "replace": false
+    },
+    "prev": "f6fe82b5e091044619e80e15712dca7cfbbe7186019dfd9997b79636e36b4949",
+    "hash": "490ab41b9443867c555093cce74035357f9760d128beb6b6f58323f327ef11ed",
+    "canonical": "{\"action\":\"break-glass.create\",\"actor\":\"operator\",\"approval\":null,\"detail\":{\"replace\":false},\"ip\":null,\"prev\":\"f6fe82b5e091044619e80e15712dca7cfbbe7186019dfd9997b79636e36b4949\",\"result\":\"ok\",\"role\":null,\"seq\":26,\"stepup\":false,\"target\":\"keep@acme.example\",\"ts\":1763400020000}"
+   },
+   {
+    "seq": 27,
+    "ts": 1763400021000,
+    "actor": "operator",
+    "role": null,
+    "ip": null,
+    "action": "two-person.off",
+    "target": "-",
+    "result": "ok",
+    "approval": null,
+    "stepup": false,
+    "detail": null,
+    "prev": "490ab41b9443867c555093cce74035357f9760d128beb6b6f58323f327ef11ed",
+    "hash": "c45663a4789478d650f744ea5fbe1b7b2b95f48cf5cbe538982d7d3ca4dade9e",
+    "canonical": "{\"action\":\"two-person.off\",\"actor\":\"operator\",\"approval\":null,\"detail\":null,\"ip\":null,\"prev\":\"490ab41b9443867c555093cce74035357f9760d128beb6b6f58323f327ef11ed\",\"result\":\"ok\",\"role\":null,\"seq\":27,\"stepup\":false,\"target\":\"-\",\"ts\":1763400021000}"
+   },
+   {
+    "seq": 28,
+    "ts": 1763400022000,
+    "actor": "relay",
+    "role": null,
+    "ip": null,
+    "action": "meet.license.upgrade-period",
+    "target": null,
+    "result": "ok",
+    "approval": null,
+    "stepup": false,
+    "detail": {
+     "ends": 1797500000000,
+     "retired": "license"
+    },
+    "prev": "c45663a4789478d650f744ea5fbe1b7b2b95f48cf5cbe538982d7d3ca4dade9e",
+    "hash": "d85dd6156233474ea47698706e41169a3965d7e77a5c1112716c450dba367ccf",
+    "canonical": "{\"action\":\"meet.license.upgrade-period\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"ends\":1797500000000,\"retired\":\"license\"},\"ip\":null,\"prev\":\"c45663a4789478d650f744ea5fbe1b7b2b95f48cf5cbe538982d7d3ca4dade9e\",\"result\":\"ok\",\"role\":null,\"seq\":28,\"stepup\":false,\"target\":null,\"ts\":1763400022000}"
+   },
+   {
+    "seq": 29,
+    "ts": 1763400023000,
+    "actor": "relay",
+    "role": null,
+    "ip": null,
+    "action": "meet.seats.clock",
+    "target": null,
+    "result": "ok",
+    "approval": null,
+    "stepup": false,
+    "detail": {
+     "state": "start",
+     "seated": 21,
+     "users": 20
+    },
+    "prev": "d85dd6156233474ea47698706e41169a3965d7e77a5c1112716c450dba367ccf",
+    "hash": "3c4a6ead7d911a9ba3a3887d0c31f10a2acdd9cc5bd27774b4c0247acc43ed36",
+    "canonical": "{\"action\":\"meet.seats.clock\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"seated\":21,\"state\":\"start\",\"users\":20},\"ip\":null,\"prev\":\"d85dd6156233474ea47698706e41169a3965d7e77a5c1112716c450dba367ccf\",\"result\":\"ok\",\"role\":null,\"seq\":29,\"stepup\":false,\"target\":null,\"ts\":1763400023000}"
+   },
+   {
+    "seq": 30,
+    "ts": 1763400024000,
+    "actor": "relay",
+    "role": null,
+    "ip": null,
+    "action": "meet.seats.notice",
+    "target": null,
+    "result": "ok",
+    "approval": null,
+    "stepup": false,
+    "detail": {
+     "day": 7,
+     "mailed": 2
+    },
+    "prev": "3c4a6ead7d911a9ba3a3887d0c31f10a2acdd9cc5bd27774b4c0247acc43ed36",
+    "hash": "2e140d06d29ab6c18a58f3b414e7b094ba6582a92990880f96b7909dfa62aa53",
+    "canonical": "{\"action\":\"meet.seats.notice\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"day\":7,\"mailed\":2},\"ip\":null,\"prev\":\"3c4a6ead7d911a9ba3a3887d0c31f10a2acdd9cc5bd27774b4c0247acc43ed36\",\"result\":\"ok\",\"role\":null,\"seq\":30,\"stepup\":false,\"target\":null,\"ts\":1763400024000}"
+   },
+   {
+    "seq": 31,
+    "ts": 1763400025000,
+    "actor": "una@acme.example",
+    "role": "user-manager",
+    "ip": "198.51.100.9",
+    "action": "meet.seats.pick",
+    "target": "zoe@acme.example",
+    "result": "ok",
+    "approval": null,
+    "stepup": true,
+    "detail": {
+     "pick": true
+    },
+    "prev": "2e140d06d29ab6c18a58f3b414e7b094ba6582a92990880f96b7909dfa62aa53",
+    "hash": "6521a09492d164de85f697bc8e8d359e8eb4fdb194b9fc4f746fb4090de761a4",
+    "canonical": "{\"action\":\"meet.seats.pick\",\"actor\":\"una@acme.example\",\"approval\":null,\"detail\":{\"pick\":true},\"ip\":\"198.51.100.9\",\"prev\":\"2e140d06d29ab6c18a58f3b414e7b094ba6582a92990880f96b7909dfa62aa53\",\"result\":\"ok\",\"role\":\"user-manager\",\"seq\":31,\"stepup\":true,\"target\":\"zoe@acme.example\",\"ts\":1763400025000}"
+   },
+   {
+    "seq": 32,
+    "ts": 1763400026000,
+    "actor": "relay",
+    "role": null,
+    "ip": null,
+    "action": "meet.seats.unseat",
+    "target": "zoe@acme.example",
+    "result": "ok",
+    "approval": null,
+    "stepup": false,
+    "detail": {
+     "why": "pick"
+    },
+    "prev": "6521a09492d164de85f697bc8e8d359e8eb4fdb194b9fc4f746fb4090de761a4",
+    "hash": "e2aa848c26dd2fc900e646b9783c82c485c5d9d53d4d3fe51082ac1b4af3af61",
+    "canonical": "{\"action\":\"meet.seats.unseat\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"why\":\"pick\"},\"ip\":null,\"prev\":\"6521a09492d164de85f697bc8e8d359e8eb4fdb194b9fc4f746fb4090de761a4\",\"result\":\"ok\",\"role\":null,\"seq\":32,\"stepup\":false,\"target\":\"zoe@acme.example\",\"ts\":1763400026000}"
+   },
+   {
+    "seq": 33,
+    "ts": 1763400027000,
+    "actor": "relay",
+    "role": null,
+    "ip": null,
+    "action": "meet.seats.reseat",
+    "target": "zoe@acme.example",
+    "result": "ok",
+    "approval": null,
+    "stepup": false,
+    "detail": {
+     "why": "license"
+    },
+    "prev": "e2aa848c26dd2fc900e646b9783c82c485c5d9d53d4d3fe51082ac1b4af3af61",
+    "hash": "71414a785d0583c02ae0aa9071943c37d0918b13efb050a15d8ceae0827b8e01",
+    "canonical": "{\"action\":\"meet.seats.reseat\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"why\":\"license\"},\"ip\":null,\"prev\":\"e2aa848c26dd2fc900e646b9783c82c485c5d9d53d4d3fe51082ac1b4af3af61\",\"result\":\"ok\",\"role\":null,\"seq\":33,\"stepup\":false,\"target\":\"zoe@acme.example\",\"ts\":1763400027000}"
+   },
+   {
+    "seq": 34,
+    "ts": 1763400028000,
+    "actor": "alice@acme.example",
+    "role": "admin",
+    "ip": "203.0.113.7",
+    "action": "meet.seats.request",
+    "target": null,
+    "result": "ok",
+    "approval": null,
+    "stepup": false,
+    "detail": {
+     "wanted": 25,
+     "mailed": true
+    },
+    "prev": "71414a785d0583c02ae0aa9071943c37d0918b13efb050a15d8ceae0827b8e01",
+    "hash": "4c134fda33c36dc672c327f84e5128a6763198f4300ea95caf73f0007647c240",
+    "canonical": "{\"action\":\"meet.seats.request\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"mailed\":true,\"wanted\":25},\"ip\":\"203.0.113.7\",\"prev\":\"71414a785d0583c02ae0aa9071943c37d0918b13efb050a15d8ceae0827b8e01\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":34,\"stepup\":false,\"target\":null,\"ts\":1763400028000}"
+   },
+   {
+    "seq": 35,
+    "ts": 1763400029000,
+    "actor": "relay",
+    "role": null,
+    "ip": null,
+    "action": "meet.seats.migrated",
+    "target": null,
+    "result": "ok",
+    "approval": null,
+    "stepup": false,
+    "detail": {
+     "principals": 18,
+     "fromRecords": 16,
+     "byOrder": 2
+    },
+    "prev": "4c134fda33c36dc672c327f84e5128a6763198f4300ea95caf73f0007647c240",
+    "hash": "46c8d4049fbf991a3ce58557e83408dfd4670763c11d08fa3cd8e028ffa0fce0",
+    "canonical": "{\"action\":\"meet.seats.migrated\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"byOrder\":2,\"fromRecords\":16,\"principals\":18},\"ip\":null,\"prev\":\"4c134fda33c36dc672c327f84e5128a6763198f4300ea95caf73f0007647c240\",\"result\":\"ok\",\"role\":null,\"seq\":35,\"stepup\":false,\"target\":null,\"ts\":1763400029000}"
+   },
+   {
+    "seq": 36,
+    "ts": 1763400030000,
+    "actor": "alice@acme.example",
+    "role": "admin",
+    "ip": "203.0.113.7",
+    "action": "meet.clock.confirm",
+    "target": "-",
+    "result": "ok",
+    "approval": null,
+    "stepup": true,
+    "detail": {
+     "before": 1794800000000,
+     "after": 1794900000000,
+     "heldGapMs": 259200000
+    },
+    "prev": "46c8d4049fbf991a3ce58557e83408dfd4670763c11d08fa3cd8e028ffa0fce0",
+    "hash": "681fa8746a02375c852ac8605dea448205ee7ebbdc33ade70223322b87b22487",
+    "canonical": "{\"action\":\"meet.clock.confirm\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"after\":1794900000000,\"before\":1794800000000,\"heldGapMs\":259200000},\"ip\":\"203.0.113.7\",\"prev\":\"46c8d4049fbf991a3ce58557e83408dfd4670763c11d08fa3cd8e028ffa0fce0\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":36,\"stepup\":true,\"target\":\"-\",\"ts\":1763400030000}"
+   },
+   {
+    "seq": 37,
+    "ts": 1763400031000,
+    "actor": "relay",
+    "role": null,
+    "ip": null,
+    "action": "meet.clock.uncertain",
+    "target": null,
+    "result": "ok",
+    "approval": null,
+    "stepup": false,
+    "detail": {
+     "why": "gap",
+     "byMs": 259200000
+    },
+    "prev": "681fa8746a02375c852ac8605dea448205ee7ebbdc33ade70223322b87b22487",
+    "hash": "f64d7995fd08611a64b9cdea6bf66cf940c2ae13ca708a2ee620806233539d88",
+    "canonical": "{\"action\":\"meet.clock.uncertain\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"byMs\":259200000,\"why\":\"gap\"},\"ip\":null,\"prev\":\"681fa8746a02375c852ac8605dea448205ee7ebbdc33ade70223322b87b22487\",\"result\":\"ok\",\"role\":null,\"seq\":37,\"stepup\":false,\"target\":null,\"ts\":1763400031000}"
+   },
+   {
+    "seq": 38,
+    "ts": 1763400032000,
+    "actor": "relay",
+    "role": null,
+    "ip": null,
+    "action": "console.seal",
+    "target": null,
+    "result": "ok",
+    "approval": null,
+    "stepup": false,
+    "detail": {
+     "provider": "dpapi-machine",
+     "keyMode": null,
+     "refused": [
+      {
+       "provider": "dpapi-service",
+       "why": "the relay does not run as NT SERVICE\\LucidRelay"
+      }
+     ]
+    },
+    "prev": "f64d7995fd08611a64b9cdea6bf66cf940c2ae13ca708a2ee620806233539d88",
+    "hash": "6ac3ac8a4ce41c837eb19ad9fc59b6e72b47cacf36c5e8235a209903676468e4",
+    "canonical": "{\"action\":\"console.seal\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"keyMode\":null,\"provider\":\"dpapi-machine\",\"refused\":[{\"provider\":\"dpapi-service\",\"why\":\"the relay does not run as NT SERVICE\\\\LucidRelay\"}]},\"ip\":null,\"prev\":\"f64d7995fd08611a64b9cdea6bf66cf940c2ae13ca708a2ee620806233539d88\",\"result\":\"ok\",\"role\":null,\"seq\":38,\"stepup\":false,\"target\":null,\"ts\":1763400032000}"
+   },
+   {
+    "seq": 39,
+    "ts": 1763400033000,
+    "actor": "relay",
+    "role": null,
+    "ip": null,
+    "action": "console.seal-lost",
+    "target": null,
+    "result": "ok",
+    "approval": null,
+    "stepup": false,
+    "detail": null,
+    "prev": "6ac3ac8a4ce41c837eb19ad9fc59b6e72b47cacf36c5e8235a209903676468e4",
+    "hash": "e597b48eb217a93811392255d457bb75fbda244b2aeafd5bb9741b6a3ecd1e3d",
+    "canonical": "{\"action\":\"console.seal-lost\",\"actor\":\"relay\",\"approval\":null,\"detail\":null,\"ip\":null,\"prev\":\"6ac3ac8a4ce41c837eb19ad9fc59b6e72b47cacf36c5e8235a209903676468e4\",\"result\":\"ok\",\"role\":null,\"seq\":39,\"stepup\":false,\"target\":null,\"ts\":1763400033000}"
+   },
+   {
+    "seq": 40,
+    "ts": 1763400034000,
+    "actor": "relay",
+    "role": null,
+    "ip": null,
+    "action": "meet.seats.hold",
+    "target": "zoe@acme.example",
+    "result": "ok",
+    "approval": null,
+    "stepup": false,
+    "detail": {
+     "uncertainRunningMs": 259200000
+    },
+    "prev": "e597b48eb217a93811392255d457bb75fbda244b2aeafd5bb9741b6a3ecd1e3d",
+    "hash": "e8bd6ee4a452ad246305e72655564ff9d9faa67f75112f0bd495ccd5f6f693b8",
+    "canonical": "{\"action\":\"meet.seats.hold\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"uncertainRunningMs\":259200000},\"ip\":null,\"prev\":\"e597b48eb217a93811392255d457bb75fbda244b2aeafd5bb9741b6a3ecd1e3d\",\"result\":\"ok\",\"role\":null,\"seq\":40,\"stepup\":false,\"target\":\"zoe@acme.example\",\"ts\":1763400034000}"
+   },
+   {
+    "seq": 41,
+    "ts": 1763400035000,
+    "actor": "relay",
+    "role": null,
+    "ip": null,
+    "action": "meet.seats.release-hold",
+    "target": "zoe@acme.example",
+    "result": "ok",
+    "approval": null,
+    "stepup": false,
+    "detail": null,
+    "prev": "e8bd6ee4a452ad246305e72655564ff9d9faa67f75112f0bd495ccd5f6f693b8",
+    "hash": "9093a79bd98de80961b6f2681df42baa28a801a489d276d455f7fb0804d68d5b",
+    "canonical": "{\"action\":\"meet.seats.release-hold\",\"actor\":\"relay\",\"approval\":null,\"detail\":null,\"ip\":null,\"prev\":\"e8bd6ee4a452ad246305e72655564ff9d9faa67f75112f0bd495ccd5f6f693b8\",\"result\":\"ok\",\"role\":null,\"seq\":41,\"stepup\":false,\"target\":\"zoe@acme.example\",\"ts\":1763400035000}"
+   },
+   {
+    "seq": 42,
+    "ts": 1763400036000,
+    "actor": "alice@acme.example",
+    "role": "admin",
+    "ip": "203.0.113.7",
+    "action": "console.bootstrap",
+    "target": "alice@acme.example",
+    "result": "ok",
+    "approval": null,
+    "stepup": false,
+    "detail": {
+     "profile": "standard",
+     "profileFrom": "default"
+    },
+    "prev": "9093a79bd98de80961b6f2681df42baa28a801a489d276d455f7fb0804d68d5b",
+    "hash": "1c0df1d4472f027f09ad879cab2f3a9fba3929238b020d2da8b42c76ae878842",
+    "canonical": "{\"action\":\"console.bootstrap\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"profile\":\"standard\",\"profileFrom\":\"default\"},\"ip\":\"203.0.113.7\",\"prev\":\"9093a79bd98de80961b6f2681df42baa28a801a489d276d455f7fb0804d68d5b\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":42,\"stepup\":false,\"target\":\"alice@acme.example\",\"ts\":1763400036000}"
+   },
+   {
+    "seq": 43,
+    "ts": 1763400037000,
+    "actor": "relay",
+    "role": null,
+    "ip": null,
+    "action": "license.service",
+    "target": null,
+    "result": "ok",
+    "approval": null,
+    "stepup": false,
+    "detail": {
+     "state": "stopped",
+     "why": "expired",
+     "licenseId": "l_0123456789abcdef"
+    },
+    "prev": "1c0df1d4472f027f09ad879cab2f3a9fba3929238b020d2da8b42c76ae878842",
+    "hash": "5de11c1336266414ae4df2bf171bd17fd6ea831fb7dbad07bd5df80c3a66e3b9",
+    "canonical": "{\"action\":\"license.service\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"licenseId\":\"l_0123456789abcdef\",\"state\":\"stopped\",\"why\":\"expired\"},\"ip\":null,\"prev\":\"1c0df1d4472f027f09ad879cab2f3a9fba3929238b020d2da8b42c76ae878842\",\"result\":\"ok\",\"role\":null,\"seq\":43,\"stepup\":false,\"target\":null,\"ts\":1763400037000}"
+   },
+   {
+    "seq": 44,
+    "ts": 1763400038000,
+    "actor": "relay",
+    "role": null,
+    "ip": null,
+    "action": "license.reminder",
+    "target": null,
+    "result": "ok",
+    "approval": null,
+    "stepup": false,
+    "detail": {
+     "kind": "grace-start",
+     "key": "l_0123456789abcdef",
+     "mailed": 2
+    },
+    "prev": "5de11c1336266414ae4df2bf171bd17fd6ea831fb7dbad07bd5df80c3a66e3b9",
+    "hash": "787bb3794c21a73a44d516f1c6f5f2300fa28ecb020eb52ae06e99bf46c3064c",
+    "canonical": "{\"action\":\"license.reminder\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"key\":\"l_0123456789abcdef\",\"kind\":\"grace-start\",\"mailed\":2},\"ip\":null,\"prev\":\"5de11c1336266414ae4df2bf171bd17fd6ea831fb7dbad07bd5df80c3a66e3b9\",\"result\":\"ok\",\"role\":null,\"seq\":44,\"stepup\":false,\"target\":null,\"ts\":1763400038000}"
+   },
+   {
+    "seq": 45,
+    "ts": 1763400039000,
+    "actor": "operator",
+    "role": null,
+    "ip": null,
+    "action": "license.time-reset",
+    "target": "-",
+    "result": "ok",
+    "approval": null,
+    "stepup": false,
+    "detail": {
+     "before": 1797600000000,
+     "after": 1797400000000
+    },
+    "prev": "787bb3794c21a73a44d516f1c6f5f2300fa28ecb020eb52ae06e99bf46c3064c",
+    "hash": "4507d8cda2f92d2bf831ede8e8933912c659b5f7edc6510234a60a082d5a4c88",
+    "canonical": "{\"action\":\"license.time-reset\",\"actor\":\"operator\",\"approval\":null,\"detail\":{\"after\":1797400000000,\"before\":1797600000000},\"ip\":null,\"prev\":\"787bb3794c21a73a44d516f1c6f5f2300fa28ecb020eb52ae06e99bf46c3064c\",\"result\":\"ok\",\"role\":null,\"seq\":45,\"stepup\":false,\"target\":\"-\",\"ts\":1763400039000}"
+   },
+   {
+    "seq": 46,
+    "ts": 1763400040000,
+    "actor": "relay",
+    "role": null,
+    "ip": null,
+    "action": "license.reminders-unreadable",
+    "target": null,
+    "result": "ok",
+    "approval": null,
+    "stepup": false,
+    "detail": {
+     "suppressed": 3
+    },
+    "prev": "4507d8cda2f92d2bf831ede8e8933912c659b5f7edc6510234a60a082d5a4c88",
+    "hash": "b616b6adb0bbeabf394e8b41800da3430aadb847af9cfc432245ca05cae03c22",
+    "canonical": "{\"action\":\"license.reminders-unreadable\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"suppressed\":3},\"ip\":null,\"prev\":\"4507d8cda2f92d2bf831ede8e8933912c659b5f7edc6510234a60a082d5a4c88\",\"result\":\"ok\",\"role\":null,\"seq\":46,\"stepup\":false,\"target\":null,\"ts\":1763400040000}"
+   }
+  ],
+  "lines": [
+   "{\"action\":\"signin.ok\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"banner\":true,\"breakGlass\":false,\"methods\":[\"security-key\"],\"profile\":\"high\",\"rights\":\"admin\"},\"hash\":\"aafc79270eedccb67bb507ec024cf2ef97d0a4caa1c09e9a63724aaf4344d8f6\",\"ip\":\"203.0.113.7\",\"prev\":\"f3e5fef38262df7b49e1b976df1eaa9cd88cc04adc37a9b87d2255abef8d8a3d\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":7,\"stepup\":false,\"target\":\"alice@acme.example\",\"ts\":1763400001000}",
+   "{\"action\":\"signin.locked\",\"actor\":\"relay\",\"approval\":null,\"detail\":null,\"hash\":\"2386034c75fedf27cb0900330eda8aeb9988696cc468db88b7a6acf2a2eefa42\",\"ip\":null,\"prev\":\"aafc79270eedccb67bb507ec024cf2ef97d0a4caa1c09e9a63724aaf4344d8f6\",\"result\":\"ok\",\"role\":null,\"seq\":8,\"stepup\":false,\"target\":\"mallory@acme.example\",\"ts\":1763400002000}",
+   "{\"action\":\"account.password\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":null,\"hash\":\"2b3ed62de54b6ddc0968c705aad8fa7c047364491823e24548f0245a56e30171\",\"ip\":\"203.0.113.7\",\"prev\":\"2386034c75fedf27cb0900330eda8aeb9988696cc468db88b7a6acf2a2eefa42\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":9,\"stepup\":true,\"target\":\"alice@acme.example\",\"ts\":1763400003000}",
+   "{\"action\":\"account.totp\",\"actor\":\"vic@acme.example\",\"approval\":null,\"detail\":null,\"hash\":\"52b7d5ff4aa0c2dbff1006414156fff1f5fc132d3589fa0c3830be2cbe22ea87\",\"ip\":\"198.51.100.23\",\"prev\":\"2b3ed62de54b6ddc0968c705aad8fa7c047364491823e24548f0245a56e30171\",\"result\":\"ok\",\"role\":\"viewer\",\"seq\":10,\"stepup\":true,\"target\":\"vic@acme.example\",\"ts\":1763400004000}",
+   "{\"action\":\"account.totp-remove\",\"actor\":\"vic@acme.example\",\"approval\":null,\"detail\":null,\"hash\":\"36d8aab6450780f759ef4709ee4adb3557aa0b0ea30cf56b93399c8db71b90b1\",\"ip\":\"198.51.100.23\",\"prev\":\"52b7d5ff4aa0c2dbff1006414156fff1f5fc132d3589fa0c3830be2cbe22ea87\",\"result\":\"ok\",\"role\":\"viewer\",\"seq\":11,\"stepup\":true,\"target\":\"vic@acme.example\",\"ts\":1763400005000}",
+   "{\"action\":\"account.security-key\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"aaguid\":\"c5ef55ff-ad9a-4b9f-b580-adebafe026d0\",\"credential_hint\":\"9f86d081884c7d65\",\"state\":\"working\"},\"hash\":\"5854c2f9d0aab7e61190d6cbf18fe64e59ffd1282ae15e9fe8b601a81b1bc3c5\",\"ip\":\"203.0.113.7\",\"prev\":\"36d8aab6450780f759ef4709ee4adb3557aa0b0ea30cf56b93399c8db71b90b1\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":12,\"stepup\":true,\"target\":\"alice@acme.example\",\"ts\":1763400006000}",
+   "{\"action\":\"account.mail\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"kinds\":[\"audit-broken\",\"mail-failing\"]},\"hash\":\"c3b487f3bfabda4cd643bdbaffcb1ebbdcf497d8583be73ef2e9213d3c8a70c6\",\"ip\":\"203.0.113.7\",\"prev\":\"5854c2f9d0aab7e61190d6cbf18fe64e59ffd1282ae15e9fe8b601a81b1bc3c5\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":13,\"stepup\":false,\"target\":\"alice@acme.example\",\"ts\":1763400007000}",
+   "{\"action\":\"admins.reset-sign-in\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"reason\":\"Lost phone\"},\"hash\":\"b71f9c9ef02b68aea493467abb66d7c2aa2185d805803be29f51d06eec01a03a\",\"ip\":\"203.0.113.7\",\"prev\":\"c3b487f3bfabda4cd643bdbaffcb1ebbdcf497d8583be73ef2e9213d3c8a70c6\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":14,\"stepup\":true,\"target\":\"vic@acme.example\",\"ts\":1763400008000}",
+   "{\"action\":\"recover.done\",\"actor\":\"vic@acme.example\",\"approval\":null,\"detail\":null,\"hash\":\"f2638c8b4472081efb91c589ce653d5bfe74b21406e827412b3dec66920c5d0a\",\"ip\":\"198.51.100.23\",\"prev\":\"b71f9c9ef02b68aea493467abb66d7c2aa2185d805803be29f51d06eec01a03a\",\"result\":\"ok\",\"role\":null,\"seq\":15,\"stepup\":false,\"target\":\"vic@acme.example\",\"ts\":1763400009000}",
+   "{\"action\":\"invites.resend\",\"actor\":\"una@acme.example\",\"approval\":null,\"detail\":{\"mailed\":true,\"role\":\"viewer\"},\"hash\":\"77e092ca55a95233b78d00f2566b05ad3f6472b531c146d4bcbc722e72e24fd8\",\"ip\":\"198.51.100.9\",\"prev\":\"f2638c8b4472081efb91c589ce653d5bfe74b21406e827412b3dec66920c5d0a\",\"result\":\"ok\",\"role\":\"user-manager\",\"seq\":16,\"stepup\":true,\"target\":\"erin@acme.example\",\"ts\":1763400010000}",
+   "{\"action\":\"settings.profile\",\"actor\":\"alice@acme.example\",\"approval\":\"single-admin-setting\",\"detail\":{\"downgraded\":true,\"from\":\"high\",\"reason\":\"Contractors without security keys\",\"to\":\"standard\"},\"hash\":\"0e7baf5d7af631a79dc3cb89d0ae57944aff98b66987e73f5843f7fd28160a4c\",\"ip\":\"203.0.113.7\",\"prev\":\"77e092ca55a95233b78d00f2566b05ad3f6472b531c146d4bcbc722e72e24fd8\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":17,\"stepup\":true,\"target\":\"-\",\"ts\":1763400011000}",
+   "{\"action\":\"settings.two-person\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"reason\":\"Three admins now\",\"twoPerson\":\"on\"},\"hash\":\"c998eb8c7311aeb9aecdfa374f57687872fceed21a98e32cb49c4d8e53342248\",\"ip\":\"203.0.113.7\",\"prev\":\"0e7baf5d7af631a79dc3cb89d0ae57944aff98b66987e73f5843f7fd28160a4c\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":18,\"stepup\":true,\"target\":\"-\",\"ts\":1763400012000}",
+   "{\"action\":\"settings.sign-in\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"reason\":\"Policy review\",\"requirePassword\":true},\"hash\":\"8f7217107f6237c2a6d934716e52edfddff1ab12f51eb928ec9654bb3772fd72\",\"ip\":\"203.0.113.7\",\"prev\":\"c998eb8c7311aeb9aecdfa374f57687872fceed21a98e32cb49c4d8e53342248\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":19,\"stepup\":true,\"target\":\"-\",\"ts\":1763400013000}",
+   "{\"action\":\"settings.banner\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":null,\"hash\":\"d47ca59f633742552a7ec94d3655972bf94c83540d0ac1dc2cbfc621f416ab6f\",\"ip\":\"203.0.113.7\",\"prev\":\"8f7217107f6237c2a6d934716e52edfddff1ab12f51eb928ec9654bb3772fd72\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":20,\"stepup\":true,\"target\":\"-\",\"ts\":1763400014000}",
+   "{\"action\":\"settings.aaguids\",\"actor\":\"alice@acme.example\",\"approval\":\"single-admin-setting\",\"detail\":{\"aaguids\":[\"c5ef55ff-ad9a-4b9f-b580-adebafe026d0\"],\"reason\":\"Only the keys we bought\"},\"hash\":\"cf5890498c152fcc8fb8334d184ae80b664e890c4e8ad5fa013e5af7ca6807d3\",\"ip\":\"203.0.113.7\",\"prev\":\"d47ca59f633742552a7ec94d3655972bf94c83540d0ac1dc2cbfc621f416ab6f\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":21,\"stepup\":true,\"target\":\"-\",\"ts\":1763400015000}",
+   "{\"action\":\"settings.mds\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"no\":43,\"sha256\":\"abababababababababababababababababababababababababababababababab\"},\"hash\":\"61b1454fdb3746f9890406a366cd4c86de0794d609cb508f884515ad60d6c150\",\"ip\":\"203.0.113.7\",\"prev\":\"cf5890498c152fcc8fb8334d184ae80b664e890c4e8ad5fa013e5af7ca6807d3\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":22,\"stepup\":true,\"target\":\"-\",\"ts\":1763400016000}",
+   "{\"action\":\"settings.email\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"fields\":[\"mode\",\"smtp.host\",\"smtp.password\"],\"reason\":\"New mail server\",\"verified\":true},\"hash\":\"5de09c78364558f4e0d6bef89e39c4e83e2f40c96e71f5815526c1212e1da0ed\",\"ip\":\"203.0.113.7\",\"prev\":\"61b1454fdb3746f9890406a366cd4c86de0794d609cb508f884515ad60d6c150\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":23,\"stepup\":true,\"target\":\"-\",\"ts\":1763400017000}",
+   "{\"action\":\"settings.email-test\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":null,\"hash\":\"9a1ad8d05ca1c5c2cf569719519012ac83cbf77d5279a941071f7e61c704d50d\",\"ip\":\"203.0.113.7\",\"prev\":\"5de09c78364558f4e0d6bef89e39c4e83e2f40c96e71f5815526c1212e1da0ed\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":24,\"stepup\":false,\"target\":\"-\",\"ts\":1763400018000}",
+   "{\"action\":\"settings.license-request-to\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":null,\"hash\":\"f6fe82b5e091044619e80e15712dca7cfbbe7186019dfd9997b79636e36b4949\",\"ip\":\"203.0.113.7\",\"prev\":\"9a1ad8d05ca1c5c2cf569719519012ac83cbf77d5279a941071f7e61c704d50d\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":25,\"stepup\":true,\"target\":\"-\",\"ts\":1763400019000}",
+   "{\"action\":\"break-glass.create\",\"actor\":\"operator\",\"approval\":null,\"detail\":{\"replace\":false},\"hash\":\"490ab41b9443867c555093cce74035357f9760d128beb6b6f58323f327ef11ed\",\"ip\":null,\"prev\":\"f6fe82b5e091044619e80e15712dca7cfbbe7186019dfd9997b79636e36b4949\",\"result\":\"ok\",\"role\":null,\"seq\":26,\"stepup\":false,\"target\":\"keep@acme.example\",\"ts\":1763400020000}",
+   "{\"action\":\"two-person.off\",\"actor\":\"operator\",\"approval\":null,\"detail\":null,\"hash\":\"c45663a4789478d650f744ea5fbe1b7b2b95f48cf5cbe538982d7d3ca4dade9e\",\"ip\":null,\"prev\":\"490ab41b9443867c555093cce74035357f9760d128beb6b6f58323f327ef11ed\",\"result\":\"ok\",\"role\":null,\"seq\":27,\"stepup\":false,\"target\":\"-\",\"ts\":1763400021000}",
+   "{\"action\":\"meet.license.upgrade-period\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"ends\":1797500000000,\"retired\":\"license\"},\"hash\":\"d85dd6156233474ea47698706e41169a3965d7e77a5c1112716c450dba367ccf\",\"ip\":null,\"prev\":\"c45663a4789478d650f744ea5fbe1b7b2b95f48cf5cbe538982d7d3ca4dade9e\",\"result\":\"ok\",\"role\":null,\"seq\":28,\"stepup\":false,\"target\":null,\"ts\":1763400022000}",
+   "{\"action\":\"meet.seats.clock\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"seated\":21,\"state\":\"start\",\"users\":20},\"hash\":\"3c4a6ead7d911a9ba3a3887d0c31f10a2acdd9cc5bd27774b4c0247acc43ed36\",\"ip\":null,\"prev\":\"d85dd6156233474ea47698706e41169a3965d7e77a5c1112716c450dba367ccf\",\"result\":\"ok\",\"role\":null,\"seq\":29,\"stepup\":false,\"target\":null,\"ts\":1763400023000}",
+   "{\"action\":\"meet.seats.notice\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"day\":7,\"mailed\":2},\"hash\":\"2e140d06d29ab6c18a58f3b414e7b094ba6582a92990880f96b7909dfa62aa53\",\"ip\":null,\"prev\":\"3c4a6ead7d911a9ba3a3887d0c31f10a2acdd9cc5bd27774b4c0247acc43ed36\",\"result\":\"ok\",\"role\":null,\"seq\":30,\"stepup\":false,\"target\":null,\"ts\":1763400024000}",
+   "{\"action\":\"meet.seats.pick\",\"actor\":\"una@acme.example\",\"approval\":null,\"detail\":{\"pick\":true},\"hash\":\"6521a09492d164de85f697bc8e8d359e8eb4fdb194b9fc4f746fb4090de761a4\",\"ip\":\"198.51.100.9\",\"prev\":\"2e140d06d29ab6c18a58f3b414e7b094ba6582a92990880f96b7909dfa62aa53\",\"result\":\"ok\",\"role\":\"user-manager\",\"seq\":31,\"stepup\":true,\"target\":\"zoe@acme.example\",\"ts\":1763400025000}",
+   "{\"action\":\"meet.seats.unseat\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"why\":\"pick\"},\"hash\":\"e2aa848c26dd2fc900e646b9783c82c485c5d9d53d4d3fe51082ac1b4af3af61\",\"ip\":null,\"prev\":\"6521a09492d164de85f697bc8e8d359e8eb4fdb194b9fc4f746fb4090de761a4\",\"result\":\"ok\",\"role\":null,\"seq\":32,\"stepup\":false,\"target\":\"zoe@acme.example\",\"ts\":1763400026000}",
+   "{\"action\":\"meet.seats.reseat\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"why\":\"license\"},\"hash\":\"71414a785d0583c02ae0aa9071943c37d0918b13efb050a15d8ceae0827b8e01\",\"ip\":null,\"prev\":\"e2aa848c26dd2fc900e646b9783c82c485c5d9d53d4d3fe51082ac1b4af3af61\",\"result\":\"ok\",\"role\":null,\"seq\":33,\"stepup\":false,\"target\":\"zoe@acme.example\",\"ts\":1763400027000}",
+   "{\"action\":\"meet.seats.request\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"mailed\":true,\"wanted\":25},\"hash\":\"4c134fda33c36dc672c327f84e5128a6763198f4300ea95caf73f0007647c240\",\"ip\":\"203.0.113.7\",\"prev\":\"71414a785d0583c02ae0aa9071943c37d0918b13efb050a15d8ceae0827b8e01\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":34,\"stepup\":false,\"target\":null,\"ts\":1763400028000}",
+   "{\"action\":\"meet.seats.migrated\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"byOrder\":2,\"fromRecords\":16,\"principals\":18},\"hash\":\"46c8d4049fbf991a3ce58557e83408dfd4670763c11d08fa3cd8e028ffa0fce0\",\"ip\":null,\"prev\":\"4c134fda33c36dc672c327f84e5128a6763198f4300ea95caf73f0007647c240\",\"result\":\"ok\",\"role\":null,\"seq\":35,\"stepup\":false,\"target\":null,\"ts\":1763400029000}",
+   "{\"action\":\"meet.clock.confirm\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"after\":1794900000000,\"before\":1794800000000,\"heldGapMs\":259200000},\"hash\":\"681fa8746a02375c852ac8605dea448205ee7ebbdc33ade70223322b87b22487\",\"ip\":\"203.0.113.7\",\"prev\":\"46c8d4049fbf991a3ce58557e83408dfd4670763c11d08fa3cd8e028ffa0fce0\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":36,\"stepup\":true,\"target\":\"-\",\"ts\":1763400030000}",
+   "{\"action\":\"meet.clock.uncertain\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"byMs\":259200000,\"why\":\"gap\"},\"hash\":\"f64d7995fd08611a64b9cdea6bf66cf940c2ae13ca708a2ee620806233539d88\",\"ip\":null,\"prev\":\"681fa8746a02375c852ac8605dea448205ee7ebbdc33ade70223322b87b22487\",\"result\":\"ok\",\"role\":null,\"seq\":37,\"stepup\":false,\"target\":null,\"ts\":1763400031000}",
+   "{\"action\":\"console.seal\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"keyMode\":null,\"provider\":\"dpapi-machine\",\"refused\":[{\"provider\":\"dpapi-service\",\"why\":\"the relay does not run as NT SERVICE\\\\LucidRelay\"}]},\"hash\":\"6ac3ac8a4ce41c837eb19ad9fc59b6e72b47cacf36c5e8235a209903676468e4\",\"ip\":null,\"prev\":\"f64d7995fd08611a64b9cdea6bf66cf940c2ae13ca708a2ee620806233539d88\",\"result\":\"ok\",\"role\":null,\"seq\":38,\"stepup\":false,\"target\":null,\"ts\":1763400032000}",
+   "{\"action\":\"console.seal-lost\",\"actor\":\"relay\",\"approval\":null,\"detail\":null,\"hash\":\"e597b48eb217a93811392255d457bb75fbda244b2aeafd5bb9741b6a3ecd1e3d\",\"ip\":null,\"prev\":\"6ac3ac8a4ce41c837eb19ad9fc59b6e72b47cacf36c5e8235a209903676468e4\",\"result\":\"ok\",\"role\":null,\"seq\":39,\"stepup\":false,\"target\":null,\"ts\":1763400033000}",
+   "{\"action\":\"meet.seats.hold\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"uncertainRunningMs\":259200000},\"hash\":\"e8bd6ee4a452ad246305e72655564ff9d9faa67f75112f0bd495ccd5f6f693b8\",\"ip\":null,\"prev\":\"e597b48eb217a93811392255d457bb75fbda244b2aeafd5bb9741b6a3ecd1e3d\",\"result\":\"ok\",\"role\":null,\"seq\":40,\"stepup\":false,\"target\":\"zoe@acme.example\",\"ts\":1763400034000}",
+   "{\"action\":\"meet.seats.release-hold\",\"actor\":\"relay\",\"approval\":null,\"detail\":null,\"hash\":\"9093a79bd98de80961b6f2681df42baa28a801a489d276d455f7fb0804d68d5b\",\"ip\":null,\"prev\":\"e8bd6ee4a452ad246305e72655564ff9d9faa67f75112f0bd495ccd5f6f693b8\",\"result\":\"ok\",\"role\":null,\"seq\":41,\"stepup\":false,\"target\":\"zoe@acme.example\",\"ts\":1763400035000}",
+   "{\"action\":\"console.bootstrap\",\"actor\":\"alice@acme.example\",\"approval\":null,\"detail\":{\"profile\":\"standard\",\"profileFrom\":\"default\"},\"hash\":\"1c0df1d4472f027f09ad879cab2f3a9fba3929238b020d2da8b42c76ae878842\",\"ip\":\"203.0.113.7\",\"prev\":\"9093a79bd98de80961b6f2681df42baa28a801a489d276d455f7fb0804d68d5b\",\"result\":\"ok\",\"role\":\"admin\",\"seq\":42,\"stepup\":false,\"target\":\"alice@acme.example\",\"ts\":1763400036000}",
+   "{\"action\":\"license.service\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"licenseId\":\"l_0123456789abcdef\",\"state\":\"stopped\",\"why\":\"expired\"},\"hash\":\"5de11c1336266414ae4df2bf171bd17fd6ea831fb7dbad07bd5df80c3a66e3b9\",\"ip\":null,\"prev\":\"1c0df1d4472f027f09ad879cab2f3a9fba3929238b020d2da8b42c76ae878842\",\"result\":\"ok\",\"role\":null,\"seq\":43,\"stepup\":false,\"target\":null,\"ts\":1763400037000}",
+   "{\"action\":\"license.reminder\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"key\":\"l_0123456789abcdef\",\"kind\":\"grace-start\",\"mailed\":2},\"hash\":\"787bb3794c21a73a44d516f1c6f5f2300fa28ecb020eb52ae06e99bf46c3064c\",\"ip\":null,\"prev\":\"5de11c1336266414ae4df2bf171bd17fd6ea831fb7dbad07bd5df80c3a66e3b9\",\"result\":\"ok\",\"role\":null,\"seq\":44,\"stepup\":false,\"target\":null,\"ts\":1763400038000}",
+   "{\"action\":\"license.time-reset\",\"actor\":\"operator\",\"approval\":null,\"detail\":{\"after\":1797400000000,\"before\":1797600000000},\"hash\":\"4507d8cda2f92d2bf831ede8e8933912c659b5f7edc6510234a60a082d5a4c88\",\"ip\":null,\"prev\":\"787bb3794c21a73a44d516f1c6f5f2300fa28ecb020eb52ae06e99bf46c3064c\",\"result\":\"ok\",\"role\":null,\"seq\":45,\"stepup\":false,\"target\":\"-\",\"ts\":1763400039000}",
+   "{\"action\":\"license.reminders-unreadable\",\"actor\":\"relay\",\"approval\":null,\"detail\":{\"suppressed\":3},\"hash\":\"b616b6adb0bbeabf394e8b41800da3430aadb847af9cfc432245ca05cae03c22\",\"ip\":null,\"prev\":\"4507d8cda2f92d2bf831ede8e8933912c659b5f7edc6510234a60a082d5a4c88\",\"result\":\"ok\",\"role\":null,\"seq\":46,\"stepup\":false,\"target\":null,\"ts\":1763400040000}"
+  ],
+  "expect": {
+   "verified": true,
+   "anchored": true,
+   "first": 7,
+   "through": 46,
+   "broken_at": null,
+   "line": null,
+   "why": null
+  }
+ }
+}

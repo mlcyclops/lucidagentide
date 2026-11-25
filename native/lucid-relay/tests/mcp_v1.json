@@ -1,0 +1,687 @@
+{
+ "v": 1,
+ "protocol": "2026-07-28",
+ "headers": [
+  {
+   "name": "origin_explicit_default_port",
+   "head": {
+    "http": "POST",
+    "path": "/api/orgs/acme/mcp",
+    "protocol": "2026-07-28",
+    "method": "tools/list",
+    "name": null,
+    "origin": "https://connector.acme.example:443"
+   },
+   "own_origin": "https://connector.acme.example/api/orgs/acme/mcp",
+   "expect": {
+    "ok": true,
+    "method": "tools/list",
+    "name": null
+   }
+  },
+  {
+   "name": "origin_other_port",
+   "head": {
+    "http": "POST",
+    "path": "/api/orgs/acme/mcp",
+    "protocol": "2026-07-28",
+    "method": "tools/list",
+    "name": null,
+    "origin": "https://connector.acme.example:8443"
+   },
+   "own_origin": "https://connector.acme.example/api/orgs/acme/mcp",
+   "expect": {
+    "status": 403,
+    "code": -32600
+   }
+  },
+  {
+   "name": "origin_other_scheme",
+   "head": {
+    "http": "POST",
+    "path": "/api/orgs/acme/mcp",
+    "protocol": "2026-07-28",
+    "method": "tools/list",
+    "name": null,
+    "origin": "http://connector.acme.example"
+   },
+   "own_origin": "https://connector.acme.example/api/orgs/acme/mcp",
+   "expect": {
+    "status": 403,
+    "code": -32600
+   }
+  },
+  {
+   "name": "origin_null",
+   "head": {
+    "http": "POST",
+    "path": "/api/orgs/acme/mcp",
+    "protocol": "2026-07-28",
+    "method": "tools/list",
+    "name": null,
+    "origin": "null"
+   },
+   "own_origin": "https://connector.acme.example/api/orgs/acme/mcp",
+   "expect": {
+    "status": 403,
+    "code": -32600
+   }
+  },
+  {
+   "name": "tools_list",
+   "head": {
+    "http": "POST",
+    "path": "/api/orgs/acme/mcp",
+    "protocol": "2026-07-28",
+    "method": "tools/list",
+    "name": null,
+    "origin": null
+   },
+   "own_origin": "https://console.acme.example:7443",
+   "expect": {
+    "ok": true,
+    "method": "tools/list",
+    "name": null
+   }
+  },
+  {
+   "name": "tools_call",
+   "head": {
+    "http": "POST",
+    "path": "/api/orgs/acme/mcp",
+    "protocol": "2026-07-28",
+    "method": "tools/call",
+    "name": "lucid_health",
+    "origin": null
+   },
+   "own_origin": "https://console.acme.example:7443",
+   "expect": {
+    "ok": true,
+    "method": "tools/call",
+    "name": "lucid_health"
+   }
+  },
+  {
+   "name": "resources_read_sentinel",
+   "head": {
+    "http": "POST",
+    "path": "/api/orgs/acme/mcp",
+    "protocol": "2026-07-28",
+    "method": "resources/read",
+    "name": "=?base64?bHVjaWQ6Ly9hY21lL3RlbGVtZXRyeS9jYXRhbG9n?=",
+    "origin": null
+   },
+   "own_origin": "https://console.acme.example:7443",
+   "expect": {
+    "ok": true,
+    "method": "resources/read",
+    "name": "lucid://acme/telemetry/catalog"
+   }
+  },
+  {
+   "name": "name_non_ascii_sentinel",
+   "head": {
+    "http": "POST",
+    "path": "/api/orgs/acme/mcp",
+    "protocol": "2026-07-28",
+    "method": "tools/call",
+    "name": "=?base64?SGVsbG8sIOS4lueVjA==?=",
+    "origin": null
+   },
+   "own_origin": "https://console.acme.example:7443",
+   "expect": {
+    "ok": true,
+    "method": "tools/call",
+    "name": "Hello, 世界"
+   }
+  },
+  {
+   "name": "discover_ignores_name",
+   "head": {
+    "http": "POST",
+    "path": "/api/orgs/acme/mcp",
+    "protocol": "2026-07-28",
+    "method": "server/discover",
+    "name": "anything",
+    "origin": null
+   },
+   "own_origin": "https://console.acme.example:7443",
+   "expect": {
+    "ok": true,
+    "method": "server/discover",
+    "name": null
+   }
+  },
+  {
+   "name": "own_origin_any_case",
+   "head": {
+    "http": "POST",
+    "path": "/api/orgs/acme/mcp",
+    "protocol": "2026-07-28",
+    "method": "tools/list",
+    "name": null,
+    "origin": "HTTPS://Console.Acme.Example:7443"
+   },
+   "own_origin": "https://console.acme.example:7443",
+   "expect": {
+    "ok": true,
+    "method": "tools/list",
+    "name": null
+   }
+  },
+  {
+   "name": "get",
+   "head": {
+    "http": "GET",
+    "path": "/api/orgs/acme/mcp",
+    "protocol": "2026-07-28",
+    "method": "tools/list",
+    "name": null,
+    "origin": null
+   },
+   "own_origin": "https://console.acme.example:7443",
+   "expect": {
+    "status": 405,
+    "code": -32600
+   }
+  },
+  {
+   "name": "delete",
+   "head": {
+    "http": "DELETE",
+    "path": "/api/orgs/acme/mcp",
+    "protocol": "2026-07-28",
+    "method": "tools/list",
+    "name": null,
+    "origin": null
+   },
+   "own_origin": "https://console.acme.example:7443",
+   "expect": {
+    "status": 405,
+    "code": -32600
+   }
+  },
+  {
+   "name": "foreign_origin",
+   "head": {
+    "http": "POST",
+    "path": "/api/orgs/acme/mcp",
+    "protocol": "2026-07-28",
+    "method": "tools/list",
+    "name": null,
+    "origin": "https://evil.example"
+   },
+   "own_origin": "https://console.acme.example:7443",
+   "expect": {
+    "status": 403,
+    "code": -32600
+   }
+  },
+  {
+   "name": "no_protocol",
+   "head": {
+    "http": "POST",
+    "path": "/api/orgs/acme/mcp",
+    "protocol": null,
+    "method": "tools/list",
+    "name": null,
+    "origin": null
+   },
+   "own_origin": "https://console.acme.example:7443",
+   "expect": {
+    "status": 400,
+    "code": -32020
+   }
+  },
+  {
+   "name": "old_protocol",
+   "head": {
+    "http": "POST",
+    "path": "/api/orgs/acme/mcp",
+    "protocol": "2025-11-25",
+    "method": "tools/list",
+    "name": null,
+    "origin": null
+   },
+   "own_origin": "https://console.acme.example:7443",
+   "expect": {
+    "status": 400,
+    "code": -32022
+   }
+  },
+  {
+   "name": "no_method",
+   "head": {
+    "http": "POST",
+    "path": "/api/orgs/acme/mcp",
+    "protocol": "2026-07-28",
+    "method": null,
+    "name": null,
+    "origin": null
+   },
+   "own_origin": "https://console.acme.example:7443",
+   "expect": {
+    "status": 400,
+    "code": -32020
+   }
+  },
+  {
+   "name": "subscriptions_listen",
+   "head": {
+    "http": "POST",
+    "path": "/api/orgs/acme/mcp",
+    "protocol": "2026-07-28",
+    "method": "subscriptions/listen",
+    "name": null,
+    "origin": null
+   },
+   "own_origin": "https://console.acme.example:7443",
+   "expect": {
+    "status": 404,
+    "code": -32601
+   }
+  },
+  {
+   "name": "initialize",
+   "head": {
+    "http": "POST",
+    "path": "/api/orgs/acme/mcp",
+    "protocol": "2026-07-28",
+    "method": "initialize",
+    "name": null,
+    "origin": null
+   },
+   "own_origin": "https://console.acme.example:7443",
+   "expect": {
+    "status": 404,
+    "code": -32601
+   }
+  },
+  {
+   "name": "call_without_name",
+   "head": {
+    "http": "POST",
+    "path": "/api/orgs/acme/mcp",
+    "protocol": "2026-07-28",
+    "method": "tools/call",
+    "name": null,
+    "origin": null
+   },
+   "own_origin": "https://console.acme.example:7443",
+   "expect": {
+    "status": 400,
+    "code": -32020
+   }
+  },
+  {
+   "name": "read_without_name",
+   "head": {
+    "http": "POST",
+    "path": "/api/orgs/acme/mcp",
+    "protocol": "2026-07-28",
+    "method": "resources/read",
+    "name": null,
+    "origin": null
+   },
+   "own_origin": "https://console.acme.example:7443",
+   "expect": {
+    "status": 400,
+    "code": -32020
+   }
+  },
+  {
+   "name": "bad_sentinel",
+   "head": {
+    "http": "POST",
+    "path": "/api/orgs/acme/mcp",
+    "protocol": "2026-07-28",
+    "method": "tools/call",
+    "name": "=?base64?***?=",
+    "origin": null
+   },
+   "own_origin": "https://console.acme.example:7443",
+   "expect": {
+    "status": 400,
+    "code": -32020
+   }
+  },
+  {
+   "name": "control_in_name",
+   "head": {
+    "http": "POST",
+    "path": "/api/orgs/acme/mcp",
+    "protocol": "2026-07-28",
+    "method": "tools/call",
+    "name": "ab",
+    "origin": null
+   },
+   "own_origin": "https://console.acme.example:7443",
+   "expect": {
+    "status": 400,
+    "code": -32020
+   }
+  }
+ ],
+ "bodies": [
+  {
+   "name": "match",
+   "want": {
+    "method": "tools/call",
+    "name": "lucid_health"
+   },
+   "body": "{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"lucid_health\", \"arguments\": {}, \"_meta\": {\"io.modelcontextprotocol/protocolVersion\": \"2026-07-28\", \"io.modelcontextprotocol/clientInfo\": {\"name\": \"vectors\", \"version\": \"1\"}, \"io.modelcontextprotocol/clientCapabilities\": {}}}}",
+   "expect": {
+    "ok": true
+   }
+  },
+  {
+   "name": "match_string_id",
+   "want": {
+    "method": "tools/list",
+    "name": null
+   },
+   "body": "{\"jsonrpc\": \"2.0\", \"id\": \"a-1\", \"method\": \"tools/list\", \"params\": {\"_meta\": {\"io.modelcontextprotocol/protocolVersion\": \"2026-07-28\", \"io.modelcontextprotocol/clientInfo\": {\"name\": \"vectors\", \"version\": \"1\"}, \"io.modelcontextprotocol/clientCapabilities\": {}}}}",
+   "expect": {
+    "ok": true
+   }
+  },
+  {
+   "name": "name_mismatch",
+   "want": {
+    "method": "tools/call",
+    "name": "lucid_health"
+   },
+   "body": "{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"lucid_capacity\", \"_meta\": {\"io.modelcontextprotocol/protocolVersion\": \"2026-07-28\", \"io.modelcontextprotocol/clientInfo\": {\"name\": \"vectors\", \"version\": \"1\"}, \"io.modelcontextprotocol/clientCapabilities\": {}}}}",
+   "expect": {
+    "status": 400,
+    "code": -32020
+   }
+  },
+  {
+   "name": "method_mismatch",
+   "want": {
+    "method": "tools/call",
+    "name": "lucid_health"
+   },
+   "body": "{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/list\", \"params\": {\"_meta\": {\"io.modelcontextprotocol/protocolVersion\": \"2026-07-28\", \"io.modelcontextprotocol/clientInfo\": {\"name\": \"vectors\", \"version\": \"1\"}, \"io.modelcontextprotocol/clientCapabilities\": {}}}}",
+   "expect": {
+    "status": 400,
+    "code": -32020
+   }
+  },
+  {
+   "name": "version_mismatch",
+   "want": {
+    "method": "tools/call",
+    "name": "lucid_health"
+   },
+   "body": "{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"lucid_health\", \"_meta\": {\"io.modelcontextprotocol/protocolVersion\": \"2025-11-25\", \"io.modelcontextprotocol/clientInfo\": {\"name\": \"vectors\", \"version\": \"1\"}, \"io.modelcontextprotocol/clientCapabilities\": {}}}}",
+   "expect": {
+    "status": 400,
+    "code": -32020
+   }
+  },
+  {
+   "name": "no_meta",
+   "want": {
+    "method": "tools/call",
+    "name": "lucid_health"
+   },
+   "body": "{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"lucid_health\"}}",
+   "expect": {
+    "status": 400,
+    "code": -32602
+   }
+  },
+  {
+   "name": "no_version_in_meta",
+   "want": {
+    "method": "tools/call",
+    "name": "lucid_health"
+   },
+   "body": "{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"lucid_health\", \"_meta\": {\"io.modelcontextprotocol/clientInfo\": {\"name\": \"vectors\", \"version\": \"1\"}, \"io.modelcontextprotocol/clientCapabilities\": {}}}}",
+   "expect": {
+    "status": 400,
+    "code": -32602
+   }
+  },
+  {
+   "name": "no_capabilities",
+   "want": {
+    "method": "tools/call",
+    "name": "lucid_health"
+   },
+   "body": "{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"lucid_health\", \"_meta\": {\"io.modelcontextprotocol/protocolVersion\": \"2026-07-28\", \"io.modelcontextprotocol/clientInfo\": {\"name\": \"vectors\", \"version\": \"1\"}}}}",
+   "expect": {
+    "status": 400,
+    "code": -32602
+   }
+  },
+  {
+   "name": "arguments_not_object",
+   "want": {
+    "method": "tools/call",
+    "name": "lucid_health"
+   },
+   "body": "{\"jsonrpc\": \"2.0\", \"id\": 1, \"method\": \"tools/call\", \"params\": {\"name\": \"lucid_health\", \"arguments\": [1], \"_meta\": {\"io.modelcontextprotocol/protocolVersion\": \"2026-07-28\", \"io.modelcontextprotocol/clientInfo\": {\"name\": \"vectors\", \"version\": \"1\"}, \"io.modelcontextprotocol/clientCapabilities\": {}}}}",
+   "expect": {
+    "status": 400,
+    "code": -32602
+   }
+  },
+  {
+   "name": "notification",
+   "want": {
+    "method": "tools/list",
+    "name": null
+   },
+   "body": "{\"jsonrpc\": \"2.0\", \"method\": \"tools/list\", \"params\": {\"_meta\": {\"io.modelcontextprotocol/protocolVersion\": \"2026-07-28\", \"io.modelcontextprotocol/clientInfo\": {\"name\": \"vectors\", \"version\": \"1\"}, \"io.modelcontextprotocol/clientCapabilities\": {}}}}",
+   "expect": {
+    "status": 400,
+    "code": -32600
+   }
+  },
+  {
+   "name": "null_id",
+   "want": {
+    "method": "tools/list",
+    "name": null
+   },
+   "body": "{\"jsonrpc\": \"2.0\", \"id\": null, \"method\": \"tools/list\", \"params\": {\"_meta\": {\"io.modelcontextprotocol/protocolVersion\": \"2026-07-28\", \"io.modelcontextprotocol/clientInfo\": {\"name\": \"vectors\", \"version\": \"1\"}, \"io.modelcontextprotocol/clientCapabilities\": {}}}}",
+   "expect": {
+    "status": 400,
+    "code": -32600
+   }
+  },
+  {
+   "name": "not_json",
+   "want": {
+    "method": "tools/list",
+    "name": null
+   },
+   "body": "{not json",
+   "expect": {
+    "status": 400,
+    "code": -32700
+   }
+  },
+  {
+   "name": "wrong_jsonrpc",
+   "want": {
+    "method": "tools/list",
+    "name": null
+   },
+   "body": "{\"jsonrpc\": \"1.0\", \"id\": 1, \"method\": \"tools/list\", \"params\": {\"_meta\": {\"io.modelcontextprotocol/protocolVersion\": \"2026-07-28\", \"io.modelcontextprotocol/clientInfo\": {\"name\": \"vectors\", \"version\": \"1\"}, \"io.modelcontextprotocol/clientCapabilities\": {}}}}",
+   "expect": {
+    "status": 400,
+    "code": -32600
+   }
+  }
+ ],
+ "tools": {
+  "console": [
+   {
+    "name": "lucid_health",
+    "scope": "monitor.read",
+    "route": "GET /api/orgs/{org}/v1/health"
+   },
+   {
+    "name": "lucid_capacity",
+    "scope": "monitor.read",
+    "route": "GET /api/orgs/{org}/v1/capacity"
+   },
+   {
+    "name": "lucid_metric",
+    "scope": "monitor.read",
+    "route": "GET /api/orgs/{org}/v1/metrics"
+   },
+   {
+    "name": "lucid_telemetry_catalog",
+    "scope": "monitor.read",
+    "route": "GET /api/orgs/{org}/v1/telemetry/catalog"
+   },
+   {
+    "name": "lucid_fleet_relays",
+    "scope": "fleet.read",
+    "route": "GET /api/orgs/{org}/v1/fleet/relays"
+   },
+   {
+    "name": "lucid_fleet_relay",
+    "scope": "fleet.read",
+    "route": "GET /api/orgs/{org}/v1/fleet/relays/{id}"
+   },
+   {
+    "name": "lucid_audit_search",
+    "scope": "audit.read",
+    "route": "GET /api/orgs/{org}/v1/audit"
+   }
+  ],
+  "connector": [
+   {
+    "name": "list_conversations",
+    "scope": "content.read",
+    "route": "GET /api/orgs/{org}/v1/content/conversations"
+   },
+   {
+    "name": "read_messages",
+    "scope": "content.read",
+    "route": "GET /api/orgs/{org}/v1/content/conversations/{cid}/messages"
+   },
+   {
+    "name": "read_thread",
+    "scope": "content.read",
+    "route": "GET /api/orgs/{org}/v1/content/conversations/{cid}/messages"
+   },
+   {
+    "name": "search_messages",
+    "scope": "content.read",
+    "route": "GET /api/orgs/{org}/v1/content/search"
+   },
+   {
+    "name": "list_mentions",
+    "scope": "content.read",
+    "route": "GET /api/orgs/{org}/v1/content/mentions"
+   },
+   {
+    "name": "list_files",
+    "scope": "content.read",
+    "route": "GET /api/orgs/{org}/v1/content/conversations/{cid}/files"
+   },
+   {
+    "name": "post_message",
+    "scope": "content.post",
+    "route": "POST /api/orgs/{org}/v1/content/conversations/{cid}/messages"
+   }
+  ]
+ },
+ "state": {
+  "key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "nonce": "6465666768696a6b6c6d6e6f",
+  "aad": "lucid-mcp-state-v1",
+  "state": {
+   "v": 1,
+   "approval": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+   "client": "c_0000000000000002",
+   "sub": "ann@acme.test",
+   "tool": "post_message",
+   "args_sha256": "d276b2ad2d9943ede87b2657bcb31ff2ddade1557574ae0cdcacdf66194f1f9d",
+   "exp": 1795000600
+  },
+  "canonical": "{\"approval\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"args_sha256\":\"d276b2ad2d9943ede87b2657bcb31ff2ddade1557574ae0cdcacdf66194f1f9d\",\"client\":\"c_0000000000000002\",\"exp\":1795000600,\"sub\":\"ann@acme.test\",\"tool\":\"post_message\",\"v\":1}",
+  "sealed": "ZGVmZ2hpamtsbW5vMzm_FgmbOehfDn3S-AQLnCOjZ2vqDZITxrDNKZrCxCn1iCGhLXP6ZZySGV6cYObtein_lH85KUnIxJr01aPBuD-6uTy3LwlhslbZcHTuVN5TGi0CkvLvpb3CB6IdISo17xX3T154j0uEzr-gkm7ci0NI5Hn3T4gNhh-i1-PQKusQ_PTBDFw2CfNrNVq5sGyypvfNdmB7tqIBoU5_wj2Hn-hBBWah69jVW2iRwdxEj-zlhK-LDZEzoRZBcCuv5TG6r1xyyIQ3AG4tE0lZZ0qdezQX-2f0K23alzou9prHK9ozKqqqPSg78JtAsAi8sqx-Cw",
+  "tampered": "ZGVmZ2hpamtsbW5vMzm_FgmbOeheDn3S-AQLnCOjZ2vqDZITxrDNKZrCxCn1iCGhLXP6ZZySGV6cYObtein_lH85KUnIxJr01aPBuD-6uTy3LwlhslbZcHTuVN5TGi0CkvLvpb3CB6IdISo17xX3T154j0uEzr-gkm7ci0NI5Hn3T4gNhh-i1-PQKusQ_PTBDFw2CfNrNVq5sGyypvfNdmB7tqIBoU5_wj2Hn-hBBWah69jVW2iRwdxEj-zlhK-LDZEzoRZBcCuv5TG6r1xyyIQ3AG4tE0lZZ0qdezQX-2f0K23alzou9prHK9ozKqqqPSg78JtAsAi8sqx-Cw",
+  "args": [
+   {
+    "arguments": {
+     "text": "Lunch at noon ☕",
+     "conv": "ch:ops1",
+     "thread": "0123456789abcdef0123456789abcdef"
+    },
+    "args_sha256": "d276b2ad2d9943ede87b2657bcb31ff2ddade1557574ae0cdcacdf66194f1f9d"
+   },
+   {
+    "arguments": {
+     "conv": "ch:ops1",
+     "text": "Lunch at one"
+    },
+    "args_sha256": "5d48096de0406588187fd0ed4234ab7d6e16412cec3546300972596d3c94f7df"
+   }
+  ],
+  "checks": [
+   {
+    "name": "good",
+    "fits": true,
+    "client": "c_0000000000000002",
+    "sub": "ann@acme.test",
+    "tool": "post_message",
+    "args_sha256": "d276b2ad2d9943ede87b2657bcb31ff2ddade1557574ae0cdcacdf66194f1f9d",
+    "now": 1795000000
+   },
+   {
+    "name": "other_client",
+    "fits": false,
+    "client": "c_0000000000000003",
+    "sub": "ann@acme.test",
+    "tool": "post_message",
+    "args_sha256": "d276b2ad2d9943ede87b2657bcb31ff2ddade1557574ae0cdcacdf66194f1f9d",
+    "now": 1795000000
+   },
+   {
+    "name": "other_person",
+    "fits": false,
+    "client": "c_0000000000000002",
+    "sub": "ben@acme.test",
+    "tool": "post_message",
+    "args_sha256": "d276b2ad2d9943ede87b2657bcb31ff2ddade1557574ae0cdcacdf66194f1f9d",
+    "now": 1795000000
+   },
+   {
+    "name": "other_tool",
+    "fits": false,
+    "client": "c_0000000000000002",
+    "sub": "ann@acme.test",
+    "tool": "read_messages",
+    "args_sha256": "d276b2ad2d9943ede87b2657bcb31ff2ddade1557574ae0cdcacdf66194f1f9d",
+    "now": 1795000000
+   },
+   {
+    "name": "other_arguments",
+    "fits": false,
+    "client": "c_0000000000000002",
+    "sub": "ann@acme.test",
+    "tool": "post_message",
+    "args_sha256": "5d48096de0406588187fd0ed4234ab7d6e16412cec3546300972596d3c94f7df",
+    "now": 1795000000
+   },
+   {
+    "name": "expired",
+    "fits": false,
+    "client": "c_0000000000000002",
+    "sub": "ann@acme.test",
+    "tool": "post_message",
+    "args_sha256": "d276b2ad2d9943ede87b2657bcb31ff2ddade1557574ae0cdcacdf66194f1f9d",
+    "now": 1795000600
+   }
+  ]
+ }
+}

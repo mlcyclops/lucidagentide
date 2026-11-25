@@ -1,0 +1,1890 @@
+{
+ "version": 1,
+ "contract": "AC-1 revision 4.2",
+ "about": "Exact words of the Lucid Admin Console. <name> marks a value filled in at run time; quotes are part of the words. 'page' is section 8.1 (compound rows split into <id>.<part>; lists keep the contract's order), 'sign' the signing side's words, 'people' the words the Meeting Hub and Remote Spokes relays answer people, 'dialogs' section 8.2 (second: a two-admin action, showing dialog.second with two-person control on and dialog.single with it off; button_single: its button with two-person control off), 'refusals' section 8.3 (the first words are the answer, later ones the alternates), 'mail' section 8.4 (\\n a line break; every mail ends with mail.footer's body), 'relay' the relay's start and other words, 'labels' section 7, 'clean' the characters removed from untrusted text (inclusive code point ranges). Not page text: cli.* (the offline CLI and start log; cli.dev-license is the start log of a dev-license build, which accepts development-key licenses and is never signed or shipped, R4-H1) and python.test-only with python.test-only.seatclock (the start refusals of the Python reference relay and lucid-relay-seatclock-check for every publisher-signed license and a production state folder). In attention.clock-uncertain and mail.clock-uncertain, <n> is the hours left before the hold, counting downtime, never an absolute time (R4-M1, R5-L1); mail.clock-uncertain's <time> is when the time became uncertain.",
+ "placeholder": "<[a-z][A-Za-z ]*>",
+ "page": {
+  "title": "LUCID Admin Console",
+  "title.document": "Lucid Admin Console: <host>",
+  "product.spokes": "Remote Spokes relay",
+  "product.meet": "Meeting Hub relay",
+  "nav.overview": "Overview",
+  "nav.spokes": "Remote Spokes",
+  "nav.spokes.pages": [
+   "Hubs",
+   "Spokes",
+   "Relays",
+   "Seats",
+   "License",
+   "Logs",
+   "Requests"
+  ],
+  "nav.meet": "Meeting Hub",
+  "nav.meet.pages": [
+   "People and devices",
+   "Seats",
+   "Enrollments and renewals",
+   "Organizations and policies",
+   "Signer and revocation",
+   "Bridges",
+   "Legal holds",
+   "Releases",
+   "Push and notifications",
+   "Organization sign-in",
+   "Calls and links",
+   "Servers",
+   "License",
+   "Logs",
+   "Requests"
+  ],
+  "nav.security": "Security",
+  "nav.approvals": "Approvals",
+  "nav.admins": "Admins and audit",
+  "nav.admins.pages": [
+   "People",
+   "Sessions",
+   "Audit log",
+   "Settings",
+   "Your account"
+  ],
+  "profile.chip": [
+   "High security",
+   "Standard security"
+  ],
+  "role.names": [
+   "Admin",
+   "User manager",
+   "Viewer"
+  ],
+  "nav.locked": "License needed",
+  "search.placeholder": "Search people, devices, hubs and spokes",
+  "search.placeholder.spokes": "Search hubs, spokes and people",
+  "search.none": "Nothing matches \"<q>\".",
+  "theme.menu": "Theme",
+  "theme.groups": [
+   "Themes",
+   "Special themes"
+  ],
+  "theme.system": "Match my system",
+  "account.menu": [
+   "Your account",
+   "Help",
+   "Sign out"
+  ],
+  "signin.title": "Sign in",
+  "signin.button": "Sign in with a passkey or security key",
+  "signin.email": "Email",
+  "signin.email-hint": "Leave it empty to use a passkey this device keeps.",
+  "signin.password": "Sign in with a password",
+  "signin.password.field": "Password",
+  "signin.password.button": "Continue",
+  "signin.key-next": "Now confirm with your passkey or security key.",
+  "signin.totp": "Enter the 6-digit code from your authenticator app.",
+  "signin.totp.field": "Code",
+  "signin.totp.button": "Sign in",
+  "signin.forgot": "Forgot your password?",
+  "signin.forgot.field": "Email",
+  "signin.forgot.button": "Send reset link",
+  "signin.forgot-sent": "If <email> belongs to a viewer of this console, a reset link is on its way.",
+  "banner.title": "Before you sign in",
+  "banner.accept": "I agree",
+  "lock.warn": "You will be signed out in 1 minute.",
+  "lock.warn.button": "Stay signed in",
+  "lock.title": "Session locked",
+  "lock.body": "You were inactive for <n> minutes, so this session ended and its contents are hidden. Sign in again to continue.",
+  "lock.body.button": "Sign in again",
+  "password.required": "This console now asks for a password too. Set one to continue.",
+  "reset.title": "Choose a new password",
+  "reset.title.field": "New password",
+  "reset.title.button": "Save password",
+  "signin.none.spokes": "No passkey yet? In the IDE, open Remote Spokes, Relay, and choose Admin Console. It gives you a one-time link.",
+  "signin.none.meet": "No passkey yet? In the Meeting Hub app, open Settings, Organization, Admin Console, and choose Get a sign-in link.",
+  "join.title": "Set up your passkey",
+  "join.body": "This invite is for <email> and works once, until <time>. Your browser asks your device for a passkey (its PIN, fingerprint or face). Later you sign in with it here.",
+  "join.label": "Name for this passkey",
+  "join.button": "Create a passkey",
+  "join.waiting": "Your passkey is set up. An admin of this console must approve you before you can sign in.",
+  "join.passkey-waiting": "Your new passkey is set up. Confirm it from a passkey you already use, or ask another admin to approve it.",
+  "join.passkey": "Set up a passkey",
+  "join.security-key": "Set up your security key",
+  "join.security-key.body": "Admins and user managers of this console sign in with an approved security key. Insert it and touch it when your browser asks.",
+  "join.security-key.button": "Register security key",
+  "join.choose": "How do you want to sign in?",
+  "join.choose.options": [
+   "A passkey on this device",
+   "A password and an authenticator app",
+   "A password and a passkey"
+  ],
+  "join.password": "Choose a password",
+  "join.password.body": "At least <n> characters. A few unrelated words are easy to remember and hard to guess.",
+  "join.password.field": "Password",
+  "join.password.button": "Save password",
+  "join.totp": "Set up an authenticator app",
+  "join.totp.body": "Scan this code with your authenticator app, or type the key below. Then enter the 6-digit code it shows.",
+  "join.totp.field": "Code",
+  "join.totp.buttons": [
+   "Copy",
+   "Finish"
+  ],
+  "join.reset": "An admin reset your sign-in. Set up how you sign in again.",
+  "account.key-waiting": "Your security key is set up. Another admin must approve it before it gives you admin rights.",
+  "bootstrap.pinned": "This console waits for its first admin, <email>.",
+  "banner.expiring": "The <product> license ends in <n> days, on <date>. Install a new license before then, or this relay stops serving people.",
+  "banner.grace": "The <product> license ended on <date>. Service stops on <date and time> unless a new license is installed.",
+  "banner.grace.button": "Install a license",
+  "banner.expired": "The license and its grace days are over. <product> pages are read-only until a new license is installed.",
+  "banner.license-stopped": "This relay has stopped serving people: its <product> license is not active (<why>). Install a license to turn service back on.",
+  "banner.license-stopped.button": "Install a license",
+  "banner.upgrade-period": "This relay needs a Meeting Hub license. Service stops on <date and time> unless a license is installed.",
+  "banner.upgrade-period.button": "Install a license",
+  "license.why": [
+   "no license is installed",
+   "the license is for another product",
+   "the license is for another root",
+   "the license file could not be used: <verifier words>",
+   "the license and its grace days are over"
+  ],
+  "license.why.codes": [
+   "none",
+   "wrong-product",
+   "wrong-root",
+   "invalid",
+   "expired"
+  ],
+  "banner.seats-over": "<seated> people use Meeting Hub; the license covers <users>. On <date> the relay takes seats from <n> people. Request more seats, or pick who gives up a seat.",
+  "banner.seats-over.button": "Request more seats",
+  "locked.title": "<product> needs a license",
+  "locked.body": "This relay's license does not include <product>, so its pages are not available. Security actions stay on the Security page. Install a license that includes <product>.",
+  "locked.reason": "Why: <problem>",
+  "license.install": "Install a license",
+  "license.install.field": "License text or file",
+  "license.install.button": "Install",
+  "attention.title": "What needs your attention",
+  "attention.none": "Nothing needs your attention.",
+  "attention.license-none": "No license is installed for <product>.",
+  "attention.license-grace": "The license ended. Service stops on <date and time> unless a new license is installed.",
+  "attention.license-expired": "The license and its grace days are over.",
+  "attention.license-expiring": "The license ends in <n> days. Install a new license before <date>.",
+  "attention.license-stopped": "This relay has stopped serving people: the <product> license is not active. Install a license.",
+  "attention.seats-high": "<used> of <users> licensed people are in use.",
+  "attention.seats-over": "<used> people use Meeting Hub; the license covers <users>. Day <day> of 14: seats are taken from <n> people on <date>.",
+  "attention.uncounted": "<n> hubs were refused because they have no license seat.",
+  "attention.crl-stale": "The revocation list is out of date. Ask the root holder to refresh it.",
+  "attention.signer-unhealthy": "The certificate signer is not answering.",
+  "attention.signer-expiring": "The signer's certificate ends in <n> days.",
+  "attention.cert-expiring": "<n> certificates end within 7 days.",
+  "attention.tls-expiring": "This console's TLS certificate ends in <n> days.",
+  "attention.spokes-silent": "<n> spokes have not checked in for a day.",
+  "attention.enrollments-waiting": "<n> devices are waiting for approval.",
+  "attention.approvals-mine": "<n> changes are waiting for your approval.",
+  "attention.requests-old": "<n> requests have waited more than 3 days.",
+  "attention.admins-few": "Add another admin so changes that lower security need two people.",
+  "attention.anchor-single": "Every admin's access depends on <label> (<id>). Invite an admin from another hub or device.",
+  "attention.admin-suspended": "<email> is suspended.",
+  "attention.passkey-waiting": "A new passkey for <email> is waiting.",
+  "attention.joiner-waiting": "<email> joined from <hub or device> and is waiting for approval.",
+  "attention.audit-broken": "The audit log does not verify from entry <n>. Changes are paused. Export what you have, then start a new chain.",
+  "attention.audit-rotating": "The audit log will soon drop entries that were never exported. Export it now.",
+  "attention.audit-dropped-unexported": "The audit log dropped entries <from> to <to> before they were exported.",
+  "attention.audit-not-exported": "The audit log has not been exported for 30 days.",
+  "attention.quota-hits": "<n> requests were refused for limits in the last hour.",
+  "attention.blocks-active": "<n> blocks are active on this relay.",
+  "attention.support-waiting": "<n> support tickets from Meeting Hub wait for an answer.",
+  "attention.admins-unproven": "<n> admins have not signed in since the upgrade. Ask them to try now.",
+  "attention.license-upgrade-period": "Install a Meeting Hub license by <date and time>, or this relay stops serving people.",
+  "attention.seats-unseated": "<n> people have no Meeting Hub seat.",
+  "attention.seats-protected": "Admins alone use more seats than the license covers. Request more seats.",
+  "attention.profile-standard": "This console was moved from the High security profile to Standard, which allows passwords with authenticator apps. Switch back to High if it serves a government deployment.",
+  "attention.two-person-off": "This console has <n> admins. Turn on Require a second admin for sensitive changes.",
+  "attention.break-glass-missing": "There is no break-glass account. The person who runs this relay creates one with lucid-relay console break-glass.",
+  "attention.break-glass-used": "The break-glass account <email> signed in on <time>.",
+  "attention.key-unattested": "<n> admins or user managers have no approved security key, so they have viewer rights.",
+  "attention.mds-old": "The security key metadata is more than 90 days out of date. Update it in Settings.",
+  "attention.signin-locked": "<n> accounts were locked after failed sign-ins in the last hour.",
+  "attention.mail-failing": "Email is failing: <reason>. Check Settings, Email.",
+  "attention.clock-uncertain": "This relay's clock jumped or was off for more than a day, so seat deadlines are on hold. Check the time, then confirm it. If no one confirms it within <n> hours, people over the license are held without service until someone does.",
+  "attention.seats-held": "<n> people over the license have no service because the relay's time was not confirmed for 72 hours. Confirm the relay's time to release them.",
+  "attention.seal-machine-scope": "Secrets are protected by machine-wide Windows DPAPI, which any account on this computer can unlock. Run lucid-relay console seal-setup to use the relay's own service account.",
+  "attention.clock-back": "This relay's clock is behind the last time it trusted. Deadlines still count from that time. Fix the clock.",
+  "attention.aaguids-relaxed": "Some approved security key models have no FIPS certificate in their metadata. Under the High profile they would not count.",
+  "attention.seal-key-file": "Secrets are protected by a key file next to the state. Run lucid-relay console seal-setup to use the relay's service account or a systemd encrypted credential, as the High profile needs.",
+  "attention.seal-lost": "Saved secrets could not be unlocked on this host. Email is off; enter its secrets again. Authenticator apps must be set up again.",
+  "admins.unproven": "Not signed in since the upgrade",
+  "meet.viewer-rights": "Signed in with a passkey that does not come from your Meeting Hub device, so admin actions are off. Sign out, then sign in with a passkey you added from your own Meeting Hub device.",
+  "high.viewer-rights": "You signed in without an approved security key, so you have viewer rights. Under this console's High profile, admins and user managers sign in with a FIPS certified hardware security key. You can add one in Your account; another admin then approves it.",
+  "seats.migrated": "People who had devices before this version are ordered by the earliest record this relay kept for them; where there was none, by their ID.",
+  "seats.stopped": "No Meeting Hub license is active, so this relay serves no one and seat rules wait. Install a license.",
+  "cli.profile-ignored": "The Admin Console is already set up, so <flag> is ignored. Change the security profile in Settings, Security.",
+  "cli.profile-ignored.flags": [
+   "--console-profile",
+   "console_profile"
+  ],
+  "clock.title": "Relay time",
+  "clock.title.body": "Relay clock: <time>. Your browser: <time>.",
+  "clock.title.button": "Confirm the relay's time",
+  "clock.title.note": "This changes only the seat clock. It never extends a license, its grace or the upgrade period.",
+  "cli.license-time-reset": "The license clock reads <highWater>; this host's clock reads <now>. Type this host's name to set the license clock to the host's clock.",
+  "cli.license-time-reset.done": "License clock set to <time>.",
+  "log.license-reminders-unreadable": "License reminder records could not be read. Past reminders were not sent again; banners still show.",
+  "seal.provider": "Secrets are protected by <provider>.",
+  "seal.provider.names": [
+   "Windows DPAPI under the relay's service account",
+   "machine-wide Windows DPAPI (Standard only)",
+   "a systemd encrypted credential (<key mode>)",
+   "a key file next to the state (Standard only)"
+  ],
+  "seal.provider.refused": "Not used: <provider>, because <why>.",
+  "seal.provider.why": [
+   "the relay does not run as NT SERVICE\\LucidRelay",
+   "it runs in a container",
+   "/etc/lucid-relay/seal-provider.json is missing",
+   "the install record names no key",
+   "the install record is not owned by root",
+   "the credential file named in the install record is missing",
+   "the credential file does not match the install record"
+  ],
+  "cli.dev-license": "This build accepts development licenses. Not for production.",
+  "breakglass.gate": "This console needs its break-glass account before it can be administered. The person who runs this relay creates it with lucid-relay console break-glass.",
+  "python.test-only": "The Python reference relay is for tests only. Use the Rust relay (lucid-relay meet) with a Meeting Hub license.",
+  "python.test-only.seatclock": "The seat clock check is for tests only. Use the Rust relay (lucid-relay meet) with a Meeting Hub license.",
+  "cli.break-glass-missing": "The Admin Console has no break-glass account. Run lucid-relay console break-glass with the relay stopped.",
+  "cli.running": "The relay is running. Stop it, then run this again.",
+  "cli.break-glass-link": "Break-glass setup link (it works once, for 24 hours, and is shown only here):",
+  "cli.break-glass-exists": "A break-glass account already exists. Use --replace to replace it.",
+  "cli.two-person-off": "Two-person control is now off.",
+  "seats.summary": "<seated> of <users> seats in use.",
+  "seats.state": [
+   "Seated",
+   "Picked to give up a seat",
+   "No seat",
+   "Always keeps a seat"
+  ],
+  "seats.actions": [
+   "Give up seat first",
+   "Keep seat",
+   "Request more seats"
+  ],
+  "seats.request": "Request more Meeting Hub seats",
+  "seats.request.field": "Seats wanted",
+  "seats.request.button": "Send request",
+  "seats.request-sent": "Sent to <address>. The same request is below if you want to send it another way.",
+  "seats.request-sent.button": "Copy",
+  "seats.request-copy": "Email is not set up, so nothing was sent. Copy this request and send it to whoever sells you Lucid licenses.",
+  "seats.request-copy.button": "Copy",
+  "settings.sections": [
+   "Security",
+   "Sign-in and sessions",
+   "Email",
+   "License",
+   "Other consoles"
+  ],
+  "settings.profile": "Security profile",
+  "settings.profile.button": "Change profile",
+  "settings.profile.high": "High: everyone signs in with a passkey or security key, and admins and user managers with an approved hardware security key. For government and regulated use.",
+  "settings.profile.standard": "Standard: people may also sign in with a password and an authenticator app, and admins with any passkey. For commercial organizations.",
+  "settings.two-person": "Require a second admin for sensitive changes",
+  "settings.banner": "Sign-in banner",
+  "settings.aaguids": "Approved security keys",
+  "settings.aaguids.buttons": [
+   "Add",
+   "Remove"
+  ],
+  "settings.mds": "Security key metadata: number <no>, next update <date>",
+  "settings.mds.button": "Update security key metadata",
+  "settings.require-password": "Require a password too",
+  "settings.sessions": "Sign out after <n> minutes without activity, and after <h> hours at most",
+  "settings.sessions-fixed": "Under the High profile, sessions end after 15 minutes without activity and after 12 hours.",
+  "settings.email": [
+   "Send with",
+   "Sender address",
+   "Server",
+   "Port",
+   "Security",
+   "User name",
+   "Password",
+   "Extra trusted certificate",
+   "Cloud",
+   "Tenant ID",
+   "Application ID",
+   "Mailbox",
+   "Credential",
+   "Saved"
+  ],
+  "settings.email.mode": [
+   "Off",
+   "SMTP server",
+   "Microsoft Graph"
+  ],
+  "settings.email.tls": [
+   "STARTTLS",
+   "TLS"
+  ],
+  "settings.email.cloud": [
+   "Microsoft 365",
+   "Microsoft 365 GCC High",
+   "Microsoft 365 DoD"
+  ],
+  "settings.email.credential": [
+   "Certificate",
+   "Client secret"
+  ],
+  "settings.email.buttons": [
+   "Save",
+   "Send test email"
+  ],
+  "settings.email-sent": "A test email went to <email>.",
+  "settings.license-request-to": "Seat requests go to",
+  "breakglass.none": "No break-glass account yet. The person who runs this relay creates it with lucid-relay console break-glass.",
+  "breakglass.set": "Break-glass account: <email>. Last used: <time or never>.",
+  "account.methods": "Sign-in methods",
+  "account.methods.buttons": [
+   "Add a passkey",
+   "Add a security key",
+   "Set a password",
+   "Change password",
+   "Set up an authenticator app",
+   "Remove"
+  ],
+  "account.methods.fields": [
+   "Current password",
+   "New password"
+  ],
+  "account.methods.attested": "Approved security key: <model>",
+  "account.methods.totp": "Authenticator app",
+  "account.mail": "Email me about",
+  "stepup.totp": "Enter the 6-digit code from your authenticator app to confirm.",
+  "stepup.totp.field": "Code",
+  "dialog.single": "Two-person control is off, so this happens as soon as you confirm. It is recorded in the audit log.",
+  "admins.break-glass": "Break-glass account",
+  "empty.hubs": "No hubs have reached this relay yet.",
+  "empty.spokes": "No spokes have reached this relay yet. A spoke appears after its first message through this relay.",
+  "empty.seats": "No one holds a license seat yet.",
+  "empty.people": "No one has a device on this relay yet.",
+  "empty.seats-meet": "No one holds a Meeting Hub seat yet.",
+  "empty.enrollments": "No devices are waiting for approval.",
+  "empty.organizations": "No organizations yet. People are put into one from People and devices.",
+  "empty.holds": "No legal holds.",
+  "empty.support": "No support tickets.",
+  "help.support": "Every Meeting Hub has a built-in support engineer. When it cannot solve a problem, the person can send the case here as a ticket: their words and the redacted checks, never meeting content. Answer it, and the person sees the answer in their Meeting Hub.",
+  "empty.bridges": "No bridges are on.",
+  "empty.approvals": "Nothing is waiting for approval.",
+  "empty.requests": "No requests.",
+  "empty.audit": "No entries match these filters.",
+  "empty.logs": "No lines match these filters.",
+  "empty.filtered": "Nothing matches these filters.",
+  "empty.filtered.button": "Clear filters",
+  "help.overview": "A summary of this relay and what needs an admin. Each card opens its page.",
+  "help.requests": "Some changes need a signature that this relay never holds. The console sends them as requests, and they are done when the signing side does them.",
+  "help.approvals": "With two-person control on, changes that lower security or take access away need a second admin. Each request lasts 24 hours.",
+  "help.seats": "When more people use Meeting Hub than the license covers, the relay waits 14 days, then takes seats from the people picked here first, then from the newest. Relay admins always keep a seat, and no certificate is revoked.",
+  "help.two-person": "When on, changes that lower security or take access away wait for a second admin. Recommended with three or more admins.",
+  "help.banner": "Shown before sign-in. Each person accepts it once per session. Leave it empty for none.",
+  "help.aaguids": "When this list has entries, only these models give admins and user managers their rights, and each must still have a FIPS certificate and hardware key protection in its metadata. An empty list allows every model that does.",
+  "help.aaguids.standard": "These models count as approved security keys, even without a FIPS certificate in their metadata. Under the High profile that is not enough.",
+  "help.mds": "Load a newer metadata file from the FIDO Alliance. The console checks its signature.",
+  "help.audit": "Every change made here, who made it and when. Each entry is chained to the one before, so an exported copy shows any later edit.",
+  "help.blocks": "A block stops this relay from serving a node or device for a while. It does not revoke the certificate; ask for a revocation for that.",
+  "help.security": "These actions shut doors, so they work whatever the license says.",
+  "help.spokes-elsewhere": "Pairing, taking a spoke out of service, tasks, kits and backups are done in the IDE's Remote Spokes panel or with lucid-spoke on that machine.",
+  "help.meet-signing": "Approvals are signed in the Meeting Hub app by an admin's own device. The console sends the request; the app shows it under Admin Console requests.",
+  "help.meet-policies": "Policies are signed in the Meeting Hub app.",
+  "help.id1": "Verify and approve in the Meeting Hub app. This list is the relay's copy and is not verified here.",
+  "help.id1-none": "This relay does not carry organization sign-in yet.",
+  "help.push": "Push settings live in relay.json and need a restart.",
+  "admins.unverified": "Invited by <email>, not verified by a hub",
+  "dialog.id": "ID",
+  "dialog.second": "Another admin must approve this before it happens.",
+  "dialog.sent": "Sent for approval. Another admin has 24 hours to approve it.",
+  "audit.restart": "Start a new chain",
+  "footer": "The relay carries sealed messages and never shows their contents."
+ },
+ "sign": {
+  "sign.asked": "The relay says <email> asked: \"<reason>\"",
+  "sign.check": "I checked code <check> with <name> myself",
+  "sign.title": "Admin Console requests",
+  "sign.decline": "Decline",
+  "sign.decline.field": "Why",
+  "sign.link": "Get a sign-in link",
+  "sign.requests-refused": "Only the hubs of console admins can read Admin Console requests."
+ },
+ "people": {
+  "meet.license-inactive": "Your organization's Meeting Hub license is not active. Ask your admin.",
+  "spokes.license-inactive": "Your organization's Remote Spokes license is not active. Ask your admin.",
+  "meet.no-seat": "Your organization has no Meeting Hub seat for you. Ask your admin."
+ },
+ "dialogs": {
+  "invite-viewer": {
+   "title": "Invite <email> as a viewer?",
+   "body": [
+    "They can see health and lists but change nothing. The link works once, for 24 hours."
+   ],
+   "button": [
+    "Create invite"
+   ],
+   "second": false
+  },
+  "invite-admin-spokes": {
+   "title": "Invite <email> as an admin?",
+   "body": [
+    "Admins can change everything in this console. After approval the link goes to you, and you pass it on."
+   ],
+   "button": [
+    "Ask for approval"
+   ],
+   "second": true,
+   "button_single": "Create invite"
+  },
+  "invite-admin-meet": {
+   "title": "Ask <email> to join as an admin?",
+   "body": [
+    "They get their own sign-in link from their device in the Meeting Hub app, then join as a viewer until a second admin makes them an admin."
+   ],
+   "button": [
+    "Send request"
+   ],
+   "second": false
+  },
+  "approve-joiner": {
+   "title": "Let <email> sign in as a viewer?",
+   "body": [
+    "They joined from <hub or device>. Approve only if you expected them."
+   ],
+   "button": [
+    "Approve"
+   ],
+   "second": false
+  },
+  "approve-passkey": {
+   "title": "Approve a new passkey for <email>?",
+   "body": [
+    "It was added from <hub or device> on <time>. Approve only if <email> told you they added it."
+   ],
+   "button": [
+    "Approve"
+   ],
+   "second": false
+  },
+  "confirm-passkey": {
+   "title": "Confirm your new passkey \"<label>\"?",
+   "body": [
+    "Confirm with a passkey you already use."
+   ],
+   "button": [
+    "Confirm"
+   ],
+   "second": false
+  },
+  "role-admin": {
+   "title": "Make <email> an admin?",
+   "body": [
+    "Admins can change everything in this console."
+   ],
+   "button": [
+    "Ask for approval"
+   ],
+   "second": true,
+   "button_single": "Make admin"
+  },
+  "role-viewer": {
+   "title": "Make <email> a viewer?",
+   "body": [
+    "They lose every admin action at once."
+   ],
+   "button": [
+    "Ask for approval"
+   ],
+   "second": true,
+   "button_single": "Make viewer"
+  },
+  "role-user-manager": {
+   "title": "Make <email> a user manager?",
+   "body": [
+    "They can invite and suspend viewers and user managers, pick who gives up a seat, and see people lists. They change no settings."
+   ],
+   "button": [
+    "Make user manager"
+   ],
+   "second": false
+  },
+  "user-manager-viewer": {
+   "title": "Make <email> a viewer?",
+   "body": [
+    "They lose every user manager action at once."
+   ],
+   "button": [
+    "Make viewer"
+   ],
+   "second": false
+  },
+  "remove-viewer": {
+   "title": "Remove <email>?",
+   "body": [
+    "Their sign-in methods and sessions are deleted. They need a new invite to come back."
+   ],
+   "button": [
+    "Remove"
+   ],
+   "second": false
+  },
+  "remove-admin": {
+   "title": "Remove <email> as an admin?",
+   "body": [
+    "Their sign-in methods and sessions are deleted."
+   ],
+   "button": [
+    "Ask for approval"
+   ],
+   "second": true,
+   "button_single": "Remove"
+  },
+  "suspend": {
+   "title": "Suspend <email>?",
+   "body": [
+    "They are signed out now and cannot sign in until someone unsuspends them."
+   ],
+   "button": [
+    "Suspend",
+    "Ask for approval"
+   ],
+   "second": true,
+   "button_single": "Suspend"
+  },
+  "unsuspend": {
+   "title": "Unsuspend <email>?",
+   "body": [
+    "They can sign in again with their sign-in methods."
+   ],
+   "button": [
+    "Unsuspend"
+   ],
+   "second": false
+  },
+  "reset-sign-in": {
+   "title": "Reset sign-in for <email>?",
+   "body": [
+    "Their password, authenticator app, passkeys and security keys are deleted and they are signed out. You get a link to pass on so they can set up sign-in again."
+   ],
+   "button": [
+    "Reset",
+    "Ask for approval"
+   ],
+   "second": true,
+   "button_single": "Reset"
+  },
+  "invite-user-manager": {
+   "title": "Invite <email> as a user manager?",
+   "body": [
+    "They can invite viewers and user managers, suspend them, pick who gives up a seat, and see people lists. The link works once, for 24 hours; pass it on yourself."
+   ],
+   "button": [
+    "Create invite"
+   ],
+   "second": false
+  },
+  "resend-invite": {
+   "title": "Send a new invite link to <email>?",
+   "body": [
+    "The old link stops working now. The new one works once, for 24 hours."
+   ],
+   "button": [
+    "Resend"
+   ],
+   "second": false
+  },
+  "end-sessions": {
+   "title": "Sign <email> out everywhere?",
+   "body": [
+    "Every session of theirs ends now. They can sign in again."
+   ],
+   "button": [
+    "Sign out everywhere"
+   ],
+   "second": false
+  },
+  "remove-passkey": {
+   "title": "Remove the passkey \"<label>\"?",
+   "body": [
+    "You can no longer sign in with it."
+   ],
+   "button": [
+    "Remove"
+   ],
+   "second": false
+  },
+  "license": {
+   "title": "Install the license for <org>?",
+   "body": [
+    "Now: <product>, <edition>, <users> people, <relays> relays, ends <date>, ID <id>.",
+    "New: <product>, <edition>, <users> people, <relays> relays, ends <date>, ID <id>."
+   ],
+   "button": [
+    "Install",
+    "Ask for approval"
+   ],
+   "both": {
+    "stopped": [
+     "This relay starts serving people again."
+    ],
+    "grace": [
+     "This relay honors 2 grace days of the <n> in this license."
+    ]
+   },
+   "spokes": [
+    "Every hub needs a new license seat from the root before it is admitted again."
+   ],
+   "meet": {
+    "upgrade": [
+     "The upgrade period ends now: this license lasts past <date>.",
+     "The upgrade period stays until <date>, because this license ends before it."
+    ],
+    "seats": [
+     "<seated> people use Meeting Hub and this license covers <users>, so a 14-day seat clock starts.",
+     "<seated> people use Meeting Hub and this license covers <users>, so the seat clock keeps running (day <day> of 14).",
+     "<seated> people use Meeting Hub and this license covers <users>, so the seat clock stops.",
+     "<n> people without a seat get one back now."
+    ]
+   },
+   "note": "The Now line only when a license is installed. Then, on both products, each 'both' line that applies (R42-1: 'stopped' while service is stopped; R42-2: 'grace' when the token's grace is longer than 2 days). Then the product's lines (R3-L4): 'spokes' only on a Remote Spokes relay when the new license has a new ID; on a Meeting Hub relay each 'meet' group that applies, one sentence from each group.",
+   "second": true,
+   "button_single": "Install"
+  },
+  "export": {
+   "title": "Export the audit log, entries <from> to <to>?",
+   "body": [
+    "The file holds admin emails and addresses. Keep it somewhere safe."
+   ],
+   "button": [
+    "Export"
+   ],
+   "second": false
+  },
+  "approve-approval": {
+   "title": "Approve: <summary>?",
+   "body": [
+    "Asked by <email> on <time>: \"<reason>\". It happens as soon as you approve.",
+    "Every detail:",
+    "The link goes to <requester>, who passes it on."
+   ],
+   "button": [
+    "Approve"
+   ],
+   "note": "Every detail: is followed by the 3.7 fields; the last sentence only for a Remote Spokes admin invite.",
+   "second": false
+  },
+  "refuse-approval": {
+   "title": "Refuse: <summary>?",
+   "body": [
+    "Nothing changes."
+   ],
+   "button": [
+    "Refuse"
+   ],
+   "second": false
+  },
+  "block": {
+   "title": "Block <name> on this relay for <n> hours?",
+   "body": [
+    "This relay stops serving it until <time>. Its certificate stays valid elsewhere."
+   ],
+   "button": [
+    "Block",
+    "Ask for approval"
+   ],
+   "second": true,
+   "button_single": "Block"
+  },
+  "unblock": {
+   "title": "Unblock <name>?",
+   "body": [
+    "This relay serves it again."
+   ],
+   "button": [
+    "Unblock",
+    "Ask for approval"
+   ],
+   "second": true,
+   "button_single": "Unblock"
+  },
+  "crl": {
+   "title": "Use revocation list version <v>?",
+   "body": [
+    "It revokes <n> certificates. Sessions of revoked certificates end now."
+   ],
+   "button": [
+    "Use this list"
+   ],
+   "second": false
+  },
+  "directory": {
+   "title": "Use relay directory version <v>?",
+   "body": [
+    "It lists <n> relays."
+   ],
+   "button": [
+    "Use this directory"
+   ],
+   "second": false
+  },
+  "request-revoke": {
+   "title": "Ask to revoke <name>?",
+   "body": [
+    "The root holder (Remote Spokes) or an admin in the Meeting Hub app does the revocation. Until then, you can block it on this relay."
+   ],
+   "button": [
+    "Send request"
+   ],
+   "second": false
+  },
+  "request-renew": {
+   "title": "Ask the root to renew <name>?",
+   "body": [
+    "The root holder renews it and installs the new certificate."
+   ],
+   "button": [
+    "Send request"
+   ],
+   "second": false
+  },
+  "request-seat": {
+   "title": "Ask the root for a license seat for <name>?",
+   "body": [
+    "The root holder signs a seat; the hub installs it."
+   ],
+   "button": [
+    "Send request"
+   ],
+   "second": false
+  },
+  "request-approve": {
+   "title": "Ask an admin to approve <name>'s <device>?",
+   "body": [
+    "Check code <check>. An admin approves it in the Meeting Hub app after checking the code with <name>."
+   ],
+   "button": [
+    "Send request"
+   ],
+   "second": false
+  },
+  "request-refuse": {
+   "title": "Ask an admin to refuse <name>'s <device>?",
+   "body": [
+    "Check code <check>. An admin approves it in the Meeting Hub app after checking the code with <name>."
+   ],
+   "button": [
+    "Send request"
+   ],
+   "second": false
+  },
+  "request-invite": {
+   "title": "Ask an admin to invite <name> (<email>)?",
+   "body": [
+    "An admin makes the invite in the Meeting Hub app and sends it."
+   ],
+   "button": [
+    "Send request"
+   ],
+   "second": false
+  },
+  "cancel-request": {
+   "title": "Cancel the request to <summary>?",
+   "body": [
+    "Asked by <email>. The signing side will no longer see it."
+   ],
+   "button": [
+    "Cancel request"
+   ],
+   "second": false
+  },
+  "org-set": {
+   "title": "Put <name> in <org>?",
+   "body": [
+    "<org>'s signed policy applies to them from their next connection."
+   ],
+   "button": [
+    "Put in <org>",
+    "Ask for approval"
+   ],
+   "second": true,
+   "button_single": "Put in <org>"
+  },
+  "org-move": {
+   "title": "Take <name> out of <org>?",
+   "body": [
+    "<org>'s policy stops applying to them."
+   ],
+   "button": [
+    "Ask for approval"
+   ],
+   "second": true,
+   "button_single": "Take out"
+  },
+  "bridge-off": {
+   "title": "Turn off bridges for <org>?",
+   "body": [
+    "Messages stop flowing to and from <platform list> now."
+   ],
+   "button": [
+    "Turn off"
+   ],
+   "second": false
+  },
+  "bridge-change": {
+   "title": "Change bridges for <org>?",
+   "body": [
+    "<diff>."
+   ],
+   "button": [
+    "Ask for approval"
+   ],
+   "second": true,
+   "button_single": "Change bridges"
+  },
+  "hold-place": {
+   "title": "Place a legal hold on <n> people or conversations?",
+   "body": [
+    "Their messages and files are kept past retention until the hold is released."
+   ],
+   "button": [
+    "Place hold",
+    "Ask for approval"
+   ],
+   "second": true,
+   "button_single": "Place hold"
+  },
+  "hold-release": {
+   "title": "Release the hold \"<reason>\"?",
+   "body": [
+    "Retention applies again."
+   ],
+   "button": [
+    "Release hold",
+    "Ask for approval"
+   ],
+   "second": true,
+   "button_single": "Release hold"
+  },
+  "support-answer": {
+   "title": "Answer \"<title>\"",
+   "body": [
+    "The person sees your answer in their Meeting Hub."
+   ],
+   "button": [
+    "Send answer"
+   ],
+   "second": false
+  },
+  "support-close": {
+   "title": "Close \"<title>\"?",
+   "body": [
+    "The person sees it closed. A new question starts a new ticket."
+   ],
+   "button": [
+    "Close ticket"
+   ],
+   "second": false
+  },
+  "release": {
+   "title": "Publish Lucid Meeting Hub <version>?",
+   "body": [
+    "Every Hub sees it at its next check. Minimums: Hub <hub> (now <hub now>), iPhone <ios> (now <ios now>)."
+   ],
+   "button": [
+    "Publish",
+    "Ask for approval"
+   ],
+   "second": true,
+   "button_single": "Publish"
+  },
+  "files-start": {
+   "title": "Start the download server?",
+   "body": [
+    "Invite links work while it runs."
+   ],
+   "button": [
+    "Start"
+   ],
+   "second": false
+  },
+  "audit-restart": {
+   "title": "Start a new audit chain?",
+   "body": [
+    "Export first. The new chain names the torn file so the gap is on record."
+   ],
+   "button": [
+    "Start a new chain"
+   ],
+   "second": false
+  },
+  "profile-standard": {
+   "title": "Switch this console to the Standard profile?",
+   "body": [
+    "People may then sign in with a password and an authenticator app, which can be phished, and admins no longer need an approved security key."
+   ],
+   "button": [
+    "Switch to Standard",
+    "Ask for approval"
+   ],
+   "second": true,
+   "button_single": "Switch to Standard"
+  },
+  "profile-high": {
+   "title": "Switch this console to the High profile?",
+   "body": [
+    "Everyone must then sign in with a passkey or security key, and admins and user managers with an approved security key. Sessions that do not meet this end now."
+   ],
+   "button": [
+    "Switch to High"
+   ],
+   "second": false
+  },
+  "two-person-on": {
+   "title": "Require a second admin for sensitive changes?",
+   "body": [
+    "Changes that lower security or take access away will wait for another admin's approval."
+   ],
+   "button": [
+    "Turn on"
+   ],
+   "second": false
+  },
+  "two-person-off": {
+   "title": "Stop requiring a second admin?",
+   "body": [
+    "Any one admin can then make every change alone. Another admin must approve this."
+   ],
+   "button": [
+    "Ask for approval"
+   ],
+   "note": "Always two admins, whatever the setting (R4-7); the only two-person-off dialog whose button is Ask for approval (R3-L3).",
+   "second": true,
+   "button_single": "Ask for approval"
+  },
+  "sign-in-settings": {
+   "title": "Change sign-in settings?",
+   "body": [
+    "<diff>."
+   ],
+   "button": [
+    "Save",
+    "Ask for approval"
+   ],
+   "second": true,
+   "button_single": "Save"
+  },
+  "banner": {
+   "title": "Change the sign-in banner?",
+   "body": [
+    "Everyone sees the new text before their next sign-in."
+   ],
+   "button": [
+    "Save"
+   ],
+   "second": false
+  },
+  "approve-key-model": {
+   "title": "Add <model> to the approved security keys?",
+   "body": [
+    "Once the list has entries, only listed models give admins and user managers their rights, and only with a FIPS certificate and hardware key protection in their metadata."
+   ],
+   "button": [
+    "Approve",
+    "Ask for approval"
+   ],
+   "body_standard": [
+    "Keys of this model count as approved even without a FIPS certificate in their metadata. Under the High profile that is not enough."
+   ],
+   "note": "body is the High profile's sentence; body_standard replaces it under Standard (R3-H2).",
+   "second": true,
+   "button_single": "Approve"
+  },
+  "remove-key-model": {
+   "title": "Remove <model> from the approved security keys?",
+   "body": [
+    "If the list still has entries, admins and user managers who sign in with this model have viewer rights until they add a listed key."
+   ],
+   "button": [
+    "Remove",
+    "Ask for approval"
+   ],
+   "second": true,
+   "button_single": "Remove"
+  },
+  "confirm-time": {
+   "title": "Confirm the relay's time?",
+   "body": [
+    "Relay clock: <time>. Your browser: <time>. Seat deadlines held while the time was uncertain continue from now."
+   ],
+   "button": [
+    "Confirm",
+    "Ask for approval"
+   ],
+   "second": true,
+   "button_single": "Confirm"
+  },
+  "metadata": {
+   "title": "Use security key metadata number <no>?",
+   "body": [
+    "It was published by the FIDO Alliance and is valid until <date>."
+   ],
+   "button": [
+    "Use this metadata"
+   ],
+   "second": false
+  },
+  "email": {
+   "title": "Save email settings?",
+   "body": [
+    "Mail is sent with <mode> from <from>. A test email goes to you through the new settings first; if it does not go through, nothing changes."
+   ],
+   "button": [
+    "Save"
+   ],
+   "second": false
+  },
+  "email-off": {
+   "title": "Turn email off?",
+   "body": [
+    "No invites, seat notices or security alerts will be mailed."
+   ],
+   "button": [
+    "Turn off",
+    "Ask for approval"
+   ],
+   "second": true,
+   "button_single": "Turn off"
+  },
+  "seat-request-address": {
+   "title": "Send seat requests to <address>?",
+   "body": [
+    "Requests for more Meeting Hub seats go to this address."
+   ],
+   "button": [
+    "Save"
+   ],
+   "second": false
+  },
+  "seat-pick": {
+   "title": "Pick <name> to give up a seat first?",
+   "body": [
+    "If this relay still has more people than seats on <date>, <name> loses their seat before others. Their certificate stays valid."
+   ],
+   "button": [
+    "Pick"
+   ],
+   "second": false
+  },
+  "seat-unpick": {
+   "title": "Keep <name>'s seat?",
+   "body": [
+    "<name> no longer gives up a seat first."
+   ],
+   "button": [
+    "Keep seat"
+   ],
+   "second": false
+  },
+  "seat-request": {
+   "title": "Request <n> Meeting Hub seats?",
+   "body": [
+    "A request goes to <address> with your organization, license ID, <seated> seats in use and your email."
+   ],
+   "button": [
+    "Send request"
+   ],
+   "second": false
+  },
+  "add-security-key": {
+   "title": "Add a security key?",
+   "body": [
+    "Insert your security key, then confirm with a method you already use."
+   ],
+   "button": [
+    "Add"
+   ],
+   "second": false
+  },
+  "set-password": {
+   "title": "Set a new password?",
+   "body": [
+    "You use it the next time you sign in."
+   ],
+   "button": [
+    "Save password"
+   ],
+   "second": false
+  },
+  "authenticator-app": {
+   "title": "Set up an authenticator app?",
+   "body": [
+    "Confirm first; then scan the code it shows."
+   ],
+   "button": [
+    "Continue"
+   ],
+   "second": false
+  },
+  "remove-authenticator-app": {
+   "title": "Remove your authenticator app?",
+   "body": [
+    "You can no longer use its codes here."
+   ],
+   "button": [
+    "Remove"
+   ],
+   "second": false
+  }
+ },
+ "refusals": {
+  "signin-first": {
+   "status": 401,
+   "words": [
+    "Sign in first."
+   ]
+  },
+  "signin-refused": {
+   "status": 403,
+   "words": [
+    "Those details did not sign you in."
+   ]
+  },
+  "signin-wait": {
+   "status": 429,
+   "words": [
+    "Too many tries. Try again in <n> minutes."
+   ],
+   "note": "<n> is 10 for a credential from one source and 15 for an account's lockout (3.3)"
+  },
+  "banner-needed": {
+   "status": 400,
+   "words": [
+    "Accept the notice before you sign in."
+   ]
+  },
+  "password-length": {
+   "status": 400,
+   "words": [
+    "A password here needs <min> to 128 characters."
+   ]
+  },
+  "password-weak": {
+   "status": 400,
+   "words": [
+    "Choose a different password: this one is too common or easy to guess."
+   ]
+  },
+  "password-wrong": {
+   "status": 403,
+   "words": [
+    "Your current password is not right. Nothing was changed."
+   ]
+  },
+  "totp-wrong": {
+   "status": 403,
+   "words": [
+    "That code did not work. Use the newest code from your authenticator app."
+   ]
+  },
+  "profile-high": {
+   "status": 409,
+   "words": [
+    "The High security profile does not allow this."
+   ]
+  },
+  "profile-government": {
+   "status": 409,
+   "words": [
+    "This console was set up as a government deployment. Its profile stays High."
+   ]
+  },
+  "waiting": {
+   "status": 403,
+   "words": [
+    "An admin of this console must approve you before you can sign in."
+   ]
+  },
+  "suspended": {
+   "status": 403,
+   "words": [
+    "Your access to this console is suspended. Ask another admin."
+   ]
+  },
+  "anchor-revoked": {
+   "status": 403,
+   "words": [
+    "The hub that invited this admin was revoked: ask for a new invite from a hub that is still trusted.",
+    "The device that invited this admin was revoked: ask for a new invite from a device that is still trusted."
+   ],
+   "note": "the first on a Remote Spokes relay, the second on a Meeting Hub relay"
+  },
+  "role": {
+   "status": 403,
+   "words": [
+    "Only an admin can do this.",
+    "Only an admin or user manager can do this."
+   ],
+   "note": "the second for routes of role manager"
+  },
+  "not-manageable": {
+   "status": 403,
+   "words": [
+    "A user manager can do this only for viewers and user managers."
+   ]
+  },
+  "invite-role": {
+   "status": 403,
+   "words": [
+    "A user manager can invite viewers and user managers only."
+   ]
+  },
+  "stepup-needed": {
+   "status": 401,
+   "words": [
+    "Confirm with your passkey to do this.",
+    "Confirm with your security key, passkey or code to do this."
+   ],
+   "note": "the second for an account with an authenticator app under Standard"
+  },
+  "stepup-expired": {
+   "status": 410,
+   "words": [
+    "The confirmation took too long. Try again."
+   ]
+  },
+  "stepup-failed": {
+   "status": 403,
+   "words": [
+    "Your passkey did not confirm this. Nothing was changed.",
+    "That code did not confirm this. Nothing was changed."
+   ],
+   "note": "the second for a TOTP step-up"
+  },
+  "not-eligible": {
+   "status": 403,
+   "words": [
+    "Another admin must approve this. You asked for it, or it is about you."
+   ]
+  },
+  "no-approver": {
+   "status": 409,
+   "words": [
+    "Another admin must approve this. Unsuspend or add an admin first.",
+    "Another admin must approve this. With no other admin, the person who runs this relay can do it with the relay stopped."
+   ],
+   "note": "the second for a removal or demotion with no possible approver"
+  },
+  "gone": {
+   "status": 410,
+   "words": [
+    "This is no longer waiting."
+   ]
+  },
+  "approval-exists": {
+   "status": 409,
+   "words": [
+    "This change is already waiting for approval."
+   ]
+  },
+  "request-exists": {
+   "status": 409,
+   "words": [
+    "This request is already waiting."
+   ]
+  },
+  "exists": {
+   "status": 409,
+   "words": [
+    "<email> already has access to this console."
+   ]
+  },
+  "not-waiting": {
+   "status": 409,
+   "words": [
+    "<email> is not waiting for approval."
+   ]
+  },
+  "not-relay-admin": {
+   "status": 409,
+   "words": [
+    "On a Meeting Hub relay, admins must be relay admins (relay.json admins). Add <email> there first, or invite them as a viewer."
+   ]
+  },
+  "not-device-anchored": {
+   "status": 409,
+   "words": [
+    "<email> must first join from their own device in the Meeting Hub app."
+   ]
+  },
+  "last-admin": {
+   "status": 409,
+   "words": [
+    "This would leave the console with no active admin."
+   ]
+  },
+  "last-method": {
+   "status": 409,
+   "words": [
+    "This would leave you no way to sign in. Add another method before you remove it."
+   ]
+  },
+  "passkey-limit": {
+   "status": 409,
+   "words": [
+    "You have the most passkeys and security keys allowed (10, of which 4 that need your email). Remove one first."
+   ]
+  },
+  "invite-limit": {
+   "status": 429,
+   "words": [
+    "You have made 10 invites today. Try again tomorrow.",
+    "This hub or device has asked for 3 invites today. Try again tomorrow."
+   ],
+   "note": "the second to a hub or the Hub app after 3 invites in a day from one certificate"
+  },
+  "people-limit": {
+   "status": 409,
+   "words": [
+    "This console has 50 people, the most allowed."
+   ]
+  },
+  "joiner-limit": {
+   "status": 409,
+   "words": [
+    "20 people are already waiting for approval. Approve or remove some first."
+   ]
+  },
+  "bootstrap-pinned": {
+   "status": 409,
+   "words": [
+    "This console waits for its first admin, <email>."
+   ]
+  },
+  "bad-url": {
+   "status": 400,
+   "words": [
+    "Links must start with https:// and name a host."
+   ]
+  },
+  "license-refused": {
+   "status": 400,
+   "words": [
+    "This license cannot be used here: <reason>."
+   ]
+  },
+  "license-ended": {
+   "status": 400,
+   "words": [
+    "This license has already ended. Install a current one."
+   ]
+  },
+  "license-path": {
+   "status": 409,
+   "words": [
+    "This relay reads its license from <path>. Replace that file and restart the relay."
+   ]
+  },
+  "license-needed": {
+   "status": 402,
+   "words": [
+    "This needs a license that includes <product>."
+   ]
+  },
+  "license-expired": {
+   "status": 402,
+   "words": [
+    "The license and its grace days are over. Install a new license to make this change."
+   ]
+  },
+  "license-inactive": {
+   "status": 403,
+   "words": [
+    "Your organization's Meeting Hub license is not active. Ask your admin."
+   ],
+   "status_spokes": 503,
+   "words_spokes": [
+    "Your organization's Remote Spokes license is not active. Ask your admin."
+   ],
+   "note": "every service route while service is stopped (4.10), never on the console, R42-1; 403 on Meeting Hub with meet.license-inactive, 503 on Remote Spokes with spokes.license-inactive"
+  },
+  "no-seat": {
+   "status": 403,
+   "words": [
+    "Your organization has no Meeting Hub seat for you. Ask your admin."
+   ],
+   "note": "Meeting Hub main and guest ports (4.10)"
+  },
+  "seat-protected": {
+   "status": 409,
+   "words": [
+    "<principal> is a relay admin or console admin and always keeps a seat."
+   ]
+  },
+  "not-over": {
+   "status": 409,
+   "words": [
+    "This relay is within its seats, so no one gives up a seat."
+   ]
+  },
+  "mail-off": {
+   "status": 409,
+   "words": [
+    "Email is off. Set it up in Settings, Email."
+   ]
+  },
+  "mail-secret-high": {
+   "status": 400,
+   "words": [
+    "Under the High security profile, Microsoft Graph needs a certificate, not a client secret."
+   ]
+  },
+  "mail-failed": {
+   "status": 502,
+   "words": [
+    "The mail server did not accept the message: <reason>."
+   ]
+  },
+  "mds-refused": {
+   "status": 400,
+   "words": [
+    "This metadata file cannot be used: <reason>."
+   ]
+  },
+  "break-glass-needed": {
+   "status": 409,
+   "words": [
+    "This console needs its break-glass account before it can be administered. The person who runs this relay creates it with lucid-relay console break-glass."
+   ],
+   "note": "High until the break-glass account is complete (R3-M9)"
+  },
+  "seal-provider-needed": {
+   "status": 409,
+   "words": [
+    "Under the High profile, secrets need the relay's own service account on Windows or a systemd encrypted credential set up by lucid-relay console seal-setup, and this relay has neither. Nothing was saved."
+   ]
+  },
+  "bad-mailbox": {
+   "status": 400,
+   "words": [
+    "That is not an email address this console can send to or from: <field>."
+   ]
+  },
+  "clock-disagree": {
+   "status": 409,
+   "words": [
+    "The relay's clock and your browser differ by more than 5 minutes. Fix the relay's clock first."
+   ]
+  },
+  "crl-refused": {
+   "status": 400,
+   "words": [
+    "This revocation list cannot be used: <reason>."
+   ]
+  },
+  "directory-refused": {
+   "status": 400,
+   "words": [
+    "This relay directory cannot be used: <reason>."
+   ]
+  },
+  "not-found": {
+   "status": 404,
+   "words": [
+    "There is no such <thing>."
+   ]
+  },
+  "rate": {
+   "status": 429,
+   "words": [
+    "Too many requests. Try again in <n> minutes.",
+    "Too many requests. Try again in 1 minute."
+   ],
+   "note": "<n> rounded up; the second when the wait is 60 seconds or less"
+  },
+  "source": {
+   "status": 403,
+   "words": [
+    "The Admin Console is not open to your network. Ask the person who runs this relay to add it to the console's allowed networks."
+   ]
+  },
+  "origin": {
+   "status": 403,
+   "words": [
+    "Refused: this request did not come from the console's own page."
+   ]
+  },
+  "origin-session": {
+   "status": 409,
+   "words": [
+    "This session belongs to another address. Sign in here."
+   ]
+  },
+  "stale": {
+   "status": 409,
+   "words": [
+    "Nothing was changed: <why>."
+   ]
+  },
+  "unknown-field": {
+   "status": 400,
+   "words": [
+    "Unknown field: <name>."
+   ]
+  },
+  "audit-broken": {
+   "status": 503,
+   "words": [
+    "The audit log could not be read, so changes are paused. See the Overview."
+   ]
+  },
+  "state-unreadable": {
+   "status": 503,
+   "words": [
+    "The console could not read its state; see the relay's log."
+   ]
+  },
+  "write-failed": {
+   "status": 500,
+   "words": [
+    "The console could not save its state; see the relay's log."
+   ]
+  },
+  "invalid": {
+   "status": 400,
+   "words": [
+    "A minimum version cannot be newer than a release this relay has published."
+   ],
+   "note": "otherwise the underlying function's own words, for example \"version must look like 0.92.0\""
+  }
+ },
+ "mail": {
+  "mail.footer": {
+   "subject": null,
+   "body": "\n\nThis message was sent by the Lucid Admin Console at <host>. It never asks for your password or a code."
+  },
+  "mail.invite": {
+   "subject": "Your invite to the Lucid Admin Console at <host>",
+   "body": "<inviter> invited you to the Lucid Admin Console at <host> as a viewer.\n\nSet up how you sign in here. The link works once, until <time>:\n<link>\n\nIf you did not expect this, ignore this email."
+  },
+  "mail.reset-password": {
+   "subject": "Reset your Lucid Admin Console password",
+   "body": "Someone asked to reset the password of <email> on the Lucid Admin Console at <host>.\n\nChoose a new password here. The link works once, until <time>:\n<link>\n\nYour authenticator app or passkey stays the same. If you did not ask for this, ignore this email."
+  },
+  "mail.test": {
+   "subject": "Test email from the Lucid Admin Console",
+   "body": "This is a test from the Lucid Admin Console at <host>. Email works."
+  },
+  "mail.seats-over": {
+   "subject": "Meeting Hub on <host>: <seated> people, <users> seats",
+   "body": "<seated> people use Meeting Hub on <host>, and the license covers <users>.\n\nOn <date> (day 14), the relay takes seats from <n> people: first those an admin picked, then the newest. Relay admins keep their seats, and no certificate is revoked.\n\nTo keep everyone, request more seats: <console>#/meet/seats\nTo choose who gives up a seat, use the same page."
+  },
+  "mail.seats-request": {
+   "subject": "Meeting Hub seat request, license <license id>",
+   "body": "Organization: <org>\nLicense ID: <license id>\nProduct: Meeting Hub\nSeats in the license: <users>\nSeats in use: <seated>\nSeats wanted: <wanted>\nAdmin: <name> <email>\nRelay: <host>\nSent from the Lucid Admin Console on <time>."
+  },
+  "mail.unseated": {
+   "subject": "Your Meeting Hub seat",
+   "body": "Your organization's Meeting Hub license on <host> has fewer seats than people, so your seat was taken on <date>. Meeting Hub does not work for you until a seat is free. Ask your admin.\n\nYour devices stay enrolled. When a seat frees up, you get it back without doing anything."
+  },
+  "mail.reseated": {
+   "subject": "Your Meeting Hub seat is back",
+   "body": "A Meeting Hub seat on <host> is yours again. Meeting Hub works for you now."
+  },
+  "mail.upgrade-period": {
+   "subject": "Meeting Hub on <host> needs a license by <date and time>",
+   "body": "This Meeting Hub relay was upgraded and has no license. Service stops on <date and time> unless a Meeting Hub license is installed.\n\nInstall one in the Admin Console: <console>#/meet/license"
+  },
+  "mail.license-expiring": {
+   "subject": "<product> license on <host> ends in <n> days",
+   "body": "The <product> license of this relay ends on <date> (ID <license id>). Install a new license before then, or the relay stops serving people after at most 2 grace days.\n\nInstall a license: <console>#/<section>/license"
+  },
+  "mail.license-grace": {
+   "subject": "<product> on <host>: service stops on <date and time>",
+   "body": "The <product> license of this relay ended on <date> (ID <license id>). Service stops on <date and time> unless a new license is installed.\n\nInstall a license: <console>#/<section>/license"
+  },
+  "mail.license-stopped": {
+   "subject": "<product> on <host> has stopped serving people",
+   "body": "This relay stopped serving people on <date and time> because its <product> license is not active (<why>). The Admin Console still works.\n\nInstall a license to turn service back on: <console>#/<section>/license"
+  },
+  "mail.clock-uncertain": {
+   "subject": "Meeting Hub on <host>: confirm the relay's time",
+   "body": "The relay's clock jumped or was off for more than a day on <time>, so seat deadlines are on hold. If no admin confirms the time within <n> hours, people over the license are held without service until someone does. Time the relay is stopped counts too.\n\nConfirm it here: <console>#/admins/settings/security"
+  },
+  "mail.break-glass": {
+   "subject": "Break-glass sign-in on <host>",
+   "body": "The break-glass account <email> signed in to the Lucid Admin Console at <host> on <time> from <address>.\n\nIf this was not planned, sign in now, check the audit log, and end its sessions."
+  },
+  "mail.attention": {
+   "subject": "Lucid Admin Console at <host>: something needs your attention",
+   "body": "<attention words>\n\nOpen: <console><go>\n\nYou get this because you chose it in Your account, Email me about."
+  }
+ },
+ "relay": {
+  "start.fronts-needed": "the console behind a TLS front needs --console-trusted-fronts (the front's addresses)",
+  "start.fronts-wide": "a trusted front range of <range> lets every host in it name the client; list only the front's addresses",
+  "start.first-admin-needed": "the console needs --console-first-admin <email> until its first admin signs in",
+  "start.meet.console-public-ip": "passkeys need a DNS name: set console_public to a host name",
+  "start.meet.console-public-shared": "the Admin Console needs a host name of its own: console_public may not share a host name with the relay or the guest page",
+  "start.meet.console-cert": "console_cert must be a certificate browsers trust for <host>, not one from the Meet CA",
+  "start.meet.console-sources": "set console_sources to the networks admins use, for example the VPN's range",
+  "start.meet.console-first-admin": "set console_first_admin to the relay admin who signs in first",
+  "start.console-profile": "--console-profile must be standard or high",
+  "start.meet.console-profile": "console_profile must be standard or high",
+  "license.for-meet": "this license is for Meeting Hub, not Remote Spokes",
+  "license.for-spokes": "this license is for Remote Spokes, not Meeting Hub",
+  "license.no-root": "this relay's client_ca has no root certificate",
+  "license.old-verifier": "malformed license: root must be an org root node id (n_...)",
+  "block.node": "this node is blocked on this relay by its admins",
+  "block.device": "this device is blocked on this relay by its admins",
+  "meet.console-off": "The Admin Console is turned off on this relay. Set console_port in relay.json.",
+  "meet.console-python": "The Admin Console needs the Rust relay (lucid-relay meet).",
+  "filter.unknown": "Unknown filter: <name>."
+ },
+ "labels": {
+  "manifest.name": "Lucid Admin Console",
+  "wordmark.sub": "Admin Console",
+  "nav.label": "Sections",
+  "menu": "Menu",
+  "filters": "Filters",
+  "load-more": "Load more",
+  "count": "Showing <n> of <total>",
+  "row-actions": "More actions for <name>",
+  "help.disclosure": "What is this?",
+  "skip": "Skip to content",
+  "cancel": "Cancel",
+  "go": "Go",
+  "cards.spokes": [
+   "Health",
+   "License",
+   "Hubs",
+   "Spokes",
+   "Seats",
+   "Relays and revocation"
+  ],
+  "cards.meet": [
+   "Health",
+   "License",
+   "People",
+   "Waiting approvals",
+   "Signer",
+   "Release",
+   "Push"
+  ],
+  "spokes.columns": [
+   "Name",
+   "Node",
+   "Person",
+   "Certificate ends",
+   "Last seen",
+   "State"
+  ],
+  "spokes.actions": [
+   "Block on this relay",
+   "Unblock",
+   "Ask the root to revoke",
+   "Ask the root to renew",
+   "Ask the root for a license seat",
+   "Show logs"
+  ],
+  "spokes.uploads": [
+   "Upload a revocation list",
+   "Upload a relay directory"
+  ],
+  "meet.people.columns": [
+   "Name",
+   "Email",
+   "Organization",
+   "Devices",
+   "State",
+   "Last seen"
+  ],
+  "meet.people.actions": [
+   "Block this device on this relay",
+   "Ask an admin to revoke this device",
+   "Put in an organization",
+   "Take out of <org>"
+  ],
+  "meet.people.invite": "Ask an admin to invite someone",
+  "meet.enrollments.actions": [
+   "Ask an admin to approve",
+   "Ask an admin to refuse"
+  ],
+  "meet.signer.upload": "Upload a revocation list",
+  "meet.bridges.actions": [
+   "Turn off",
+   "Change"
+  ],
+  "meet.holds.actions": [
+   "Place a hold",
+   "Release"
+  ],
+  "meet.releases.publish": "Publish a release",
+  "meet.servers.start": "Start",
+  "approvals.tabs": [
+   "Waiting for me",
+   "All"
+  ],
+  "approvals.actions": [
+   "Approve",
+   "Refuse",
+   "Cancel"
+  ],
+  "audit.actions": [
+   "Export",
+   "Check the chain"
+  ],
+  "meet.seats.columns": [
+   "Name",
+   "Principal",
+   "First device seen",
+   "Seat"
+  ],
+  "people.invite-actions": [
+   "Resend",
+   "Cancel invite"
+  ],
+  "people.reset": "Reset sign-in",
+  "settings.mds.title": "Security key metadata"
+ },
+ "clean": {
+  "unicode": "15.1.0",
+  "bidi_control": [
+   [
+    1564,
+    1564
+   ],
+   [
+    8206,
+    8207
+   ],
+   [
+    8234,
+    8238
+   ],
+   [
+    8294,
+    8297
+   ]
+  ],
+  "default_ignorable": [
+   [
+    173,
+    173
+   ],
+   [
+    847,
+    847
+   ],
+   [
+    1564,
+    1564
+   ],
+   [
+    4447,
+    4448
+   ],
+   [
+    6068,
+    6069
+   ],
+   [
+    6155,
+    6159
+   ],
+   [
+    8203,
+    8207
+   ],
+   [
+    8234,
+    8238
+   ],
+   [
+    8288,
+    8303
+   ],
+   [
+    12644,
+    12644
+   ],
+   [
+    65024,
+    65039
+   ],
+   [
+    65279,
+    65279
+   ],
+   [
+    65440,
+    65440
+   ],
+   [
+    65520,
+    65528
+   ],
+   [
+    113824,
+    113827
+   ],
+   [
+    119155,
+    119162
+   ],
+   [
+    917504,
+    921599
+   ]
+  ],
+  "controls": [
+   [
+    0,
+    31
+   ],
+   [
+    127,
+    159
+   ]
+  ],
+  "samples": [
+   {
+    "in": "Bob\u202egnp.exe",
+    "out": "Bobgnp.exe"
+   },
+   {
+    "in": "ann\u200b@acme.example",
+    "out": "ann@acme.example"
+   },
+   {
+    "in": "Line\u0000one\ttab\nnew",
+    "out": "Lineonetabnew"
+   },
+   {
+    "in": "DEL\u007f and C1\u0085\u009b",
+    "out": "DEL and C1"
+   },
+   {
+    "in": "\u2066isolated\u2069 name",
+    "out": "isolated name"
+   },
+   {
+    "in": "soft\u00adhyphen and \ufeffBOM",
+    "out": "softhyphen and BOM"
+   },
+   {
+    "in": "tag\udb40\udc41\udb40\udc7f letters",
+    "out": "tag letters"
+   },
+   {
+    "in": "variation\ufe0f selector",
+    "out": "variation selector"
+   },
+   {
+    "in": "Jos\u00e9 \u5f20\u4f1f \u0627\u0644\u0639\u0631\u0628\u064a\u0629",
+    "out": "Jos\u00e9 \u5f20\u4f1f \u0627\u0644\u0639\u0631\u0628\u064a\u0629"
+   },
+   {
+    "in": "Hangul filler\u3164 and \u115f",
+    "out": "Hangul filler and "
+   }
+  ]
+ }
+}

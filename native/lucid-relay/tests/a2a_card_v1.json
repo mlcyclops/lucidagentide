@@ -1,0 +1,3061 @@
+{
+ "org": "acme",
+ "jku": "https://console.acme.example:7443/api/orgs/acme/a2a/jwks.json",
+ "keys": [
+  {
+   "kid": "a2a-2026-11",
+   "jwk": {
+    "kty": "EC",
+    "crv": "P-256",
+    "kid": "a2a-2026-11",
+    "x": "JR_YxuSgKR54G1qN5BZPKg1owhKc_ieb0UaTKu_c-SE",
+    "y": "1otemkKd-Mq1_Y8FKlvYXb-8E98Qzh6Ph964weBzN1Q",
+    "use": "sig",
+    "alg": "ES256",
+    "nbf": 1795000000,
+    "exp": 1829000000
+   }
+  },
+  {
+   "kid": "a2a-2027-10",
+   "jwk": {
+    "kty": "EC",
+    "crv": "P-256",
+    "kid": "a2a-2027-10",
+    "x": "IUWLMO1vLZBAf3Gj5E3uPod5CRSavoVvuGXsey1oJO4",
+    "y": "MVztLM_N7XwnXlJXvs953KGK5KzSBEIXC1Np3dWwQVs",
+    "use": "sig",
+    "alg": "ES256",
+    "nbf": 1795000000,
+    "exp": 1829000000
+   }
+  }
+ ],
+ "cards": [
+  {
+   "name": "map-2.1",
+   "map": {
+    "v": 1,
+    "org": "acme",
+    "seq": 12,
+    "issuer": {
+     "url": "https://console.acme.example:7443/api/orgs/acme"
+    },
+    "connectors": [
+     {
+      "id": "k_1a2b3c4d5e6f7081",
+      "name": "conn-1",
+      "origin": "https://conn.acme.example:8445",
+      "apps": [
+       "*"
+      ],
+      "networks": [
+       "10.40.0.0/16"
+      ],
+      "stale_s": 60,
+      "state": "active"
+     }
+    ],
+    "spokes": {
+     "root": "n_0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+     "root_spki": "abababababababababababababababababababababababababababababababab",
+     "relays": [
+      "r_21",
+      "r_22"
+     ]
+    },
+    "a2a": {
+     "jwks": [
+      {
+       "kty": "EC",
+       "crv": "P-256",
+       "kid": "a2a-2026-11",
+       "x": "JR_YxuSgKR54G1qN5BZPKg1owhKc_ieb0UaTKu_c-SE",
+       "y": "1otemkKd-Mq1_Y8FKlvYXb-8E98Qzh6Ph964weBzN1Q",
+       "use": "sig",
+       "alg": "ES256",
+       "nbf": 1795000000,
+       "exp": 1829000000
+      },
+      {
+       "kty": "EC",
+       "crv": "P-256",
+       "kid": "a2a-2027-10",
+       "x": "IUWLMO1vLZBAf3Gj5E3uPod5CRSavoVvuGXsey1oJO4",
+       "y": "MVztLM_N7XwnXlJXvs953KGK5KzSBEIXC1Np3dWwQVs",
+       "use": "sig",
+       "alg": "ES256",
+       "nbf": 1795000000,
+       "exp": 1829000000
+      }
+     ],
+     "well_known": "a_7c1d2e3f4a5b6c7d",
+     "agents": [
+      {
+       "id": "a_7c1d2e3f4a5b6c7d",
+       "name": "Acme Build Agent",
+       "description": "Runs build and test tasks on Acme's Remote Spokes after a person at Acme approves each task.",
+       "version": "1.0.0",
+       "connector": "k_1a2b3c4d5e6f7081",
+       "hub": "c_9a8b7c6d5e4f3a2b",
+       "provider": {
+        "organization": "Acme Robotics",
+        "url": "https://acme.example"
+       },
+       "documentation_url": "https://acme.example/agents/build",
+       "streaming": true,
+       "push": true,
+       "skills": [
+        {
+         "id": "build-and-test",
+         "name": "Build and test",
+         "description": "Builds the named branch and runs its tests; returns the log summary and a review branch.",
+         "tags": [
+          "build",
+          "test"
+         ],
+         "examples": [
+          "Build branch release/2.3 and run the unit tests"
+         ],
+         "targets": [
+          "n_a1b2c3d4e5f60718293a4b5c6d7e8f90"
+         ],
+         "model": "anthropic/claude-sonnet-4-6",
+         "turns": "one",
+         "approve_within_s": 3600
+        }
+       ]
+      }
+     ]
+    }
+   },
+   "org": "acme",
+   "agent": "a_7c1d2e3f4a5b6c7d",
+   "dropped": [],
+   "card": {
+    "name": "Acme Build Agent",
+    "description": "Runs build and test tasks on Acme's Remote Spokes after a person at Acme approves each task.",
+    "supportedInterfaces": [
+     {
+      "url": "https://conn.acme.example:8445/api/orgs/acme/a2a/a_7c1d2e3f4a5b6c7d",
+      "protocolBinding": "HTTP+JSON",
+      "protocolVersion": "1.0"
+     }
+    ],
+    "version": "1.0.0",
+    "capabilities": {
+     "streaming": true,
+     "pushNotifications": true,
+     "extensions": [
+      {
+       "uri": "https://lucid.emertins.com/a2a/ext/spokes-task/v1",
+       "description": "Selects the skill; see the Lucid contract."
+      }
+     ]
+    },
+    "securitySchemes": {
+     "lucid-oauth": {
+      "oauth2SecurityScheme": {
+       "description": "Tokens from the org's issuer; each token is bound to the client's DPoP key (RFC 9449) or mTLS certificate (RFC 8705).",
+       "flows": {
+        "clientCredentials": {
+         "tokenUrl": "https://console.acme.example:7443/api/orgs/acme/oauth/token",
+         "scopes": {
+          "spokes.tasks.submit": "Submit tasks to this organization's Remote Spokes through this agent"
+         }
+        }
+       },
+       "oauth2MetadataUrl": "https://console.acme.example:7443/.well-known/oauth-authorization-server/api/orgs/acme"
+      }
+     }
+    },
+    "securityRequirements": [
+     {
+      "schemes": {
+       "lucid-oauth": {
+        "list": [
+         "spokes.tasks.submit"
+        ]
+       }
+      }
+     }
+    ],
+    "defaultInputModes": [
+     "text/plain"
+    ],
+    "defaultOutputModes": [
+     "text/markdown",
+     "application/json"
+    ],
+    "skills": [
+     {
+      "id": "build-and-test",
+      "name": "Build and test",
+      "description": "Builds the named branch and runs its tests; returns the log summary and a review branch.",
+      "tags": [
+       "build",
+       "test"
+      ],
+      "examples": [
+       "Build branch release/2.3 and run the unit tests"
+      ],
+      "inputModes": [
+       "text/plain"
+      ],
+      "outputModes": [
+       "text/markdown",
+       "application/json"
+      ]
+     }
+    ],
+    "provider": {
+     "organization": "Acme Robotics",
+     "url": "https://acme.example"
+    },
+    "documentationUrl": "https://acme.example/agents/build"
+   },
+   "payload": "{\"capabilities\":{\"extensions\":[{\"description\":\"Selects the skill; see the Lucid contract.\",\"uri\":\"https://lucid.emertins.com/a2a/ext/spokes-task/v1\"}],\"pushNotifications\":true,\"streaming\":true},\"defaultInputModes\":[\"text/plain\"],\"defaultOutputModes\":[\"text/markdown\",\"application/json\"],\"description\":\"Runs build and test tasks on Acme's Remote Spokes after a person at Acme approves each task.\",\"documentationUrl\":\"https://acme.example/agents/build\",\"name\":\"Acme Build Agent\",\"provider\":{\"organization\":\"Acme Robotics\",\"url\":\"https://acme.example\"},\"securityRequirements\":[{\"schemes\":{\"lucid-oauth\":{\"list\":[\"spokes.tasks.submit\"]}}}],\"securitySchemes\":{\"lucid-oauth\":{\"oauth2SecurityScheme\":{\"description\":\"Tokens from the org's issuer; each token is bound to the client's DPoP key (RFC 9449) or mTLS certificate (RFC 8705).\",\"flows\":{\"clientCredentials\":{\"scopes\":{\"spokes.tasks.submit\":\"Submit tasks to this organization's Remote Spokes through this agent\"},\"tokenUrl\":\"https://console.acme.example:7443/api/orgs/acme/oauth/token\"}},\"oauth2MetadataUrl\":\"https://console.acme.example:7443/.well-known/oauth-authorization-server/api/orgs/acme\"}}},\"skills\":[{\"description\":\"Builds the named branch and runs its tests; returns the log summary and a review branch.\",\"examples\":[\"Build branch release/2.3 and run the unit tests\"],\"id\":\"build-and-test\",\"inputModes\":[\"text/plain\"],\"name\":\"Build and test\",\"outputModes\":[\"text/markdown\",\"application/json\"],\"tags\":[\"build\",\"test\"]}],\"supportedInterfaces\":[{\"protocolBinding\":\"HTTP+JSON\",\"protocolVersion\":\"1.0\",\"url\":\"https://conn.acme.example:8445/api/orgs/acme/a2a/a_7c1d2e3f4a5b6c7d\"}],\"version\":\"1.0.0\"}",
+   "etag": "\"a50ddfada8e8bf5ddf7c3ffd3f86f74c8a31af4be6b8812392619d184172c876\"",
+   "headers": [
+    {
+     "alg": "ES256",
+     "typ": "JOSE",
+     "kid": "a2a-2026-11",
+     "jku": "https://console.acme.example:7443/api/orgs/acme/a2a/jwks.json"
+    },
+    {
+     "alg": "ES256",
+     "typ": "JOSE",
+     "kid": "a2a-2027-10",
+     "jku": "https://console.acme.example:7443/api/orgs/acme/a2a/jwks.json"
+    }
+   ],
+   "signed": {
+    "name": "Acme Build Agent",
+    "description": "Runs build and test tasks on Acme's Remote Spokes after a person at Acme approves each task.",
+    "supportedInterfaces": [
+     {
+      "url": "https://conn.acme.example:8445/api/orgs/acme/a2a/a_7c1d2e3f4a5b6c7d",
+      "protocolBinding": "HTTP+JSON",
+      "protocolVersion": "1.0"
+     }
+    ],
+    "version": "1.0.0",
+    "capabilities": {
+     "streaming": true,
+     "pushNotifications": true,
+     "extensions": [
+      {
+       "uri": "https://lucid.emertins.com/a2a/ext/spokes-task/v1",
+       "description": "Selects the skill; see the Lucid contract."
+      }
+     ]
+    },
+    "securitySchemes": {
+     "lucid-oauth": {
+      "oauth2SecurityScheme": {
+       "description": "Tokens from the org's issuer; each token is bound to the client's DPoP key (RFC 9449) or mTLS certificate (RFC 8705).",
+       "flows": {
+        "clientCredentials": {
+         "tokenUrl": "https://console.acme.example:7443/api/orgs/acme/oauth/token",
+         "scopes": {
+          "spokes.tasks.submit": "Submit tasks to this organization's Remote Spokes through this agent"
+         }
+        }
+       },
+       "oauth2MetadataUrl": "https://console.acme.example:7443/.well-known/oauth-authorization-server/api/orgs/acme"
+      }
+     }
+    },
+    "securityRequirements": [
+     {
+      "schemes": {
+       "lucid-oauth": {
+        "list": [
+         "spokes.tasks.submit"
+        ]
+       }
+      }
+     }
+    ],
+    "defaultInputModes": [
+     "text/plain"
+    ],
+    "defaultOutputModes": [
+     "text/markdown",
+     "application/json"
+    ],
+    "skills": [
+     {
+      "id": "build-and-test",
+      "name": "Build and test",
+      "description": "Builds the named branch and runs its tests; returns the log summary and a review branch.",
+      "tags": [
+       "build",
+       "test"
+      ],
+      "examples": [
+       "Build branch release/2.3 and run the unit tests"
+      ],
+      "inputModes": [
+       "text/plain"
+      ],
+      "outputModes": [
+       "text/markdown",
+       "application/json"
+      ]
+     }
+    ],
+    "provider": {
+     "organization": "Acme Robotics",
+     "url": "https://acme.example"
+    },
+    "documentationUrl": "https://acme.example/agents/build",
+    "signatures": [
+     {
+      "protected": "eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNi0xMSIsInR5cCI6IkpPU0UifQ",
+      "signature": "eqGV6qvIL8BLPyFgFqQ_Vqboh9QUP8TliFcVemSFXpdEqAVfBqc7fi1BbvyuZHya0nJWUfx-8TpI1c2MG85UUw"
+     },
+     {
+      "protected": "eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNy0xMCIsInR5cCI6IkpPU0UifQ",
+      "signature": "8aNTvvJ0dCGe-UiH54MWFU8GDrnbEUNKzAfIH9nj9PEDqARMGNvChEW-UUweJoPrBWX0-zRa1-lUNk8lkD6-zw"
+     }
+    ]
+   },
+   "served": "{\"capabilities\":{\"extensions\":[{\"description\":\"Selects the skill; see the Lucid contract.\",\"uri\":\"https://lucid.emertins.com/a2a/ext/spokes-task/v1\"}],\"pushNotifications\":true,\"streaming\":true},\"defaultInputModes\":[\"text/plain\"],\"defaultOutputModes\":[\"text/markdown\",\"application/json\"],\"description\":\"Runs build and test tasks on Acme's Remote Spokes after a person at Acme approves each task.\",\"documentationUrl\":\"https://acme.example/agents/build\",\"name\":\"Acme Build Agent\",\"provider\":{\"organization\":\"Acme Robotics\",\"url\":\"https://acme.example\"},\"securityRequirements\":[{\"schemes\":{\"lucid-oauth\":{\"list\":[\"spokes.tasks.submit\"]}}}],\"securitySchemes\":{\"lucid-oauth\":{\"oauth2SecurityScheme\":{\"description\":\"Tokens from the org's issuer; each token is bound to the client's DPoP key (RFC 9449) or mTLS certificate (RFC 8705).\",\"flows\":{\"clientCredentials\":{\"scopes\":{\"spokes.tasks.submit\":\"Submit tasks to this organization's Remote Spokes through this agent\"},\"tokenUrl\":\"https://console.acme.example:7443/api/orgs/acme/oauth/token\"}},\"oauth2MetadataUrl\":\"https://console.acme.example:7443/.well-known/oauth-authorization-server/api/orgs/acme\"}}},\"signatures\":[{\"protected\":\"eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNi0xMSIsInR5cCI6IkpPU0UifQ\",\"signature\":\"eqGV6qvIL8BLPyFgFqQ_Vqboh9QUP8TliFcVemSFXpdEqAVfBqc7fi1BbvyuZHya0nJWUfx-8TpI1c2MG85UUw\"},{\"protected\":\"eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNy0xMCIsInR5cCI6IkpPU0UifQ\",\"signature\":\"8aNTvvJ0dCGe-UiH54MWFU8GDrnbEUNKzAfIH9nj9PEDqARMGNvChEW-UUweJoPrBWX0-zRa1-lUNk8lkD6-zw\"}],\"skills\":[{\"description\":\"Builds the named branch and runs its tests; returns the log summary and a review branch.\",\"examples\":[\"Build branch release/2.3 and run the unit tests\"],\"id\":\"build-and-test\",\"inputModes\":[\"text/plain\"],\"name\":\"Build and test\",\"outputModes\":[\"text/markdown\",\"application/json\"],\"tags\":[\"build\",\"test\"]}],\"supportedInterfaces\":[{\"protocolBinding\":\"HTTP+JSON\",\"protocolVersion\":\"1.0\",\"url\":\"https://conn.acme.example:8445/api/orgs/acme/a2a/a_7c1d2e3f4a5b6c7d\"}],\"version\":\"1.0.0\"}"
+  },
+  {
+   "name": "push-false-no-provider",
+   "map": {
+    "v": 1,
+    "org": "acme",
+    "seq": 12,
+    "issuer": {
+     "url": "https://console.acme.example:7443/api/orgs/acme"
+    },
+    "connectors": [
+     {
+      "id": "k_1a2b3c4d5e6f7081",
+      "name": "conn-1",
+      "origin": "https://conn.acme.example:8445",
+      "apps": [
+       "*"
+      ],
+      "networks": [
+       "10.40.0.0/16"
+      ],
+      "stale_s": 60,
+      "state": "active"
+     }
+    ],
+    "spokes": {
+     "root": "n_0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+     "root_spki": "abababababababababababababababababababababababababababababababab",
+     "relays": [
+      "r_21",
+      "r_22"
+     ]
+    },
+    "a2a": {
+     "jwks": [
+      {
+       "kty": "EC",
+       "crv": "P-256",
+       "kid": "a2a-2026-11",
+       "x": "JR_YxuSgKR54G1qN5BZPKg1owhKc_ieb0UaTKu_c-SE",
+       "y": "1otemkKd-Mq1_Y8FKlvYXb-8E98Qzh6Ph964weBzN1Q",
+       "use": "sig",
+       "alg": "ES256",
+       "nbf": 1795000000,
+       "exp": 1829000000
+      },
+      {
+       "kty": "EC",
+       "crv": "P-256",
+       "kid": "a2a-2027-10",
+       "x": "IUWLMO1vLZBAf3Gj5E3uPod5CRSavoVvuGXsey1oJO4",
+       "y": "MVztLM_N7XwnXlJXvs953KGK5KzSBEIXC1Np3dWwQVs",
+       "use": "sig",
+       "alg": "ES256",
+       "nbf": 1795000000,
+       "exp": 1829000000
+      }
+     ],
+     "well_known": "a_7c1d2e3f4a5b6c7d",
+     "agents": [
+      {
+       "id": "a_7c1d2e3f4a5b6c7d",
+       "name": "Acme Build Agent",
+       "description": "Runs build and test tasks on Acme's Remote Spokes after a person at Acme approves each task.",
+       "version": "1.0.0",
+       "connector": "k_1a2b3c4d5e6f7081",
+       "hub": "c_9a8b7c6d5e4f3a2b",
+       "streaming": false,
+       "push": false,
+       "skills": [
+        {
+         "id": "build-and-test",
+         "name": "Build and test",
+         "description": "Builds the named branch and runs its tests; returns the log summary and a review branch.",
+         "tags": [
+          "build",
+          "test"
+         ],
+         "examples": [],
+         "targets": [
+          "n_a1b2c3d4e5f60718293a4b5c6d7e8f90"
+         ],
+         "model": "anthropic/claude-sonnet-4-6",
+         "turns": "one",
+         "approve_within_s": 3600
+        }
+       ]
+      }
+     ]
+    }
+   },
+   "org": "acme",
+   "agent": "a_7c1d2e3f4a5b6c7d",
+   "dropped": [],
+   "card": {
+    "name": "Acme Build Agent",
+    "description": "Runs build and test tasks on Acme's Remote Spokes after a person at Acme approves each task.",
+    "supportedInterfaces": [
+     {
+      "url": "https://conn.acme.example:8445/api/orgs/acme/a2a/a_7c1d2e3f4a5b6c7d",
+      "protocolBinding": "HTTP+JSON",
+      "protocolVersion": "1.0"
+     }
+    ],
+    "version": "1.0.0",
+    "capabilities": {
+     "streaming": false,
+     "pushNotifications": false,
+     "extensions": [
+      {
+       "uri": "https://lucid.emertins.com/a2a/ext/spokes-task/v1",
+       "description": "Selects the skill; see the Lucid contract."
+      }
+     ]
+    },
+    "securitySchemes": {
+     "lucid-oauth": {
+      "oauth2SecurityScheme": {
+       "description": "Tokens from the org's issuer; each token is bound to the client's DPoP key (RFC 9449) or mTLS certificate (RFC 8705).",
+       "flows": {
+        "clientCredentials": {
+         "tokenUrl": "https://console.acme.example:7443/api/orgs/acme/oauth/token",
+         "scopes": {
+          "spokes.tasks.submit": "Submit tasks to this organization's Remote Spokes through this agent"
+         }
+        }
+       },
+       "oauth2MetadataUrl": "https://console.acme.example:7443/.well-known/oauth-authorization-server/api/orgs/acme"
+      }
+     }
+    },
+    "securityRequirements": [
+     {
+      "schemes": {
+       "lucid-oauth": {
+        "list": [
+         "spokes.tasks.submit"
+        ]
+       }
+      }
+     }
+    ],
+    "defaultInputModes": [
+     "text/plain"
+    ],
+    "defaultOutputModes": [
+     "text/markdown",
+     "application/json"
+    ],
+    "skills": [
+     {
+      "id": "build-and-test",
+      "name": "Build and test",
+      "description": "Builds the named branch and runs its tests; returns the log summary and a review branch.",
+      "tags": [
+       "build",
+       "test"
+      ],
+      "inputModes": [
+       "text/plain"
+      ],
+      "outputModes": [
+       "text/markdown",
+       "application/json"
+      ]
+     }
+    ]
+   },
+   "payload": "{\"capabilities\":{\"extensions\":[{\"description\":\"Selects the skill; see the Lucid contract.\",\"uri\":\"https://lucid.emertins.com/a2a/ext/spokes-task/v1\"}],\"pushNotifications\":false,\"streaming\":false},\"defaultInputModes\":[\"text/plain\"],\"defaultOutputModes\":[\"text/markdown\",\"application/json\"],\"description\":\"Runs build and test tasks on Acme's Remote Spokes after a person at Acme approves each task.\",\"name\":\"Acme Build Agent\",\"securityRequirements\":[{\"schemes\":{\"lucid-oauth\":{\"list\":[\"spokes.tasks.submit\"]}}}],\"securitySchemes\":{\"lucid-oauth\":{\"oauth2SecurityScheme\":{\"description\":\"Tokens from the org's issuer; each token is bound to the client's DPoP key (RFC 9449) or mTLS certificate (RFC 8705).\",\"flows\":{\"clientCredentials\":{\"scopes\":{\"spokes.tasks.submit\":\"Submit tasks to this organization's Remote Spokes through this agent\"},\"tokenUrl\":\"https://console.acme.example:7443/api/orgs/acme/oauth/token\"}},\"oauth2MetadataUrl\":\"https://console.acme.example:7443/.well-known/oauth-authorization-server/api/orgs/acme\"}}},\"skills\":[{\"description\":\"Builds the named branch and runs its tests; returns the log summary and a review branch.\",\"id\":\"build-and-test\",\"inputModes\":[\"text/plain\"],\"name\":\"Build and test\",\"outputModes\":[\"text/markdown\",\"application/json\"],\"tags\":[\"build\",\"test\"]}],\"supportedInterfaces\":[{\"protocolBinding\":\"HTTP+JSON\",\"protocolVersion\":\"1.0\",\"url\":\"https://conn.acme.example:8445/api/orgs/acme/a2a/a_7c1d2e3f4a5b6c7d\"}],\"version\":\"1.0.0\"}",
+   "etag": "\"aa822549912b0cf419cc8f50c107e8f2a00ab565f56094cd2d96dc2b45b7d5ad\"",
+   "headers": [
+    {
+     "alg": "ES256",
+     "typ": "JOSE",
+     "kid": "a2a-2026-11",
+     "jku": "https://console.acme.example:7443/api/orgs/acme/a2a/jwks.json"
+    },
+    {
+     "alg": "ES256",
+     "typ": "JOSE",
+     "kid": "a2a-2027-10",
+     "jku": "https://console.acme.example:7443/api/orgs/acme/a2a/jwks.json"
+    }
+   ],
+   "signed": {
+    "name": "Acme Build Agent",
+    "description": "Runs build and test tasks on Acme's Remote Spokes after a person at Acme approves each task.",
+    "supportedInterfaces": [
+     {
+      "url": "https://conn.acme.example:8445/api/orgs/acme/a2a/a_7c1d2e3f4a5b6c7d",
+      "protocolBinding": "HTTP+JSON",
+      "protocolVersion": "1.0"
+     }
+    ],
+    "version": "1.0.0",
+    "capabilities": {
+     "streaming": false,
+     "pushNotifications": false,
+     "extensions": [
+      {
+       "uri": "https://lucid.emertins.com/a2a/ext/spokes-task/v1",
+       "description": "Selects the skill; see the Lucid contract."
+      }
+     ]
+    },
+    "securitySchemes": {
+     "lucid-oauth": {
+      "oauth2SecurityScheme": {
+       "description": "Tokens from the org's issuer; each token is bound to the client's DPoP key (RFC 9449) or mTLS certificate (RFC 8705).",
+       "flows": {
+        "clientCredentials": {
+         "tokenUrl": "https://console.acme.example:7443/api/orgs/acme/oauth/token",
+         "scopes": {
+          "spokes.tasks.submit": "Submit tasks to this organization's Remote Spokes through this agent"
+         }
+        }
+       },
+       "oauth2MetadataUrl": "https://console.acme.example:7443/.well-known/oauth-authorization-server/api/orgs/acme"
+      }
+     }
+    },
+    "securityRequirements": [
+     {
+      "schemes": {
+       "lucid-oauth": {
+        "list": [
+         "spokes.tasks.submit"
+        ]
+       }
+      }
+     }
+    ],
+    "defaultInputModes": [
+     "text/plain"
+    ],
+    "defaultOutputModes": [
+     "text/markdown",
+     "application/json"
+    ],
+    "skills": [
+     {
+      "id": "build-and-test",
+      "name": "Build and test",
+      "description": "Builds the named branch and runs its tests; returns the log summary and a review branch.",
+      "tags": [
+       "build",
+       "test"
+      ],
+      "inputModes": [
+       "text/plain"
+      ],
+      "outputModes": [
+       "text/markdown",
+       "application/json"
+      ]
+     }
+    ],
+    "signatures": [
+     {
+      "protected": "eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNi0xMSIsInR5cCI6IkpPU0UifQ",
+      "signature": "QmtoOoBjdc8Lw2QkR9028a1YC-TnPTqOEPBA8yZx1QVZOyHJTcVWkGUe2Xt5rWSrr6bGcnJxbCgybcRJ_TfsVQ"
+     },
+     {
+      "protected": "eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNy0xMCIsInR5cCI6IkpPU0UifQ",
+      "signature": "3qS-GQ-x3kNuWNwl5-jPMjmUWTRK_FQnYYAgPqvOaEZzPnWfK7xwt7nfxHSFgf-IFAOdH58zuOyUIUQCymEbBw"
+     }
+    ]
+   },
+   "served": "{\"capabilities\":{\"extensions\":[{\"description\":\"Selects the skill; see the Lucid contract.\",\"uri\":\"https://lucid.emertins.com/a2a/ext/spokes-task/v1\"}],\"pushNotifications\":false,\"streaming\":false},\"defaultInputModes\":[\"text/plain\"],\"defaultOutputModes\":[\"text/markdown\",\"application/json\"],\"description\":\"Runs build and test tasks on Acme's Remote Spokes after a person at Acme approves each task.\",\"name\":\"Acme Build Agent\",\"securityRequirements\":[{\"schemes\":{\"lucid-oauth\":{\"list\":[\"spokes.tasks.submit\"]}}}],\"securitySchemes\":{\"lucid-oauth\":{\"oauth2SecurityScheme\":{\"description\":\"Tokens from the org's issuer; each token is bound to the client's DPoP key (RFC 9449) or mTLS certificate (RFC 8705).\",\"flows\":{\"clientCredentials\":{\"scopes\":{\"spokes.tasks.submit\":\"Submit tasks to this organization's Remote Spokes through this agent\"},\"tokenUrl\":\"https://console.acme.example:7443/api/orgs/acme/oauth/token\"}},\"oauth2MetadataUrl\":\"https://console.acme.example:7443/.well-known/oauth-authorization-server/api/orgs/acme\"}}},\"signatures\":[{\"protected\":\"eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNi0xMSIsInR5cCI6IkpPU0UifQ\",\"signature\":\"QmtoOoBjdc8Lw2QkR9028a1YC-TnPTqOEPBA8yZx1QVZOyHJTcVWkGUe2Xt5rWSrr6bGcnJxbCgybcRJ_TfsVQ\"},{\"protected\":\"eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNy0xMCIsInR5cCI6IkpPU0UifQ\",\"signature\":\"3qS-GQ-x3kNuWNwl5-jPMjmUWTRK_FQnYYAgPqvOaEZzPnWfK7xwt7nfxHSFgf-IFAOdH58zuOyUIUQCymEbBw\"}],\"skills\":[{\"description\":\"Builds the named branch and runs its tests; returns the log summary and a review branch.\",\"id\":\"build-and-test\",\"inputModes\":[\"text/plain\"],\"name\":\"Build and test\",\"outputModes\":[\"text/markdown\",\"application/json\"],\"tags\":[\"build\",\"test\"]}],\"supportedInterfaces\":[{\"protocolBinding\":\"HTTP+JSON\",\"protocolVersion\":\"1.0\",\"url\":\"https://conn.acme.example:8445/api/orgs/acme/a2a/a_7c1d2e3f4a5b6c7d\"}],\"version\":\"1.0.0\"}"
+  },
+  {
+   "name": "dropped-skill",
+   "map": {
+    "v": 1,
+    "org": "acme",
+    "seq": 12,
+    "issuer": {
+     "url": "https://console.acme.example:7443/api/orgs/acme"
+    },
+    "connectors": [
+     {
+      "id": "k_1a2b3c4d5e6f7081",
+      "name": "conn-1",
+      "origin": "https://conn.acme.example:8445",
+      "apps": [
+       "*"
+      ],
+      "networks": [
+       "10.40.0.0/16"
+      ],
+      "stale_s": 60,
+      "state": "active"
+     }
+    ],
+    "spokes": {
+     "root": "n_0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+     "root_spki": "abababababababababababababababababababababababababababababababab",
+     "relays": [
+      "r_21",
+      "r_22"
+     ]
+    },
+    "a2a": {
+     "jwks": [
+      {
+       "kty": "EC",
+       "crv": "P-256",
+       "kid": "a2a-2026-11",
+       "x": "JR_YxuSgKR54G1qN5BZPKg1owhKc_ieb0UaTKu_c-SE",
+       "y": "1otemkKd-Mq1_Y8FKlvYXb-8E98Qzh6Ph964weBzN1Q",
+       "use": "sig",
+       "alg": "ES256",
+       "nbf": 1795000000,
+       "exp": 1829000000
+      },
+      {
+       "kty": "EC",
+       "crv": "P-256",
+       "kid": "a2a-2027-10",
+       "x": "IUWLMO1vLZBAf3Gj5E3uPod5CRSavoVvuGXsey1oJO4",
+       "y": "MVztLM_N7XwnXlJXvs953KGK5KzSBEIXC1Np3dWwQVs",
+       "use": "sig",
+       "alg": "ES256",
+       "nbf": 1795000000,
+       "exp": 1829000000
+      }
+     ],
+     "well_known": "a_7c1d2e3f4a5b6c7d",
+     "agents": [
+      {
+       "id": "a_7c1d2e3f4a5b6c7d",
+       "name": "Acme Build Agent",
+       "description": "Runs build and test tasks on Acme's Remote Spokes after a person at Acme approves each task.",
+       "version": "1.0.0",
+       "connector": "k_1a2b3c4d5e6f7081",
+       "hub": "c_9a8b7c6d5e4f3a2b",
+       "provider": {
+        "organization": "Acme Robotics",
+        "url": "https://acme.example"
+       },
+       "documentation_url": "https://acme.example/agents/build",
+       "streaming": true,
+       "push": true,
+       "skills": [
+        {
+         "id": "build-and-test",
+         "name": "Build and test",
+         "description": "Builds the named branch and runs its tests; returns the log summary and a review branch.",
+         "tags": [
+          "build",
+          "test"
+         ],
+         "examples": [
+          "Build branch release/2.3 and run the unit tests"
+         ],
+         "targets": [
+          "n_a1b2c3d4e5f60718293a4b5c6d7e8f90"
+         ],
+         "model": "anthropic/claude-sonnet-4-6",
+         "turns": "one",
+         "approve_within_s": 3600
+        },
+        {
+         "id": "lint",
+         "name": "Lint",
+         "description": "Runs the linters on the named branch.",
+         "tags": [
+          "lint"
+         ],
+         "examples": [],
+         "targets": [
+          "n_a1b2c3d4e5f60718293a4b5c6d7e8f90"
+         ],
+         "turns": "one",
+         "approve_within_s": 600
+        }
+       ]
+      }
+     ]
+    }
+   },
+   "org": "acme",
+   "agent": "a_7c1d2e3f4a5b6c7d",
+   "dropped": [
+    "lint"
+   ],
+   "card": {
+    "name": "Acme Build Agent",
+    "description": "Runs build and test tasks on Acme's Remote Spokes after a person at Acme approves each task.",
+    "supportedInterfaces": [
+     {
+      "url": "https://conn.acme.example:8445/api/orgs/acme/a2a/a_7c1d2e3f4a5b6c7d",
+      "protocolBinding": "HTTP+JSON",
+      "protocolVersion": "1.0"
+     }
+    ],
+    "version": "1.0.0",
+    "capabilities": {
+     "streaming": true,
+     "pushNotifications": true,
+     "extensions": [
+      {
+       "uri": "https://lucid.emertins.com/a2a/ext/spokes-task/v1",
+       "description": "Selects the skill; see the Lucid contract."
+      }
+     ]
+    },
+    "securitySchemes": {
+     "lucid-oauth": {
+      "oauth2SecurityScheme": {
+       "description": "Tokens from the org's issuer; each token is bound to the client's DPoP key (RFC 9449) or mTLS certificate (RFC 8705).",
+       "flows": {
+        "clientCredentials": {
+         "tokenUrl": "https://console.acme.example:7443/api/orgs/acme/oauth/token",
+         "scopes": {
+          "spokes.tasks.submit": "Submit tasks to this organization's Remote Spokes through this agent"
+         }
+        }
+       },
+       "oauth2MetadataUrl": "https://console.acme.example:7443/.well-known/oauth-authorization-server/api/orgs/acme"
+      }
+     }
+    },
+    "securityRequirements": [
+     {
+      "schemes": {
+       "lucid-oauth": {
+        "list": [
+         "spokes.tasks.submit"
+        ]
+       }
+      }
+     }
+    ],
+    "defaultInputModes": [
+     "text/plain"
+    ],
+    "defaultOutputModes": [
+     "text/markdown",
+     "application/json"
+    ],
+    "skills": [
+     {
+      "id": "build-and-test",
+      "name": "Build and test",
+      "description": "Builds the named branch and runs its tests; returns the log summary and a review branch.",
+      "tags": [
+       "build",
+       "test"
+      ],
+      "examples": [
+       "Build branch release/2.3 and run the unit tests"
+      ],
+      "inputModes": [
+       "text/plain"
+      ],
+      "outputModes": [
+       "text/markdown",
+       "application/json"
+      ]
+     }
+    ],
+    "provider": {
+     "organization": "Acme Robotics",
+     "url": "https://acme.example"
+    },
+    "documentationUrl": "https://acme.example/agents/build"
+   },
+   "payload": "{\"capabilities\":{\"extensions\":[{\"description\":\"Selects the skill; see the Lucid contract.\",\"uri\":\"https://lucid.emertins.com/a2a/ext/spokes-task/v1\"}],\"pushNotifications\":true,\"streaming\":true},\"defaultInputModes\":[\"text/plain\"],\"defaultOutputModes\":[\"text/markdown\",\"application/json\"],\"description\":\"Runs build and test tasks on Acme's Remote Spokes after a person at Acme approves each task.\",\"documentationUrl\":\"https://acme.example/agents/build\",\"name\":\"Acme Build Agent\",\"provider\":{\"organization\":\"Acme Robotics\",\"url\":\"https://acme.example\"},\"securityRequirements\":[{\"schemes\":{\"lucid-oauth\":{\"list\":[\"spokes.tasks.submit\"]}}}],\"securitySchemes\":{\"lucid-oauth\":{\"oauth2SecurityScheme\":{\"description\":\"Tokens from the org's issuer; each token is bound to the client's DPoP key (RFC 9449) or mTLS certificate (RFC 8705).\",\"flows\":{\"clientCredentials\":{\"scopes\":{\"spokes.tasks.submit\":\"Submit tasks to this organization's Remote Spokes through this agent\"},\"tokenUrl\":\"https://console.acme.example:7443/api/orgs/acme/oauth/token\"}},\"oauth2MetadataUrl\":\"https://console.acme.example:7443/.well-known/oauth-authorization-server/api/orgs/acme\"}}},\"skills\":[{\"description\":\"Builds the named branch and runs its tests; returns the log summary and a review branch.\",\"examples\":[\"Build branch release/2.3 and run the unit tests\"],\"id\":\"build-and-test\",\"inputModes\":[\"text/plain\"],\"name\":\"Build and test\",\"outputModes\":[\"text/markdown\",\"application/json\"],\"tags\":[\"build\",\"test\"]}],\"supportedInterfaces\":[{\"protocolBinding\":\"HTTP+JSON\",\"protocolVersion\":\"1.0\",\"url\":\"https://conn.acme.example:8445/api/orgs/acme/a2a/a_7c1d2e3f4a5b6c7d\"}],\"version\":\"1.0.0\"}",
+   "etag": "\"a50ddfada8e8bf5ddf7c3ffd3f86f74c8a31af4be6b8812392619d184172c876\"",
+   "headers": [
+    {
+     "alg": "ES256",
+     "typ": "JOSE",
+     "kid": "a2a-2026-11",
+     "jku": "https://console.acme.example:7443/api/orgs/acme/a2a/jwks.json"
+    },
+    {
+     "alg": "ES256",
+     "typ": "JOSE",
+     "kid": "a2a-2027-10",
+     "jku": "https://console.acme.example:7443/api/orgs/acme/a2a/jwks.json"
+    }
+   ],
+   "signed": {
+    "name": "Acme Build Agent",
+    "description": "Runs build and test tasks on Acme's Remote Spokes after a person at Acme approves each task.",
+    "supportedInterfaces": [
+     {
+      "url": "https://conn.acme.example:8445/api/orgs/acme/a2a/a_7c1d2e3f4a5b6c7d",
+      "protocolBinding": "HTTP+JSON",
+      "protocolVersion": "1.0"
+     }
+    ],
+    "version": "1.0.0",
+    "capabilities": {
+     "streaming": true,
+     "pushNotifications": true,
+     "extensions": [
+      {
+       "uri": "https://lucid.emertins.com/a2a/ext/spokes-task/v1",
+       "description": "Selects the skill; see the Lucid contract."
+      }
+     ]
+    },
+    "securitySchemes": {
+     "lucid-oauth": {
+      "oauth2SecurityScheme": {
+       "description": "Tokens from the org's issuer; each token is bound to the client's DPoP key (RFC 9449) or mTLS certificate (RFC 8705).",
+       "flows": {
+        "clientCredentials": {
+         "tokenUrl": "https://console.acme.example:7443/api/orgs/acme/oauth/token",
+         "scopes": {
+          "spokes.tasks.submit": "Submit tasks to this organization's Remote Spokes through this agent"
+         }
+        }
+       },
+       "oauth2MetadataUrl": "https://console.acme.example:7443/.well-known/oauth-authorization-server/api/orgs/acme"
+      }
+     }
+    },
+    "securityRequirements": [
+     {
+      "schemes": {
+       "lucid-oauth": {
+        "list": [
+         "spokes.tasks.submit"
+        ]
+       }
+      }
+     }
+    ],
+    "defaultInputModes": [
+     "text/plain"
+    ],
+    "defaultOutputModes": [
+     "text/markdown",
+     "application/json"
+    ],
+    "skills": [
+     {
+      "id": "build-and-test",
+      "name": "Build and test",
+      "description": "Builds the named branch and runs its tests; returns the log summary and a review branch.",
+      "tags": [
+       "build",
+       "test"
+      ],
+      "examples": [
+       "Build branch release/2.3 and run the unit tests"
+      ],
+      "inputModes": [
+       "text/plain"
+      ],
+      "outputModes": [
+       "text/markdown",
+       "application/json"
+      ]
+     }
+    ],
+    "provider": {
+     "organization": "Acme Robotics",
+     "url": "https://acme.example"
+    },
+    "documentationUrl": "https://acme.example/agents/build",
+    "signatures": [
+     {
+      "protected": "eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNi0xMSIsInR5cCI6IkpPU0UifQ",
+      "signature": "eqGV6qvIL8BLPyFgFqQ_Vqboh9QUP8TliFcVemSFXpdEqAVfBqc7fi1BbvyuZHya0nJWUfx-8TpI1c2MG85UUw"
+     },
+     {
+      "protected": "eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNy0xMCIsInR5cCI6IkpPU0UifQ",
+      "signature": "8aNTvvJ0dCGe-UiH54MWFU8GDrnbEUNKzAfIH9nj9PEDqARMGNvChEW-UUweJoPrBWX0-zRa1-lUNk8lkD6-zw"
+     }
+    ]
+   },
+   "served": "{\"capabilities\":{\"extensions\":[{\"description\":\"Selects the skill; see the Lucid contract.\",\"uri\":\"https://lucid.emertins.com/a2a/ext/spokes-task/v1\"}],\"pushNotifications\":true,\"streaming\":true},\"defaultInputModes\":[\"text/plain\"],\"defaultOutputModes\":[\"text/markdown\",\"application/json\"],\"description\":\"Runs build and test tasks on Acme's Remote Spokes after a person at Acme approves each task.\",\"documentationUrl\":\"https://acme.example/agents/build\",\"name\":\"Acme Build Agent\",\"provider\":{\"organization\":\"Acme Robotics\",\"url\":\"https://acme.example\"},\"securityRequirements\":[{\"schemes\":{\"lucid-oauth\":{\"list\":[\"spokes.tasks.submit\"]}}}],\"securitySchemes\":{\"lucid-oauth\":{\"oauth2SecurityScheme\":{\"description\":\"Tokens from the org's issuer; each token is bound to the client's DPoP key (RFC 9449) or mTLS certificate (RFC 8705).\",\"flows\":{\"clientCredentials\":{\"scopes\":{\"spokes.tasks.submit\":\"Submit tasks to this organization's Remote Spokes through this agent\"},\"tokenUrl\":\"https://console.acme.example:7443/api/orgs/acme/oauth/token\"}},\"oauth2MetadataUrl\":\"https://console.acme.example:7443/.well-known/oauth-authorization-server/api/orgs/acme\"}}},\"signatures\":[{\"protected\":\"eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNi0xMSIsInR5cCI6IkpPU0UifQ\",\"signature\":\"eqGV6qvIL8BLPyFgFqQ_Vqboh9QUP8TliFcVemSFXpdEqAVfBqc7fi1BbvyuZHya0nJWUfx-8TpI1c2MG85UUw\"},{\"protected\":\"eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNy0xMCIsInR5cCI6IkpPU0UifQ\",\"signature\":\"8aNTvvJ0dCGe-UiH54MWFU8GDrnbEUNKzAfIH9nj9PEDqARMGNvChEW-UUweJoPrBWX0-zRa1-lUNk8lkD6-zw\"}],\"skills\":[{\"description\":\"Builds the named branch and runs its tests; returns the log summary and a review branch.\",\"examples\":[\"Build branch release/2.3 and run the unit tests\"],\"id\":\"build-and-test\",\"inputModes\":[\"text/plain\"],\"name\":\"Build and test\",\"outputModes\":[\"text/markdown\",\"application/json\"],\"tags\":[\"build\",\"test\"]}],\"supportedInterfaces\":[{\"protocolBinding\":\"HTTP+JSON\",\"protocolVersion\":\"1.0\",\"url\":\"https://conn.acme.example:8445/api/orgs/acme/a2a/a_7c1d2e3f4a5b6c7d\"}],\"version\":\"1.0.0\"}"
+  }
+ ],
+ "verify": [
+  {
+   "name": "both-keys",
+   "card": {
+    "name": "Acme Build Agent",
+    "description": "Runs build and test tasks on Acme's Remote Spokes after a person at Acme approves each task.",
+    "supportedInterfaces": [
+     {
+      "url": "https://conn.acme.example:8445/api/orgs/acme/a2a/a_7c1d2e3f4a5b6c7d",
+      "protocolBinding": "HTTP+JSON",
+      "protocolVersion": "1.0"
+     }
+    ],
+    "version": "1.0.0",
+    "capabilities": {
+     "streaming": true,
+     "pushNotifications": true,
+     "extensions": [
+      {
+       "uri": "https://lucid.emertins.com/a2a/ext/spokes-task/v1",
+       "description": "Selects the skill; see the Lucid contract."
+      }
+     ]
+    },
+    "securitySchemes": {
+     "lucid-oauth": {
+      "oauth2SecurityScheme": {
+       "description": "Tokens from the org's issuer; each token is bound to the client's DPoP key (RFC 9449) or mTLS certificate (RFC 8705).",
+       "flows": {
+        "clientCredentials": {
+         "tokenUrl": "https://console.acme.example:7443/api/orgs/acme/oauth/token",
+         "scopes": {
+          "spokes.tasks.submit": "Submit tasks to this organization's Remote Spokes through this agent"
+         }
+        }
+       },
+       "oauth2MetadataUrl": "https://console.acme.example:7443/.well-known/oauth-authorization-server/api/orgs/acme"
+      }
+     }
+    },
+    "securityRequirements": [
+     {
+      "schemes": {
+       "lucid-oauth": {
+        "list": [
+         "spokes.tasks.submit"
+        ]
+       }
+      }
+     }
+    ],
+    "defaultInputModes": [
+     "text/plain"
+    ],
+    "defaultOutputModes": [
+     "text/markdown",
+     "application/json"
+    ],
+    "skills": [
+     {
+      "id": "build-and-test",
+      "name": "Build and test",
+      "description": "Builds the named branch and runs its tests; returns the log summary and a review branch.",
+      "tags": [
+       "build",
+       "test"
+      ],
+      "examples": [
+       "Build branch release/2.3 and run the unit tests"
+      ],
+      "inputModes": [
+       "text/plain"
+      ],
+      "outputModes": [
+       "text/markdown",
+       "application/json"
+      ]
+     }
+    ],
+    "provider": {
+     "organization": "Acme Robotics",
+     "url": "https://acme.example"
+    },
+    "documentationUrl": "https://acme.example/agents/build",
+    "signatures": [
+     {
+      "protected": "eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNi0xMSIsInR5cCI6IkpPU0UifQ",
+      "signature": "eqGV6qvIL8BLPyFgFqQ_Vqboh9QUP8TliFcVemSFXpdEqAVfBqc7fi1BbvyuZHya0nJWUfx-8TpI1c2MG85UUw"
+     },
+     {
+      "protected": "eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNy0xMCIsInR5cCI6IkpPU0UifQ",
+      "signature": "8aNTvvJ0dCGe-UiH54MWFU8GDrnbEUNKzAfIH9nj9PEDqARMGNvChEW-UUweJoPrBWX0-zRa1-lUNk8lkD6-zw"
+     }
+    ]
+   },
+   "jwks": [
+    {
+     "kty": "EC",
+     "crv": "P-256",
+     "kid": "a2a-2026-11",
+     "x": "JR_YxuSgKR54G1qN5BZPKg1owhKc_ieb0UaTKu_c-SE",
+     "y": "1otemkKd-Mq1_Y8FKlvYXb-8E98Qzh6Ph964weBzN1Q",
+     "use": "sig",
+     "alg": "ES256",
+     "nbf": 1795000000,
+     "exp": 1829000000
+    },
+    {
+     "kty": "EC",
+     "crv": "P-256",
+     "kid": "a2a-2027-10",
+     "x": "IUWLMO1vLZBAf3Gj5E3uPod5CRSavoVvuGXsey1oJO4",
+     "y": "MVztLM_N7XwnXlJXvs953KGK5KzSBEIXC1Np3dWwQVs",
+     "use": "sig",
+     "alg": "ES256",
+     "nbf": 1795000000,
+     "exp": 1829000000
+    }
+   ],
+   "kids": [
+    "a2a-2026-11",
+    "a2a-2027-10"
+   ]
+  },
+  {
+   "name": "push-false",
+   "card": {
+    "name": "Acme Build Agent",
+    "description": "Runs build and test tasks on Acme's Remote Spokes after a person at Acme approves each task.",
+    "supportedInterfaces": [
+     {
+      "url": "https://conn.acme.example:8445/api/orgs/acme/a2a/a_7c1d2e3f4a5b6c7d",
+      "protocolBinding": "HTTP+JSON",
+      "protocolVersion": "1.0"
+     }
+    ],
+    "version": "1.0.0",
+    "capabilities": {
+     "streaming": false,
+     "pushNotifications": false,
+     "extensions": [
+      {
+       "uri": "https://lucid.emertins.com/a2a/ext/spokes-task/v1",
+       "description": "Selects the skill; see the Lucid contract."
+      }
+     ]
+    },
+    "securitySchemes": {
+     "lucid-oauth": {
+      "oauth2SecurityScheme": {
+       "description": "Tokens from the org's issuer; each token is bound to the client's DPoP key (RFC 9449) or mTLS certificate (RFC 8705).",
+       "flows": {
+        "clientCredentials": {
+         "tokenUrl": "https://console.acme.example:7443/api/orgs/acme/oauth/token",
+         "scopes": {
+          "spokes.tasks.submit": "Submit tasks to this organization's Remote Spokes through this agent"
+         }
+        }
+       },
+       "oauth2MetadataUrl": "https://console.acme.example:7443/.well-known/oauth-authorization-server/api/orgs/acme"
+      }
+     }
+    },
+    "securityRequirements": [
+     {
+      "schemes": {
+       "lucid-oauth": {
+        "list": [
+         "spokes.tasks.submit"
+        ]
+       }
+      }
+     }
+    ],
+    "defaultInputModes": [
+     "text/plain"
+    ],
+    "defaultOutputModes": [
+     "text/markdown",
+     "application/json"
+    ],
+    "skills": [
+     {
+      "id": "build-and-test",
+      "name": "Build and test",
+      "description": "Builds the named branch and runs its tests; returns the log summary and a review branch.",
+      "tags": [
+       "build",
+       "test"
+      ],
+      "inputModes": [
+       "text/plain"
+      ],
+      "outputModes": [
+       "text/markdown",
+       "application/json"
+      ]
+     }
+    ],
+    "signatures": [
+     {
+      "protected": "eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNi0xMSIsInR5cCI6IkpPU0UifQ",
+      "signature": "QmtoOoBjdc8Lw2QkR9028a1YC-TnPTqOEPBA8yZx1QVZOyHJTcVWkGUe2Xt5rWSrr6bGcnJxbCgybcRJ_TfsVQ"
+     },
+     {
+      "protected": "eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNy0xMCIsInR5cCI6IkpPU0UifQ",
+      "signature": "3qS-GQ-x3kNuWNwl5-jPMjmUWTRK_FQnYYAgPqvOaEZzPnWfK7xwt7nfxHSFgf-IFAOdH58zuOyUIUQCymEbBw"
+     }
+    ]
+   },
+   "jwks": [
+    {
+     "kty": "EC",
+     "crv": "P-256",
+     "kid": "a2a-2026-11",
+     "x": "JR_YxuSgKR54G1qN5BZPKg1owhKc_ieb0UaTKu_c-SE",
+     "y": "1otemkKd-Mq1_Y8FKlvYXb-8E98Qzh6Ph964weBzN1Q",
+     "use": "sig",
+     "alg": "ES256",
+     "nbf": 1795000000,
+     "exp": 1829000000
+    },
+    {
+     "kty": "EC",
+     "crv": "P-256",
+     "kid": "a2a-2027-10",
+     "x": "IUWLMO1vLZBAf3Gj5E3uPod5CRSavoVvuGXsey1oJO4",
+     "y": "MVztLM_N7XwnXlJXvs953KGK5KzSBEIXC1Np3dWwQVs",
+     "use": "sig",
+     "alg": "ES256",
+     "nbf": 1795000000,
+     "exp": 1829000000
+    }
+   ],
+   "kids": [
+    "a2a-2026-11",
+    "a2a-2027-10"
+   ]
+  },
+  {
+   "name": "dropped-key",
+   "card": {
+    "name": "Acme Build Agent",
+    "description": "Runs build and test tasks on Acme's Remote Spokes after a person at Acme approves each task.",
+    "supportedInterfaces": [
+     {
+      "url": "https://conn.acme.example:8445/api/orgs/acme/a2a/a_7c1d2e3f4a5b6c7d",
+      "protocolBinding": "HTTP+JSON",
+      "protocolVersion": "1.0"
+     }
+    ],
+    "version": "1.0.0",
+    "capabilities": {
+     "streaming": true,
+     "pushNotifications": true,
+     "extensions": [
+      {
+       "uri": "https://lucid.emertins.com/a2a/ext/spokes-task/v1",
+       "description": "Selects the skill; see the Lucid contract."
+      }
+     ]
+    },
+    "securitySchemes": {
+     "lucid-oauth": {
+      "oauth2SecurityScheme": {
+       "description": "Tokens from the org's issuer; each token is bound to the client's DPoP key (RFC 9449) or mTLS certificate (RFC 8705).",
+       "flows": {
+        "clientCredentials": {
+         "tokenUrl": "https://console.acme.example:7443/api/orgs/acme/oauth/token",
+         "scopes": {
+          "spokes.tasks.submit": "Submit tasks to this organization's Remote Spokes through this agent"
+         }
+        }
+       },
+       "oauth2MetadataUrl": "https://console.acme.example:7443/.well-known/oauth-authorization-server/api/orgs/acme"
+      }
+     }
+    },
+    "securityRequirements": [
+     {
+      "schemes": {
+       "lucid-oauth": {
+        "list": [
+         "spokes.tasks.submit"
+        ]
+       }
+      }
+     }
+    ],
+    "defaultInputModes": [
+     "text/plain"
+    ],
+    "defaultOutputModes": [
+     "text/markdown",
+     "application/json"
+    ],
+    "skills": [
+     {
+      "id": "build-and-test",
+      "name": "Build and test",
+      "description": "Builds the named branch and runs its tests; returns the log summary and a review branch.",
+      "tags": [
+       "build",
+       "test"
+      ],
+      "examples": [
+       "Build branch release/2.3 and run the unit tests"
+      ],
+      "inputModes": [
+       "text/plain"
+      ],
+      "outputModes": [
+       "text/markdown",
+       "application/json"
+      ]
+     }
+    ],
+    "provider": {
+     "organization": "Acme Robotics",
+     "url": "https://acme.example"
+    },
+    "documentationUrl": "https://acme.example/agents/build",
+    "signatures": [
+     {
+      "protected": "eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNi0xMSIsInR5cCI6IkpPU0UifQ",
+      "signature": "eqGV6qvIL8BLPyFgFqQ_Vqboh9QUP8TliFcVemSFXpdEqAVfBqc7fi1BbvyuZHya0nJWUfx-8TpI1c2MG85UUw"
+     },
+     {
+      "protected": "eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNy0xMCIsInR5cCI6IkpPU0UifQ",
+      "signature": "8aNTvvJ0dCGe-UiH54MWFU8GDrnbEUNKzAfIH9nj9PEDqARMGNvChEW-UUweJoPrBWX0-zRa1-lUNk8lkD6-zw"
+     }
+    ]
+   },
+   "jwks": [
+    {
+     "kty": "EC",
+     "crv": "P-256",
+     "kid": "a2a-2026-11",
+     "x": "JR_YxuSgKR54G1qN5BZPKg1owhKc_ieb0UaTKu_c-SE",
+     "y": "1otemkKd-Mq1_Y8FKlvYXb-8E98Qzh6Ph964weBzN1Q",
+     "use": "sig",
+     "alg": "ES256",
+     "nbf": 1795000000,
+     "exp": 1829000000
+    }
+   ],
+   "kids": [
+    "a2a-2026-11"
+   ]
+  },
+  {
+   "name": "only-the-dropped-key",
+   "card": {
+    "name": "Acme Build Agent",
+    "description": "Runs build and test tasks on Acme's Remote Spokes after a person at Acme approves each task.",
+    "supportedInterfaces": [
+     {
+      "url": "https://conn.acme.example:8445/api/orgs/acme/a2a/a_7c1d2e3f4a5b6c7d",
+      "protocolBinding": "HTTP+JSON",
+      "protocolVersion": "1.0"
+     }
+    ],
+    "version": "1.0.0",
+    "capabilities": {
+     "streaming": true,
+     "pushNotifications": true,
+     "extensions": [
+      {
+       "uri": "https://lucid.emertins.com/a2a/ext/spokes-task/v1",
+       "description": "Selects the skill; see the Lucid contract."
+      }
+     ]
+    },
+    "securitySchemes": {
+     "lucid-oauth": {
+      "oauth2SecurityScheme": {
+       "description": "Tokens from the org's issuer; each token is bound to the client's DPoP key (RFC 9449) or mTLS certificate (RFC 8705).",
+       "flows": {
+        "clientCredentials": {
+         "tokenUrl": "https://console.acme.example:7443/api/orgs/acme/oauth/token",
+         "scopes": {
+          "spokes.tasks.submit": "Submit tasks to this organization's Remote Spokes through this agent"
+         }
+        }
+       },
+       "oauth2MetadataUrl": "https://console.acme.example:7443/.well-known/oauth-authorization-server/api/orgs/acme"
+      }
+     }
+    },
+    "securityRequirements": [
+     {
+      "schemes": {
+       "lucid-oauth": {
+        "list": [
+         "spokes.tasks.submit"
+        ]
+       }
+      }
+     }
+    ],
+    "defaultInputModes": [
+     "text/plain"
+    ],
+    "defaultOutputModes": [
+     "text/markdown",
+     "application/json"
+    ],
+    "skills": [
+     {
+      "id": "build-and-test",
+      "name": "Build and test",
+      "description": "Builds the named branch and runs its tests; returns the log summary and a review branch.",
+      "tags": [
+       "build",
+       "test"
+      ],
+      "examples": [
+       "Build branch release/2.3 and run the unit tests"
+      ],
+      "inputModes": [
+       "text/plain"
+      ],
+      "outputModes": [
+       "text/markdown",
+       "application/json"
+      ]
+     }
+    ],
+    "provider": {
+     "organization": "Acme Robotics",
+     "url": "https://acme.example"
+    },
+    "documentationUrl": "https://acme.example/agents/build",
+    "signatures": [
+     {
+      "protected": "eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNy0xMCIsInR5cCI6IkpPU0UifQ",
+      "signature": "8aNTvvJ0dCGe-UiH54MWFU8GDrnbEUNKzAfIH9nj9PEDqARMGNvChEW-UUweJoPrBWX0-zRa1-lUNk8lkD6-zw"
+     }
+    ]
+   },
+   "jwks": [
+    {
+     "kty": "EC",
+     "crv": "P-256",
+     "kid": "a2a-2026-11",
+     "x": "JR_YxuSgKR54G1qN5BZPKg1owhKc_ieb0UaTKu_c-SE",
+     "y": "1otemkKd-Mq1_Y8FKlvYXb-8E98Qzh6Ph964weBzN1Q",
+     "use": "sig",
+     "alg": "ES256",
+     "nbf": 1795000000,
+     "exp": 1829000000
+    }
+   ],
+   "kids": null
+  },
+  {
+   "name": "tampered",
+   "card": {
+    "name": "Acme Build Agent",
+    "description": "Runs build and test tasks on Acme's Remote Spokes after a person at Acme approves each task.",
+    "supportedInterfaces": [
+     {
+      "url": "https://conn.acme.example:8445/api/orgs/acme/a2a/a_7c1d2e3f4a5b6c7d",
+      "protocolBinding": "HTTP+JSON",
+      "protocolVersion": "1.0"
+     }
+    ],
+    "version": "1.0.0",
+    "capabilities": {
+     "streaming": true,
+     "pushNotifications": true,
+     "extensions": [
+      {
+       "uri": "https://lucid.emertins.com/a2a/ext/spokes-task/v1",
+       "description": "Selects the skill; see the Lucid contract."
+      }
+     ]
+    },
+    "securitySchemes": {
+     "lucid-oauth": {
+      "oauth2SecurityScheme": {
+       "description": "Tokens from the org's issuer; each token is bound to the client's DPoP key (RFC 9449) or mTLS certificate (RFC 8705).",
+       "flows": {
+        "clientCredentials": {
+         "tokenUrl": "https://console.acme.example:7443/api/orgs/acme/oauth/token",
+         "scopes": {
+          "spokes.tasks.submit": "Submit tasks to this organization's Remote Spokes through this agent"
+         }
+        }
+       },
+       "oauth2MetadataUrl": "https://console.acme.example:7443/.well-known/oauth-authorization-server/api/orgs/acme"
+      }
+     }
+    },
+    "securityRequirements": [
+     {
+      "schemes": {
+       "lucid-oauth": {
+        "list": [
+         "spokes.tasks.submit"
+        ]
+       }
+      }
+     }
+    ],
+    "defaultInputModes": [
+     "text/plain"
+    ],
+    "defaultOutputModes": [
+     "text/markdown",
+     "application/json"
+    ],
+    "skills": [
+     {
+      "id": "build-and-test",
+      "name": "Build and test",
+      "description": "Builds any branch without approval.",
+      "tags": [
+       "build",
+       "test"
+      ],
+      "examples": [
+       "Build branch release/2.3 and run the unit tests"
+      ],
+      "inputModes": [
+       "text/plain"
+      ],
+      "outputModes": [
+       "text/markdown",
+       "application/json"
+      ]
+     }
+    ],
+    "provider": {
+     "organization": "Acme Robotics",
+     "url": "https://acme.example"
+    },
+    "documentationUrl": "https://acme.example/agents/build",
+    "signatures": [
+     {
+      "protected": "eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNi0xMSIsInR5cCI6IkpPU0UifQ",
+      "signature": "eqGV6qvIL8BLPyFgFqQ_Vqboh9QUP8TliFcVemSFXpdEqAVfBqc7fi1BbvyuZHya0nJWUfx-8TpI1c2MG85UUw"
+     },
+     {
+      "protected": "eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNy0xMCIsInR5cCI6IkpPU0UifQ",
+      "signature": "8aNTvvJ0dCGe-UiH54MWFU8GDrnbEUNKzAfIH9nj9PEDqARMGNvChEW-UUweJoPrBWX0-zRa1-lUNk8lkD6-zw"
+     }
+    ]
+   },
+   "jwks": [
+    {
+     "kty": "EC",
+     "crv": "P-256",
+     "kid": "a2a-2026-11",
+     "x": "JR_YxuSgKR54G1qN5BZPKg1owhKc_ieb0UaTKu_c-SE",
+     "y": "1otemkKd-Mq1_Y8FKlvYXb-8E98Qzh6Ph964weBzN1Q",
+     "use": "sig",
+     "alg": "ES256",
+     "nbf": 1795000000,
+     "exp": 1829000000
+    },
+    {
+     "kty": "EC",
+     "crv": "P-256",
+     "kid": "a2a-2027-10",
+     "x": "IUWLMO1vLZBAf3Gj5E3uPod5CRSavoVvuGXsey1oJO4",
+     "y": "MVztLM_N7XwnXlJXvs953KGK5KzSBEIXC1Np3dWwQVs",
+     "use": "sig",
+     "alg": "ES256",
+     "nbf": 1795000000,
+     "exp": 1829000000
+    }
+   ],
+   "kids": null
+  },
+  {
+   "name": "forged-jku",
+   "card": {
+    "name": "Acme Build Agent",
+    "description": "Runs build and test tasks on Acme's Remote Spokes after a person at Acme approves each task.",
+    "supportedInterfaces": [
+     {
+      "url": "https://conn.acme.example:8445/api/orgs/acme/a2a/a_7c1d2e3f4a5b6c7d",
+      "protocolBinding": "HTTP+JSON",
+      "protocolVersion": "1.0"
+     }
+    ],
+    "version": "1.0.0",
+    "capabilities": {
+     "streaming": true,
+     "pushNotifications": true,
+     "extensions": [
+      {
+       "uri": "https://lucid.emertins.com/a2a/ext/spokes-task/v1",
+       "description": "Selects the skill; see the Lucid contract."
+      }
+     ]
+    },
+    "securitySchemes": {
+     "lucid-oauth": {
+      "oauth2SecurityScheme": {
+       "description": "Tokens from the org's issuer; each token is bound to the client's DPoP key (RFC 9449) or mTLS certificate (RFC 8705).",
+       "flows": {
+        "clientCredentials": {
+         "tokenUrl": "https://console.acme.example:7443/api/orgs/acme/oauth/token",
+         "scopes": {
+          "spokes.tasks.submit": "Submit tasks to this organization's Remote Spokes through this agent"
+         }
+        }
+       },
+       "oauth2MetadataUrl": "https://console.acme.example:7443/.well-known/oauth-authorization-server/api/orgs/acme"
+      }
+     }
+    },
+    "securityRequirements": [
+     {
+      "schemes": {
+       "lucid-oauth": {
+        "list": [
+         "spokes.tasks.submit"
+        ]
+       }
+      }
+     }
+    ],
+    "defaultInputModes": [
+     "text/plain"
+    ],
+    "defaultOutputModes": [
+     "text/markdown",
+     "application/json"
+    ],
+    "skills": [
+     {
+      "id": "build-and-test",
+      "name": "Build and test",
+      "description": "Builds the named branch and runs its tests; returns the log summary and a review branch.",
+      "tags": [
+       "build",
+       "test"
+      ],
+      "examples": [
+       "Build branch release/2.3 and run the unit tests"
+      ],
+      "inputModes": [
+       "text/plain"
+      ],
+      "outputModes": [
+       "text/markdown",
+       "application/json"
+      ]
+     }
+    ],
+    "provider": {
+     "organization": "Acme Robotics",
+     "url": "https://acme.example"
+    },
+    "documentationUrl": "https://acme.example/agents/build",
+    "signatures": [
+     {
+      "protected": "eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vZXZpbC5leGFtcGxlL2p3a3MuanNvbiIsImtpZCI6ImEyYS0yMDI2LTExIiwidHlwIjoiSk9TRSJ9",
+      "signature": "0zrkX3yXGQdpJFHY0SpMZ7kFWS0WuLv6NqOw6e5l2bE2Z5VTysEUVCgxSjsUT4UwNIg1Prl-xHzBZ9O5l6IGow"
+     }
+    ]
+   },
+   "jwks": [
+    {
+     "kty": "EC",
+     "crv": "P-256",
+     "kid": "a2a-2026-11",
+     "x": "JR_YxuSgKR54G1qN5BZPKg1owhKc_ieb0UaTKu_c-SE",
+     "y": "1otemkKd-Mq1_Y8FKlvYXb-8E98Qzh6Ph964weBzN1Q",
+     "use": "sig",
+     "alg": "ES256",
+     "nbf": 1795000000,
+     "exp": 1829000000
+    },
+    {
+     "kty": "EC",
+     "crv": "P-256",
+     "kid": "a2a-2027-10",
+     "x": "IUWLMO1vLZBAf3Gj5E3uPod5CRSavoVvuGXsey1oJO4",
+     "y": "MVztLM_N7XwnXlJXvs953KGK5KzSBEIXC1Np3dWwQVs",
+     "use": "sig",
+     "alg": "ES256",
+     "nbf": 1795000000,
+     "exp": 1829000000
+    }
+   ],
+   "kids": null
+  },
+  {
+   "name": "explicit-defaults",
+   "card": {
+    "name": "Acme Build Agent",
+    "description": "Runs build and test tasks on Acme's Remote Spokes after a person at Acme approves each task.",
+    "supportedInterfaces": [
+     {
+      "url": "https://conn.acme.example:8445/api/orgs/acme/a2a/a_7c1d2e3f4a5b6c7d",
+      "protocolBinding": "HTTP+JSON",
+      "protocolVersion": "1.0",
+      "tenant": ""
+     }
+    ],
+    "version": "1.0.0",
+    "capabilities": {
+     "streaming": true,
+     "pushNotifications": true,
+     "extensions": [
+      {
+       "uri": "https://lucid.emertins.com/a2a/ext/spokes-task/v1",
+       "description": "Selects the skill; see the Lucid contract.",
+       "required": false
+      }
+     ]
+    },
+    "securitySchemes": {
+     "lucid-oauth": {
+      "oauth2SecurityScheme": {
+       "description": "Tokens from the org's issuer; each token is bound to the client's DPoP key (RFC 9449) or mTLS certificate (RFC 8705).",
+       "flows": {
+        "clientCredentials": {
+         "tokenUrl": "https://console.acme.example:7443/api/orgs/acme/oauth/token",
+         "scopes": {
+          "spokes.tasks.submit": "Submit tasks to this organization's Remote Spokes through this agent"
+         }
+        }
+       },
+       "oauth2MetadataUrl": "https://console.acme.example:7443/.well-known/oauth-authorization-server/api/orgs/acme"
+      }
+     }
+    },
+    "securityRequirements": [
+     {
+      "schemes": {
+       "lucid-oauth": {
+        "list": [
+         "spokes.tasks.submit"
+        ]
+       }
+      }
+     }
+    ],
+    "defaultInputModes": [
+     "text/plain"
+    ],
+    "defaultOutputModes": [
+     "text/markdown",
+     "application/json"
+    ],
+    "skills": [
+     {
+      "id": "build-and-test",
+      "name": "Build and test",
+      "description": "Builds the named branch and runs its tests; returns the log summary and a review branch.",
+      "tags": [
+       "build",
+       "test"
+      ],
+      "examples": [
+       "Build branch release/2.3 and run the unit tests"
+      ],
+      "inputModes": [
+       "text/plain"
+      ],
+      "outputModes": [
+       "text/markdown",
+       "application/json"
+      ],
+      "securityRequirements": []
+     }
+    ],
+    "provider": {
+     "organization": "Acme Robotics",
+     "url": "https://acme.example"
+    },
+    "documentationUrl": "https://acme.example/agents/build",
+    "signatures": [
+     {
+      "protected": "eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNi0xMSIsInR5cCI6IkpPU0UifQ",
+      "signature": "eqGV6qvIL8BLPyFgFqQ_Vqboh9QUP8TliFcVemSFXpdEqAVfBqc7fi1BbvyuZHya0nJWUfx-8TpI1c2MG85UUw"
+     },
+     {
+      "protected": "eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNy0xMCIsInR5cCI6IkpPU0UifQ",
+      "signature": "8aNTvvJ0dCGe-UiH54MWFU8GDrnbEUNKzAfIH9nj9PEDqARMGNvChEW-UUweJoPrBWX0-zRa1-lUNk8lkD6-zw"
+     }
+    ]
+   },
+   "jwks": [
+    {
+     "kty": "EC",
+     "crv": "P-256",
+     "kid": "a2a-2026-11",
+     "x": "JR_YxuSgKR54G1qN5BZPKg1owhKc_ieb0UaTKu_c-SE",
+     "y": "1otemkKd-Mq1_Y8FKlvYXb-8E98Qzh6Ph964weBzN1Q",
+     "use": "sig",
+     "alg": "ES256",
+     "nbf": 1795000000,
+     "exp": 1829000000
+    },
+    {
+     "kty": "EC",
+     "crv": "P-256",
+     "kid": "a2a-2027-10",
+     "x": "IUWLMO1vLZBAf3Gj5E3uPod5CRSavoVvuGXsey1oJO4",
+     "y": "MVztLM_N7XwnXlJXvs953KGK5KzSBEIXC1Np3dWwQVs",
+     "use": "sig",
+     "alg": "ES256",
+     "nbf": 1795000000,
+     "exp": 1829000000
+    }
+   ],
+   "kids": [
+    "a2a-2026-11",
+    "a2a-2027-10"
+   ]
+  },
+  {
+   "name": "unsigned",
+   "card": {
+    "name": "Acme Build Agent",
+    "description": "Runs build and test tasks on Acme's Remote Spokes after a person at Acme approves each task.",
+    "supportedInterfaces": [
+     {
+      "url": "https://conn.acme.example:8445/api/orgs/acme/a2a/a_7c1d2e3f4a5b6c7d",
+      "protocolBinding": "HTTP+JSON",
+      "protocolVersion": "1.0"
+     }
+    ],
+    "version": "1.0.0",
+    "capabilities": {
+     "streaming": true,
+     "pushNotifications": true,
+     "extensions": [
+      {
+       "uri": "https://lucid.emertins.com/a2a/ext/spokes-task/v1",
+       "description": "Selects the skill; see the Lucid contract."
+      }
+     ]
+    },
+    "securitySchemes": {
+     "lucid-oauth": {
+      "oauth2SecurityScheme": {
+       "description": "Tokens from the org's issuer; each token is bound to the client's DPoP key (RFC 9449) or mTLS certificate (RFC 8705).",
+       "flows": {
+        "clientCredentials": {
+         "tokenUrl": "https://console.acme.example:7443/api/orgs/acme/oauth/token",
+         "scopes": {
+          "spokes.tasks.submit": "Submit tasks to this organization's Remote Spokes through this agent"
+         }
+        }
+       },
+       "oauth2MetadataUrl": "https://console.acme.example:7443/.well-known/oauth-authorization-server/api/orgs/acme"
+      }
+     }
+    },
+    "securityRequirements": [
+     {
+      "schemes": {
+       "lucid-oauth": {
+        "list": [
+         "spokes.tasks.submit"
+        ]
+       }
+      }
+     }
+    ],
+    "defaultInputModes": [
+     "text/plain"
+    ],
+    "defaultOutputModes": [
+     "text/markdown",
+     "application/json"
+    ],
+    "skills": [
+     {
+      "id": "build-and-test",
+      "name": "Build and test",
+      "description": "Builds the named branch and runs its tests; returns the log summary and a review branch.",
+      "tags": [
+       "build",
+       "test"
+      ],
+      "examples": [
+       "Build branch release/2.3 and run the unit tests"
+      ],
+      "inputModes": [
+       "text/plain"
+      ],
+      "outputModes": [
+       "text/markdown",
+       "application/json"
+      ]
+     }
+    ],
+    "provider": {
+     "organization": "Acme Robotics",
+     "url": "https://acme.example"
+    },
+    "documentationUrl": "https://acme.example/agents/build"
+   },
+   "jwks": [
+    {
+     "kty": "EC",
+     "crv": "P-256",
+     "kid": "a2a-2026-11",
+     "x": "JR_YxuSgKR54G1qN5BZPKg1owhKc_ieb0UaTKu_c-SE",
+     "y": "1otemkKd-Mq1_Y8FKlvYXb-8E98Qzh6Ph964weBzN1Q",
+     "use": "sig",
+     "alg": "ES256",
+     "nbf": 1795000000,
+     "exp": 1829000000
+    },
+    {
+     "kty": "EC",
+     "crv": "P-256",
+     "kid": "a2a-2027-10",
+     "x": "IUWLMO1vLZBAf3Gj5E3uPod5CRSavoVvuGXsey1oJO4",
+     "y": "MVztLM_N7XwnXlJXvs953KGK5KzSBEIXC1Np3dWwQVs",
+     "use": "sig",
+     "alg": "ES256",
+     "nbf": 1795000000,
+     "exp": 1829000000
+    }
+   ],
+   "kids": null
+  },
+  {
+   "name": "resigned-same-header",
+   "card": {
+    "name": "Acme Build Agent",
+    "description": "Runs build and test tasks on Acme's Remote Spokes after a person at Acme approves each task.",
+    "supportedInterfaces": [
+     {
+      "url": "https://conn.acme.example:8445/api/orgs/acme/a2a/a_7c1d2e3f4a5b6c7d",
+      "protocolBinding": "HTTP+JSON",
+      "protocolVersion": "1.0"
+     }
+    ],
+    "version": "1.0.0",
+    "capabilities": {
+     "streaming": true,
+     "pushNotifications": true,
+     "extensions": [
+      {
+       "uri": "https://lucid.emertins.com/a2a/ext/spokes-task/v1",
+       "description": "Selects the skill; see the Lucid contract."
+      }
+     ]
+    },
+    "securitySchemes": {
+     "lucid-oauth": {
+      "oauth2SecurityScheme": {
+       "description": "Tokens from the org's issuer; each token is bound to the client's DPoP key (RFC 9449) or mTLS certificate (RFC 8705).",
+       "flows": {
+        "clientCredentials": {
+         "tokenUrl": "https://console.acme.example:7443/api/orgs/acme/oauth/token",
+         "scopes": {
+          "spokes.tasks.submit": "Submit tasks to this organization's Remote Spokes through this agent"
+         }
+        }
+       },
+       "oauth2MetadataUrl": "https://console.acme.example:7443/.well-known/oauth-authorization-server/api/orgs/acme"
+      }
+     }
+    },
+    "securityRequirements": [
+     {
+      "schemes": {
+       "lucid-oauth": {
+        "list": [
+         "spokes.tasks.submit"
+        ]
+       }
+      }
+     }
+    ],
+    "defaultInputModes": [
+     "text/plain"
+    ],
+    "defaultOutputModes": [
+     "text/markdown",
+     "application/json"
+    ],
+    "skills": [
+     {
+      "id": "build-and-test",
+      "name": "Build and test",
+      "description": "Builds the named branch and runs its tests; returns the log summary and a review branch.",
+      "tags": [
+       "build",
+       "test"
+      ],
+      "examples": [
+       "Build branch release/2.3 and run the unit tests"
+      ],
+      "inputModes": [
+       "text/plain"
+      ],
+      "outputModes": [
+       "text/markdown",
+       "application/json"
+      ]
+     }
+    ],
+    "provider": {
+     "organization": "Acme Robotics",
+     "url": "https://acme.example"
+    },
+    "documentationUrl": "https://acme.example/agents/build",
+    "signatures": [
+     {
+      "protected": "eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNi0xMSIsInR5cCI6IkpPU0UifQ",
+      "signature": "eqGV6qvIL8BLPyFgFqQ_Vqboh9QUP8TliFcVemSFXpdEqAVfBqc7fi1BbvyuZHya0nJWUfx-8TpI1c2MG85UUw"
+     },
+     {
+      "protected": "eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNy0xMCIsInR5cCI6IkpPU0UifQ",
+      "signature": "8aNTvvJ0dCGe-UiH54MWFU8GDrnbEUNKzAfIH9nj9PEDqARMGNvChEW-UUweJoPrBWX0-zRa1-lUNk8lkD6-zw"
+     }
+    ]
+   },
+   "jwks": [
+    {
+     "kty": "EC",
+     "crv": "P-256",
+     "kid": "a2a-2026-11",
+     "x": "JR_YxuSgKR54G1qN5BZPKg1owhKc_ieb0UaTKu_c-SE",
+     "y": "1otemkKd-Mq1_Y8FKlvYXb-8E98Qzh6Ph964weBzN1Q",
+     "use": "sig",
+     "alg": "ES256",
+     "nbf": 1795000000,
+     "exp": 1829000000
+    },
+    {
+     "kty": "EC",
+     "crv": "P-256",
+     "kid": "a2a-2027-10",
+     "x": "IUWLMO1vLZBAf3Gj5E3uPod5CRSavoVvuGXsey1oJO4",
+     "y": "MVztLM_N7XwnXlJXvs953KGK5KzSBEIXC1Np3dWwQVs",
+     "use": "sig",
+     "alg": "ES256",
+     "nbf": 1795000000,
+     "exp": 1829000000
+    }
+   ],
+   "kids": [
+    "a2a-2026-11",
+    "a2a-2027-10"
+   ]
+  },
+  {
+   "name": "typ-jwt",
+   "card": {
+    "name": "Acme Build Agent",
+    "description": "Runs build and test tasks on Acme's Remote Spokes after a person at Acme approves each task.",
+    "supportedInterfaces": [
+     {
+      "url": "https://conn.acme.example:8445/api/orgs/acme/a2a/a_7c1d2e3f4a5b6c7d",
+      "protocolBinding": "HTTP+JSON",
+      "protocolVersion": "1.0"
+     }
+    ],
+    "version": "1.0.0",
+    "capabilities": {
+     "streaming": true,
+     "pushNotifications": true,
+     "extensions": [
+      {
+       "uri": "https://lucid.emertins.com/a2a/ext/spokes-task/v1",
+       "description": "Selects the skill; see the Lucid contract."
+      }
+     ]
+    },
+    "securitySchemes": {
+     "lucid-oauth": {
+      "oauth2SecurityScheme": {
+       "description": "Tokens from the org's issuer; each token is bound to the client's DPoP key (RFC 9449) or mTLS certificate (RFC 8705).",
+       "flows": {
+        "clientCredentials": {
+         "tokenUrl": "https://console.acme.example:7443/api/orgs/acme/oauth/token",
+         "scopes": {
+          "spokes.tasks.submit": "Submit tasks to this organization's Remote Spokes through this agent"
+         }
+        }
+       },
+       "oauth2MetadataUrl": "https://console.acme.example:7443/.well-known/oauth-authorization-server/api/orgs/acme"
+      }
+     }
+    },
+    "securityRequirements": [
+     {
+      "schemes": {
+       "lucid-oauth": {
+        "list": [
+         "spokes.tasks.submit"
+        ]
+       }
+      }
+     }
+    ],
+    "defaultInputModes": [
+     "text/plain"
+    ],
+    "defaultOutputModes": [
+     "text/markdown",
+     "application/json"
+    ],
+    "skills": [
+     {
+      "id": "build-and-test",
+      "name": "Build and test",
+      "description": "Builds the named branch and runs its tests; returns the log summary and a review branch.",
+      "tags": [
+       "build",
+       "test"
+      ],
+      "examples": [
+       "Build branch release/2.3 and run the unit tests"
+      ],
+      "inputModes": [
+       "text/plain"
+      ],
+      "outputModes": [
+       "text/markdown",
+       "application/json"
+      ]
+     }
+    ],
+    "provider": {
+     "organization": "Acme Robotics",
+     "url": "https://acme.example"
+    },
+    "documentationUrl": "https://acme.example/agents/build",
+    "signatures": [
+     {
+      "protected": "eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNi0xMSIsInR5cCI6IkpPU0UifQ",
+      "signature": "eqGV6qvIL8BLPyFgFqQ_Vqboh9QUP8TliFcVemSFXpdEqAVfBqc7fi1BbvyuZHya0nJWUfx-8TpI1c2MG85UUw"
+     },
+     {
+      "protected": "eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNy0xMCIsInR5cCI6IkpXVCJ9",
+      "signature": "YzXxbEA_OGnd-UOONptnQL4wkS0FwPKw3MpnaQwcJRKfQs5MFsj2YQFbxdvQaG1djL1YyomwYeDmkyFoXjKSDQ"
+     }
+    ]
+   },
+   "jwks": [
+    {
+     "kty": "EC",
+     "crv": "P-256",
+     "kid": "a2a-2026-11",
+     "x": "JR_YxuSgKR54G1qN5BZPKg1owhKc_ieb0UaTKu_c-SE",
+     "y": "1otemkKd-Mq1_Y8FKlvYXb-8E98Qzh6Ph964weBzN1Q",
+     "use": "sig",
+     "alg": "ES256",
+     "nbf": 1795000000,
+     "exp": 1829000000
+    },
+    {
+     "kty": "EC",
+     "crv": "P-256",
+     "kid": "a2a-2027-10",
+     "x": "IUWLMO1vLZBAf3Gj5E3uPod5CRSavoVvuGXsey1oJO4",
+     "y": "MVztLM_N7XwnXlJXvs953KGK5KzSBEIXC1Np3dWwQVs",
+     "use": "sig",
+     "alg": "ES256",
+     "nbf": 1795000000,
+     "exp": 1829000000
+    }
+   ],
+   "kids": null
+  },
+  {
+   "name": "no-typ",
+   "card": {
+    "name": "Acme Build Agent",
+    "description": "Runs build and test tasks on Acme's Remote Spokes after a person at Acme approves each task.",
+    "supportedInterfaces": [
+     {
+      "url": "https://conn.acme.example:8445/api/orgs/acme/a2a/a_7c1d2e3f4a5b6c7d",
+      "protocolBinding": "HTTP+JSON",
+      "protocolVersion": "1.0"
+     }
+    ],
+    "version": "1.0.0",
+    "capabilities": {
+     "streaming": true,
+     "pushNotifications": true,
+     "extensions": [
+      {
+       "uri": "https://lucid.emertins.com/a2a/ext/spokes-task/v1",
+       "description": "Selects the skill; see the Lucid contract."
+      }
+     ]
+    },
+    "securitySchemes": {
+     "lucid-oauth": {
+      "oauth2SecurityScheme": {
+       "description": "Tokens from the org's issuer; each token is bound to the client's DPoP key (RFC 9449) or mTLS certificate (RFC 8705).",
+       "flows": {
+        "clientCredentials": {
+         "tokenUrl": "https://console.acme.example:7443/api/orgs/acme/oauth/token",
+         "scopes": {
+          "spokes.tasks.submit": "Submit tasks to this organization's Remote Spokes through this agent"
+         }
+        }
+       },
+       "oauth2MetadataUrl": "https://console.acme.example:7443/.well-known/oauth-authorization-server/api/orgs/acme"
+      }
+     }
+    },
+    "securityRequirements": [
+     {
+      "schemes": {
+       "lucid-oauth": {
+        "list": [
+         "spokes.tasks.submit"
+        ]
+       }
+      }
+     }
+    ],
+    "defaultInputModes": [
+     "text/plain"
+    ],
+    "defaultOutputModes": [
+     "text/markdown",
+     "application/json"
+    ],
+    "skills": [
+     {
+      "id": "build-and-test",
+      "name": "Build and test",
+      "description": "Builds the named branch and runs its tests; returns the log summary and a review branch.",
+      "tags": [
+       "build",
+       "test"
+      ],
+      "examples": [
+       "Build branch release/2.3 and run the unit tests"
+      ],
+      "inputModes": [
+       "text/plain"
+      ],
+      "outputModes": [
+       "text/markdown",
+       "application/json"
+      ]
+     }
+    ],
+    "provider": {
+     "organization": "Acme Robotics",
+     "url": "https://acme.example"
+    },
+    "documentationUrl": "https://acme.example/agents/build",
+    "signatures": [
+     {
+      "protected": "eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNi0xMSIsInR5cCI6IkpPU0UifQ",
+      "signature": "eqGV6qvIL8BLPyFgFqQ_Vqboh9QUP8TliFcVemSFXpdEqAVfBqc7fi1BbvyuZHya0nJWUfx-8TpI1c2MG85UUw"
+     },
+     {
+      "protected": "eyJhbGciOiJFUzI1NiIsImtpZCI6ImEyYS0yMDI3LTEwIn0",
+      "signature": "eOIWTSTu2vAhUsxVFfkymF0yBmE-KB8cGFXYl9Z1JI_o0ao027OvRvNOIJI2Y3us_bbMx0K6VkFJmZOC8Ut_cw"
+     }
+    ]
+   },
+   "jwks": [
+    {
+     "kty": "EC",
+     "crv": "P-256",
+     "kid": "a2a-2026-11",
+     "x": "JR_YxuSgKR54G1qN5BZPKg1owhKc_ieb0UaTKu_c-SE",
+     "y": "1otemkKd-Mq1_Y8FKlvYXb-8E98Qzh6Ph964weBzN1Q",
+     "use": "sig",
+     "alg": "ES256",
+     "nbf": 1795000000,
+     "exp": 1829000000
+    },
+    {
+     "kty": "EC",
+     "crv": "P-256",
+     "kid": "a2a-2027-10",
+     "x": "IUWLMO1vLZBAf3Gj5E3uPod5CRSavoVvuGXsey1oJO4",
+     "y": "MVztLM_N7XwnXlJXvs953KGK5KzSBEIXC1Np3dWwQVs",
+     "use": "sig",
+     "alg": "ES256",
+     "nbf": 1795000000,
+     "exp": 1829000000
+    }
+   ],
+   "kids": null
+  },
+  {
+   "name": "alg-es384",
+   "card": {
+    "name": "Acme Build Agent",
+    "description": "Runs build and test tasks on Acme's Remote Spokes after a person at Acme approves each task.",
+    "supportedInterfaces": [
+     {
+      "url": "https://conn.acme.example:8445/api/orgs/acme/a2a/a_7c1d2e3f4a5b6c7d",
+      "protocolBinding": "HTTP+JSON",
+      "protocolVersion": "1.0"
+     }
+    ],
+    "version": "1.0.0",
+    "capabilities": {
+     "streaming": true,
+     "pushNotifications": true,
+     "extensions": [
+      {
+       "uri": "https://lucid.emertins.com/a2a/ext/spokes-task/v1",
+       "description": "Selects the skill; see the Lucid contract."
+      }
+     ]
+    },
+    "securitySchemes": {
+     "lucid-oauth": {
+      "oauth2SecurityScheme": {
+       "description": "Tokens from the org's issuer; each token is bound to the client's DPoP key (RFC 9449) or mTLS certificate (RFC 8705).",
+       "flows": {
+        "clientCredentials": {
+         "tokenUrl": "https://console.acme.example:7443/api/orgs/acme/oauth/token",
+         "scopes": {
+          "spokes.tasks.submit": "Submit tasks to this organization's Remote Spokes through this agent"
+         }
+        }
+       },
+       "oauth2MetadataUrl": "https://console.acme.example:7443/.well-known/oauth-authorization-server/api/orgs/acme"
+      }
+     }
+    },
+    "securityRequirements": [
+     {
+      "schemes": {
+       "lucid-oauth": {
+        "list": [
+         "spokes.tasks.submit"
+        ]
+       }
+      }
+     }
+    ],
+    "defaultInputModes": [
+     "text/plain"
+    ],
+    "defaultOutputModes": [
+     "text/markdown",
+     "application/json"
+    ],
+    "skills": [
+     {
+      "id": "build-and-test",
+      "name": "Build and test",
+      "description": "Builds the named branch and runs its tests; returns the log summary and a review branch.",
+      "tags": [
+       "build",
+       "test"
+      ],
+      "examples": [
+       "Build branch release/2.3 and run the unit tests"
+      ],
+      "inputModes": [
+       "text/plain"
+      ],
+      "outputModes": [
+       "text/markdown",
+       "application/json"
+      ]
+     }
+    ],
+    "provider": {
+     "organization": "Acme Robotics",
+     "url": "https://acme.example"
+    },
+    "documentationUrl": "https://acme.example/agents/build",
+    "signatures": [
+     {
+      "protected": "eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNi0xMSIsInR5cCI6IkpPU0UifQ",
+      "signature": "eqGV6qvIL8BLPyFgFqQ_Vqboh9QUP8TliFcVemSFXpdEqAVfBqc7fi1BbvyuZHya0nJWUfx-8TpI1c2MG85UUw"
+     },
+     {
+      "protected": "eyJhbGciOiJFUzM4NCIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNy0xMCIsInR5cCI6IkpPU0UifQ",
+      "signature": "PMAq6r2cp9AHjo5yQgkz0Rmu-qvBr9yrWqt0hfGlzPu-lpTNmtJyU8YOhzVLV53gC2S5_dGj9M2b8mCXWhL7HA"
+     }
+    ]
+   },
+   "jwks": [
+    {
+     "kty": "EC",
+     "crv": "P-256",
+     "kid": "a2a-2026-11",
+     "x": "JR_YxuSgKR54G1qN5BZPKg1owhKc_ieb0UaTKu_c-SE",
+     "y": "1otemkKd-Mq1_Y8FKlvYXb-8E98Qzh6Ph964weBzN1Q",
+     "use": "sig",
+     "alg": "ES256",
+     "nbf": 1795000000,
+     "exp": 1829000000
+    },
+    {
+     "kty": "EC",
+     "crv": "P-256",
+     "kid": "a2a-2027-10",
+     "x": "IUWLMO1vLZBAf3Gj5E3uPod5CRSavoVvuGXsey1oJO4",
+     "y": "MVztLM_N7XwnXlJXvs953KGK5KzSBEIXC1Np3dWwQVs",
+     "use": "sig",
+     "alg": "ES256",
+     "nbf": 1795000000,
+     "exp": 1829000000
+    }
+   ],
+   "kids": null
+  },
+  {
+   "name": "crit",
+   "card": {
+    "name": "Acme Build Agent",
+    "description": "Runs build and test tasks on Acme's Remote Spokes after a person at Acme approves each task.",
+    "supportedInterfaces": [
+     {
+      "url": "https://conn.acme.example:8445/api/orgs/acme/a2a/a_7c1d2e3f4a5b6c7d",
+      "protocolBinding": "HTTP+JSON",
+      "protocolVersion": "1.0"
+     }
+    ],
+    "version": "1.0.0",
+    "capabilities": {
+     "streaming": true,
+     "pushNotifications": true,
+     "extensions": [
+      {
+       "uri": "https://lucid.emertins.com/a2a/ext/spokes-task/v1",
+       "description": "Selects the skill; see the Lucid contract."
+      }
+     ]
+    },
+    "securitySchemes": {
+     "lucid-oauth": {
+      "oauth2SecurityScheme": {
+       "description": "Tokens from the org's issuer; each token is bound to the client's DPoP key (RFC 9449) or mTLS certificate (RFC 8705).",
+       "flows": {
+        "clientCredentials": {
+         "tokenUrl": "https://console.acme.example:7443/api/orgs/acme/oauth/token",
+         "scopes": {
+          "spokes.tasks.submit": "Submit tasks to this organization's Remote Spokes through this agent"
+         }
+        }
+       },
+       "oauth2MetadataUrl": "https://console.acme.example:7443/.well-known/oauth-authorization-server/api/orgs/acme"
+      }
+     }
+    },
+    "securityRequirements": [
+     {
+      "schemes": {
+       "lucid-oauth": {
+        "list": [
+         "spokes.tasks.submit"
+        ]
+       }
+      }
+     }
+    ],
+    "defaultInputModes": [
+     "text/plain"
+    ],
+    "defaultOutputModes": [
+     "text/markdown",
+     "application/json"
+    ],
+    "skills": [
+     {
+      "id": "build-and-test",
+      "name": "Build and test",
+      "description": "Builds the named branch and runs its tests; returns the log summary and a review branch.",
+      "tags": [
+       "build",
+       "test"
+      ],
+      "examples": [
+       "Build branch release/2.3 and run the unit tests"
+      ],
+      "inputModes": [
+       "text/plain"
+      ],
+      "outputModes": [
+       "text/markdown",
+       "application/json"
+      ]
+     }
+    ],
+    "provider": {
+     "organization": "Acme Robotics",
+     "url": "https://acme.example"
+    },
+    "documentationUrl": "https://acme.example/agents/build",
+    "signatures": [
+     {
+      "protected": "eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNi0xMSIsInR5cCI6IkpPU0UifQ",
+      "signature": "eqGV6qvIL8BLPyFgFqQ_Vqboh9QUP8TliFcVemSFXpdEqAVfBqc7fi1BbvyuZHya0nJWUfx-8TpI1c2MG85UUw"
+     },
+     {
+      "protected": "eyJhbGciOiJFUzI1NiIsImNyaXQiOlsieCJdLCJqa3UiOiJodHRwczovL2NvbnNvbGUuYWNtZS5leGFtcGxlOjc0NDMvYXBpL29yZ3MvYWNtZS9hMmEvandrcy5qc29uIiwia2lkIjoiYTJhLTIwMjctMTAiLCJ0eXAiOiJKT1NFIn0",
+      "signature": "rEKy66L87QeIoi_nT8Fm9D5UPi6ICfxmqgPCwkwx5rKdcGRjt6Ag_S8bDwqCP3U7Y8aIoFwUc6NVux6RH8KkCA"
+     }
+    ]
+   },
+   "jwks": [
+    {
+     "kty": "EC",
+     "crv": "P-256",
+     "kid": "a2a-2026-11",
+     "x": "JR_YxuSgKR54G1qN5BZPKg1owhKc_ieb0UaTKu_c-SE",
+     "y": "1otemkKd-Mq1_Y8FKlvYXb-8E98Qzh6Ph964weBzN1Q",
+     "use": "sig",
+     "alg": "ES256",
+     "nbf": 1795000000,
+     "exp": 1829000000
+    },
+    {
+     "kty": "EC",
+     "crv": "P-256",
+     "kid": "a2a-2027-10",
+     "x": "IUWLMO1vLZBAf3Gj5E3uPod5CRSavoVvuGXsey1oJO4",
+     "y": "MVztLM_N7XwnXlJXvs953KGK5KzSBEIXC1Np3dWwQVs",
+     "use": "sig",
+     "alg": "ES256",
+     "nbf": 1795000000,
+     "exp": 1829000000
+    }
+   ],
+   "kids": null
+  },
+  {
+   "name": "kid-twice",
+   "card": {
+    "name": "Acme Build Agent",
+    "description": "Runs build and test tasks on Acme's Remote Spokes after a person at Acme approves each task.",
+    "supportedInterfaces": [
+     {
+      "url": "https://conn.acme.example:8445/api/orgs/acme/a2a/a_7c1d2e3f4a5b6c7d",
+      "protocolBinding": "HTTP+JSON",
+      "protocolVersion": "1.0"
+     }
+    ],
+    "version": "1.0.0",
+    "capabilities": {
+     "streaming": true,
+     "pushNotifications": true,
+     "extensions": [
+      {
+       "uri": "https://lucid.emertins.com/a2a/ext/spokes-task/v1",
+       "description": "Selects the skill; see the Lucid contract."
+      }
+     ]
+    },
+    "securitySchemes": {
+     "lucid-oauth": {
+      "oauth2SecurityScheme": {
+       "description": "Tokens from the org's issuer; each token is bound to the client's DPoP key (RFC 9449) or mTLS certificate (RFC 8705).",
+       "flows": {
+        "clientCredentials": {
+         "tokenUrl": "https://console.acme.example:7443/api/orgs/acme/oauth/token",
+         "scopes": {
+          "spokes.tasks.submit": "Submit tasks to this organization's Remote Spokes through this agent"
+         }
+        }
+       },
+       "oauth2MetadataUrl": "https://console.acme.example:7443/.well-known/oauth-authorization-server/api/orgs/acme"
+      }
+     }
+    },
+    "securityRequirements": [
+     {
+      "schemes": {
+       "lucid-oauth": {
+        "list": [
+         "spokes.tasks.submit"
+        ]
+       }
+      }
+     }
+    ],
+    "defaultInputModes": [
+     "text/plain"
+    ],
+    "defaultOutputModes": [
+     "text/markdown",
+     "application/json"
+    ],
+    "skills": [
+     {
+      "id": "build-and-test",
+      "name": "Build and test",
+      "description": "Builds the named branch and runs its tests; returns the log summary and a review branch.",
+      "tags": [
+       "build",
+       "test"
+      ],
+      "examples": [
+       "Build branch release/2.3 and run the unit tests"
+      ],
+      "inputModes": [
+       "text/plain"
+      ],
+      "outputModes": [
+       "text/markdown",
+       "application/json"
+      ]
+     }
+    ],
+    "provider": {
+     "organization": "Acme Robotics",
+     "url": "https://acme.example"
+    },
+    "documentationUrl": "https://acme.example/agents/build",
+    "signatures": [
+     {
+      "protected": "eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNi0xMSIsInR5cCI6IkpPU0UifQ",
+      "signature": "eqGV6qvIL8BLPyFgFqQ_Vqboh9QUP8TliFcVemSFXpdEqAVfBqc7fi1BbvyuZHya0nJWUfx-8TpI1c2MG85UUw"
+     },
+     {
+      "protected": "eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNi0xMSIsInR5cCI6IkpPU0UifQ",
+      "signature": "09pZyvKRBI_vC3pySL91EGLLZSVW3-OcDHS907DcpTvF-o2lSoJq3vUsX8sm_4IJExd7EbNYI2OuN2liOwGs2A"
+     }
+    ]
+   },
+   "jwks": [
+    {
+     "kty": "EC",
+     "crv": "P-256",
+     "kid": "a2a-2026-11",
+     "x": "JR_YxuSgKR54G1qN5BZPKg1owhKc_ieb0UaTKu_c-SE",
+     "y": "1otemkKd-Mq1_Y8FKlvYXb-8E98Qzh6Ph964weBzN1Q",
+     "use": "sig",
+     "alg": "ES256",
+     "nbf": 1795000000,
+     "exp": 1829000000
+    },
+    {
+     "kty": "EC",
+     "crv": "P-256",
+     "kid": "a2a-2027-10",
+     "x": "IUWLMO1vLZBAf3Gj5E3uPod5CRSavoVvuGXsey1oJO4",
+     "y": "MVztLM_N7XwnXlJXvs953KGK5KzSBEIXC1Np3dWwQVs",
+     "use": "sig",
+     "alg": "ES256",
+     "nbf": 1795000000,
+     "exp": 1829000000
+    }
+   ],
+   "kids": null
+  },
+  {
+   "name": "unreadable-header",
+   "card": {
+    "name": "Acme Build Agent",
+    "description": "Runs build and test tasks on Acme's Remote Spokes after a person at Acme approves each task.",
+    "supportedInterfaces": [
+     {
+      "url": "https://conn.acme.example:8445/api/orgs/acme/a2a/a_7c1d2e3f4a5b6c7d",
+      "protocolBinding": "HTTP+JSON",
+      "protocolVersion": "1.0"
+     }
+    ],
+    "version": "1.0.0",
+    "capabilities": {
+     "streaming": true,
+     "pushNotifications": true,
+     "extensions": [
+      {
+       "uri": "https://lucid.emertins.com/a2a/ext/spokes-task/v1",
+       "description": "Selects the skill; see the Lucid contract."
+      }
+     ]
+    },
+    "securitySchemes": {
+     "lucid-oauth": {
+      "oauth2SecurityScheme": {
+       "description": "Tokens from the org's issuer; each token is bound to the client's DPoP key (RFC 9449) or mTLS certificate (RFC 8705).",
+       "flows": {
+        "clientCredentials": {
+         "tokenUrl": "https://console.acme.example:7443/api/orgs/acme/oauth/token",
+         "scopes": {
+          "spokes.tasks.submit": "Submit tasks to this organization's Remote Spokes through this agent"
+         }
+        }
+       },
+       "oauth2MetadataUrl": "https://console.acme.example:7443/.well-known/oauth-authorization-server/api/orgs/acme"
+      }
+     }
+    },
+    "securityRequirements": [
+     {
+      "schemes": {
+       "lucid-oauth": {
+        "list": [
+         "spokes.tasks.submit"
+        ]
+       }
+      }
+     }
+    ],
+    "defaultInputModes": [
+     "text/plain"
+    ],
+    "defaultOutputModes": [
+     "text/markdown",
+     "application/json"
+    ],
+    "skills": [
+     {
+      "id": "build-and-test",
+      "name": "Build and test",
+      "description": "Builds the named branch and runs its tests; returns the log summary and a review branch.",
+      "tags": [
+       "build",
+       "test"
+      ],
+      "examples": [
+       "Build branch release/2.3 and run the unit tests"
+      ],
+      "inputModes": [
+       "text/plain"
+      ],
+      "outputModes": [
+       "text/markdown",
+       "application/json"
+      ]
+     }
+    ],
+    "provider": {
+     "organization": "Acme Robotics",
+     "url": "https://acme.example"
+    },
+    "documentationUrl": "https://acme.example/agents/build",
+    "signatures": [
+     {
+      "protected": "eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNi0xMSIsInR5cCI6IkpPU0UifQ",
+      "signature": "eqGV6qvIL8BLPyFgFqQ_Vqboh9QUP8TliFcVemSFXpdEqAVfBqc7fi1BbvyuZHya0nJWUfx-8TpI1c2MG85UUw"
+     },
+     {
+      "protected": "bm90IGpzb24",
+      "signature": "8aNTvvJ0dCGe-UiH54MWFU8GDrnbEUNKzAfIH9nj9PEDqARMGNvChEW-UUweJoPrBWX0-zRa1-lUNk8lkD6-zw"
+     }
+    ]
+   },
+   "jwks": [
+    {
+     "kty": "EC",
+     "crv": "P-256",
+     "kid": "a2a-2026-11",
+     "x": "JR_YxuSgKR54G1qN5BZPKg1owhKc_ieb0UaTKu_c-SE",
+     "y": "1otemkKd-Mq1_Y8FKlvYXb-8E98Qzh6Ph964weBzN1Q",
+     "use": "sig",
+     "alg": "ES256",
+     "nbf": 1795000000,
+     "exp": 1829000000
+    },
+    {
+     "kty": "EC",
+     "crv": "P-256",
+     "kid": "a2a-2027-10",
+     "x": "IUWLMO1vLZBAf3Gj5E3uPod5CRSavoVvuGXsey1oJO4",
+     "y": "MVztLM_N7XwnXlJXvs953KGK5KzSBEIXC1Np3dWwQVs",
+     "use": "sig",
+     "alg": "ES256",
+     "nbf": 1795000000,
+     "exp": 1829000000
+    }
+   ],
+   "kids": null
+  },
+  {
+   "name": "extra-member",
+   "card": {
+    "name": "Acme Build Agent",
+    "description": "Runs build and test tasks on Acme's Remote Spokes after a person at Acme approves each task.",
+    "supportedInterfaces": [
+     {
+      "url": "https://conn.acme.example:8445/api/orgs/acme/a2a/a_7c1d2e3f4a5b6c7d",
+      "protocolBinding": "HTTP+JSON",
+      "protocolVersion": "1.0"
+     }
+    ],
+    "version": "1.0.0",
+    "capabilities": {
+     "streaming": true,
+     "pushNotifications": true,
+     "extensions": [
+      {
+       "uri": "https://lucid.emertins.com/a2a/ext/spokes-task/v1",
+       "description": "Selects the skill; see the Lucid contract."
+      }
+     ]
+    },
+    "securitySchemes": {
+     "lucid-oauth": {
+      "oauth2SecurityScheme": {
+       "description": "Tokens from the org's issuer; each token is bound to the client's DPoP key (RFC 9449) or mTLS certificate (RFC 8705).",
+       "flows": {
+        "clientCredentials": {
+         "tokenUrl": "https://console.acme.example:7443/api/orgs/acme/oauth/token",
+         "scopes": {
+          "spokes.tasks.submit": "Submit tasks to this organization's Remote Spokes through this agent"
+         }
+        }
+       },
+       "oauth2MetadataUrl": "https://console.acme.example:7443/.well-known/oauth-authorization-server/api/orgs/acme"
+      }
+     }
+    },
+    "securityRequirements": [
+     {
+      "schemes": {
+       "lucid-oauth": {
+        "list": [
+         "spokes.tasks.submit"
+        ]
+       }
+      }
+     }
+    ],
+    "defaultInputModes": [
+     "text/plain"
+    ],
+    "defaultOutputModes": [
+     "text/markdown",
+     "application/json"
+    ],
+    "skills": [
+     {
+      "id": "build-and-test",
+      "name": "Build and test",
+      "description": "Builds the named branch and runs its tests; returns the log summary and a review branch.",
+      "tags": [
+       "build",
+       "test"
+      ],
+      "examples": [
+       "Build branch release/2.3 and run the unit tests"
+      ],
+      "inputModes": [
+       "text/plain"
+      ],
+      "outputModes": [
+       "text/markdown",
+       "application/json"
+      ]
+     }
+    ],
+    "provider": {
+     "organization": "Acme Robotics",
+     "url": "https://acme.example"
+    },
+    "documentationUrl": "https://acme.example/agents/build",
+    "signatures": [
+     {
+      "protected": "eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNi0xMSIsInR5cCI6IkpPU0UifQ",
+      "signature": "eqGV6qvIL8BLPyFgFqQ_Vqboh9QUP8TliFcVemSFXpdEqAVfBqc7fi1BbvyuZHya0nJWUfx-8TpI1c2MG85UUw"
+     },
+     {
+      "protected": "eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNy0xMCIsInR5cCI6IkpPU0UifQ",
+      "signature": "8aNTvvJ0dCGe-UiH54MWFU8GDrnbEUNKzAfIH9nj9PEDqARMGNvChEW-UUweJoPrBWX0-zRa1-lUNk8lkD6-zw",
+      "more": 1
+     }
+    ]
+   },
+   "jwks": [
+    {
+     "kty": "EC",
+     "crv": "P-256",
+     "kid": "a2a-2026-11",
+     "x": "JR_YxuSgKR54G1qN5BZPKg1owhKc_ieb0UaTKu_c-SE",
+     "y": "1otemkKd-Mq1_Y8FKlvYXb-8E98Qzh6Ph964weBzN1Q",
+     "use": "sig",
+     "alg": "ES256",
+     "nbf": 1795000000,
+     "exp": 1829000000
+    },
+    {
+     "kty": "EC",
+     "crv": "P-256",
+     "kid": "a2a-2027-10",
+     "x": "IUWLMO1vLZBAf3Gj5E3uPod5CRSavoVvuGXsey1oJO4",
+     "y": "MVztLM_N7XwnXlJXvs953KGK5KzSBEIXC1Np3dWwQVs",
+     "use": "sig",
+     "alg": "ES256",
+     "nbf": 1795000000,
+     "exp": 1829000000
+    }
+   ],
+   "kids": null
+  },
+  {
+   "name": "one-bad-signature",
+   "card": {
+    "name": "Acme Build Agent",
+    "description": "Runs build and test tasks on Acme's Remote Spokes after a person at Acme approves each task.",
+    "supportedInterfaces": [
+     {
+      "url": "https://conn.acme.example:8445/api/orgs/acme/a2a/a_7c1d2e3f4a5b6c7d",
+      "protocolBinding": "HTTP+JSON",
+      "protocolVersion": "1.0"
+     }
+    ],
+    "version": "1.0.0",
+    "capabilities": {
+     "streaming": true,
+     "pushNotifications": true,
+     "extensions": [
+      {
+       "uri": "https://lucid.emertins.com/a2a/ext/spokes-task/v1",
+       "description": "Selects the skill; see the Lucid contract."
+      }
+     ]
+    },
+    "securitySchemes": {
+     "lucid-oauth": {
+      "oauth2SecurityScheme": {
+       "description": "Tokens from the org's issuer; each token is bound to the client's DPoP key (RFC 9449) or mTLS certificate (RFC 8705).",
+       "flows": {
+        "clientCredentials": {
+         "tokenUrl": "https://console.acme.example:7443/api/orgs/acme/oauth/token",
+         "scopes": {
+          "spokes.tasks.submit": "Submit tasks to this organization's Remote Spokes through this agent"
+         }
+        }
+       },
+       "oauth2MetadataUrl": "https://console.acme.example:7443/.well-known/oauth-authorization-server/api/orgs/acme"
+      }
+     }
+    },
+    "securityRequirements": [
+     {
+      "schemes": {
+       "lucid-oauth": {
+        "list": [
+         "spokes.tasks.submit"
+        ]
+       }
+      }
+     }
+    ],
+    "defaultInputModes": [
+     "text/plain"
+    ],
+    "defaultOutputModes": [
+     "text/markdown",
+     "application/json"
+    ],
+    "skills": [
+     {
+      "id": "build-and-test",
+      "name": "Build and test",
+      "description": "Builds the named branch and runs its tests; returns the log summary and a review branch.",
+      "tags": [
+       "build",
+       "test"
+      ],
+      "examples": [
+       "Build branch release/2.3 and run the unit tests"
+      ],
+      "inputModes": [
+       "text/plain"
+      ],
+      "outputModes": [
+       "text/markdown",
+       "application/json"
+      ]
+     }
+    ],
+    "provider": {
+     "organization": "Acme Robotics",
+     "url": "https://acme.example"
+    },
+    "documentationUrl": "https://acme.example/agents/build",
+    "signatures": [
+     {
+      "protected": "eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNi0xMSIsInR5cCI6IkpPU0UifQ",
+      "signature": "eqGV6qvIL8BLPyFgFqQ_Vqboh9QUP8TliFcVemSFXpdEqAVfBqc7fi1BbvyuZHya0nJWUfx-8TpI1c2MG85UUw"
+     },
+     {
+      "protected": "eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNy0xMCIsInR5cCI6IkpPU0UifQ",
+      "signature": "eqGV6qvIL8BLPyFgFqQ_Vqboh9QUP8TliFcVemSFXpdEqAVfBqc7fi1BbvyuZHya0nJWUfx-8TpI1c2MG85UUw"
+     }
+    ]
+   },
+   "jwks": [
+    {
+     "kty": "EC",
+     "crv": "P-256",
+     "kid": "a2a-2026-11",
+     "x": "JR_YxuSgKR54G1qN5BZPKg1owhKc_ieb0UaTKu_c-SE",
+     "y": "1otemkKd-Mq1_Y8FKlvYXb-8E98Qzh6Ph964weBzN1Q",
+     "use": "sig",
+     "alg": "ES256",
+     "nbf": 1795000000,
+     "exp": 1829000000
+    },
+    {
+     "kty": "EC",
+     "crv": "P-256",
+     "kid": "a2a-2027-10",
+     "x": "IUWLMO1vLZBAf3Gj5E3uPod5CRSavoVvuGXsey1oJO4",
+     "y": "MVztLM_N7XwnXlJXvs953KGK5KzSBEIXC1Np3dWwQVs",
+     "use": "sig",
+     "alg": "ES256",
+     "nbf": 1795000000,
+     "exp": 1829000000
+    }
+   ],
+   "kids": null
+  },
+  {
+   "name": "jwks-kid-twice",
+   "card": {
+    "name": "Acme Build Agent",
+    "description": "Runs build and test tasks on Acme's Remote Spokes after a person at Acme approves each task.",
+    "supportedInterfaces": [
+     {
+      "url": "https://conn.acme.example:8445/api/orgs/acme/a2a/a_7c1d2e3f4a5b6c7d",
+      "protocolBinding": "HTTP+JSON",
+      "protocolVersion": "1.0"
+     }
+    ],
+    "version": "1.0.0",
+    "capabilities": {
+     "streaming": true,
+     "pushNotifications": true,
+     "extensions": [
+      {
+       "uri": "https://lucid.emertins.com/a2a/ext/spokes-task/v1",
+       "description": "Selects the skill; see the Lucid contract."
+      }
+     ]
+    },
+    "securitySchemes": {
+     "lucid-oauth": {
+      "oauth2SecurityScheme": {
+       "description": "Tokens from the org's issuer; each token is bound to the client's DPoP key (RFC 9449) or mTLS certificate (RFC 8705).",
+       "flows": {
+        "clientCredentials": {
+         "tokenUrl": "https://console.acme.example:7443/api/orgs/acme/oauth/token",
+         "scopes": {
+          "spokes.tasks.submit": "Submit tasks to this organization's Remote Spokes through this agent"
+         }
+        }
+       },
+       "oauth2MetadataUrl": "https://console.acme.example:7443/.well-known/oauth-authorization-server/api/orgs/acme"
+      }
+     }
+    },
+    "securityRequirements": [
+     {
+      "schemes": {
+       "lucid-oauth": {
+        "list": [
+         "spokes.tasks.submit"
+        ]
+       }
+      }
+     }
+    ],
+    "defaultInputModes": [
+     "text/plain"
+    ],
+    "defaultOutputModes": [
+     "text/markdown",
+     "application/json"
+    ],
+    "skills": [
+     {
+      "id": "build-and-test",
+      "name": "Build and test",
+      "description": "Builds the named branch and runs its tests; returns the log summary and a review branch.",
+      "tags": [
+       "build",
+       "test"
+      ],
+      "examples": [
+       "Build branch release/2.3 and run the unit tests"
+      ],
+      "inputModes": [
+       "text/plain"
+      ],
+      "outputModes": [
+       "text/markdown",
+       "application/json"
+      ]
+     }
+    ],
+    "provider": {
+     "organization": "Acme Robotics",
+     "url": "https://acme.example"
+    },
+    "documentationUrl": "https://acme.example/agents/build",
+    "signatures": [
+     {
+      "protected": "eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNi0xMSIsInR5cCI6IkpPU0UifQ",
+      "signature": "eqGV6qvIL8BLPyFgFqQ_Vqboh9QUP8TliFcVemSFXpdEqAVfBqc7fi1BbvyuZHya0nJWUfx-8TpI1c2MG85UUw"
+     },
+     {
+      "protected": "eyJhbGciOiJFUzI1NiIsImprdSI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGU6NzQ0My9hcGkvb3Jncy9hY21lL2EyYS9qd2tzLmpzb24iLCJraWQiOiJhMmEtMjAyNy0xMCIsInR5cCI6IkpPU0UifQ",
+      "signature": "8aNTvvJ0dCGe-UiH54MWFU8GDrnbEUNKzAfIH9nj9PEDqARMGNvChEW-UUweJoPrBWX0-zRa1-lUNk8lkD6-zw"
+     }
+    ]
+   },
+   "jwks": [
+    {
+     "kty": "EC",
+     "crv": "P-256",
+     "kid": "a2a-2026-11",
+     "x": "JR_YxuSgKR54G1qN5BZPKg1owhKc_ieb0UaTKu_c-SE",
+     "y": "1otemkKd-Mq1_Y8FKlvYXb-8E98Qzh6Ph964weBzN1Q",
+     "use": "sig",
+     "alg": "ES256",
+     "nbf": 1795000000,
+     "exp": 1829000000
+    },
+    {
+     "kty": "EC",
+     "crv": "P-256",
+     "kid": "a2a-2027-10",
+     "x": "IUWLMO1vLZBAf3Gj5E3uPod5CRSavoVvuGXsey1oJO4",
+     "y": "MVztLM_N7XwnXlJXvs953KGK5KzSBEIXC1Np3dWwQVs",
+     "use": "sig",
+     "alg": "ES256",
+     "nbf": 1795000000,
+     "exp": 1829000000
+    },
+    {
+     "kty": "EC",
+     "crv": "P-256",
+     "kid": "a2a-2026-11",
+     "x": "JR_YxuSgKR54G1qN5BZPKg1owhKc_ieb0UaTKu_c-SE",
+     "y": "1otemkKd-Mq1_Y8FKlvYXb-8E98Qzh6Ph964weBzN1Q",
+     "use": "sig",
+     "alg": "ES256",
+     "nbf": 1795000000,
+     "exp": 1829000000
+    }
+   ],
+   "kids": null
+  }
+ ],
+ "spec_example": {
+  "card": {
+   "name": "Example Agent",
+   "description": "",
+   "capabilities": {
+    "streaming": false,
+    "pushNotifications": false,
+    "extensions": []
+   },
+   "skills": []
+  },
+  "payload": "{\"capabilities\":{\"pushNotifications\":false,\"streaming\":false},\"description\":\"\",\"name\":\"Example Agent\",\"skills\":[]}"
+ }
+}

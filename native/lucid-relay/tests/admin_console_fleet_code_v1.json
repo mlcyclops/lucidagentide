@@ -1,0 +1,238 @@
+{
+ "version": 1,
+ "contract": "AC-2a revision 3.4",
+ "encoding": "lp(...) writes each part as its byte length (4 bytes, big-endian) then its bytes. Inside lp: text (labels, ids such as c_, r_, en_, ap_ and sr_ ids, actions, targets, emails, roles) as UTF-8; integers (seq, generation, requestedAt) as decimal ASCII; hashes (previewHash, a previous rosterHash or policyHash, the first being 32 zero bytes) as their raw 32 bytes; credentialId, cose, attestationObject, clientDataJSON, spki and serials as raw bytes. canonical_json is AC-1 3.6's (CE-1 with null). In JSON: hashes and fingerprints are lowercase hex; keys, certificates, MACs, nonces and signatures are base64url without padding; serials are lowercase hex; times are milliseconds. Every ECDSA signature is the ASN.1 DER ECDSA-Sig-Value.",
+ "prefix": "LCE1-",
+ "label": "lucid-fleet-code-v1",
+ "group": 5,
+ "length": 103,
+ "layout": "1 version (0x01), 1 product (0x01 spokes, 0x02 meet), 8 enrollment id, 20 secret, 32 pin, 2 check = first 2 bytes of SHA-256(lp(label, first 62 bytes)); RFC 4648 base32 without padding in groups of 5 joined by \"-\" after \"LCE1-\"",
+ "parse": "remove spaces and \"-\", upper-case, require \"LCE1\" then 103 base32 characters; checks in order prefix, length, alphabet, check, version, product; every failure answers fleet-code before any network call",
+ "cases": [
+  {
+   "name": "spokes",
+   "code": "LCE1-AEA3I-CVXWL-E5LID-N4IGH-EFI5R-PTQOL-LFKEY-QKN45-FOMZX-R3PWH-76Y7V-E2RSK-R4CGC-JLQA3-SVR6P-PBM3S-CGFKO-M3W3X-UIKZZ-TIIIZ-2SI",
+   "bytes_hex": "0101b40ab7b2c9d5a06de20c72151d8be7072d65513105379d2b999bc76fb1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde885673342119d49",
+   "version": 1,
+   "product": "spokes",
+   "id": "en_b40ab7b2c9d5a06d",
+   "secret_hex": "e20c72151d8be7072d65513105379d2b999bc76f",
+   "pin_hex": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+   "check_hex": "9d49",
+   "check_input_hex": "000000136c756369642d666c6565742d636f64652d76310000003e0101b40ab7b2c9d5a06de20c72151d8be7072d65513105379d2b999bc76fb1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211"
+  },
+  {
+   "name": "meet",
+   "code": "LCE1-AEBKC-BXGVC-KOTF3-P2AKV-O3S3Q-K2555-JWFZC-MY2JM-N7Y5M-5BZWH-76Y7V-E2RSK-R4CGC-JLQA3-SVR6P-PBM3S-CGFKO-M3W3X-UIKZZ-TIII3-QZY",
+   "bytes_hex": "0102a106e6a894e9976fd015576e5b82b5def5362e44cc692c6ff1d67439b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211b867",
+   "version": 1,
+   "product": "meet",
+   "id": "en_a106e6a894e9976f",
+   "secret_hex": "d015576e5b82b5def5362e44cc692c6ff1d67439",
+   "pin_hex": "b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211",
+   "check_hex": "b867",
+   "check_input_hex": "000000136c756369642d666c6565742d636f64652d76310000003e0102a106e6a894e9976fd015576e5b82b5def5362e44cc692c6ff1d67439b1ffec7ea4d464a8f0461257006e558f9ef0b372118aa73376dde88567334211"
+  }
+ ],
+ "inputs": [
+  {
+   "name": "as shown",
+   "input": "LCE1-AEA3I-CVXWL-E5LID-N4IGH-EFI5R-PTQOL-LFKEY-QKN45-FOMZX-R3PWH-76Y7V-E2RSK-R4CGC-JLQA3-SVR6P-PBM3S-CGFKO-M3W3X-UIKZZ-TIIIZ-2SI",
+   "code": "LCE1-AEA3I-CVXWL-E5LID-N4IGH-EFI5R-PTQOL-LFKEY-QKN45-FOMZX-R3PWH-76Y7V-E2RSK-R4CGC-JLQA3-SVR6P-PBM3S-CGFKO-M3W3X-UIKZZ-TIIIZ-2SI"
+  },
+  {
+   "name": "lower case",
+   "input": "lce1-aea3i-cvxwl-e5lid-n4igh-efi5r-ptqol-lfkey-qkn45-fomzx-r3pwh-76y7v-e2rsk-r4cgc-jlqa3-svr6p-pbm3s-cgfko-m3w3x-uikzz-tiiiz-2si",
+   "code": "LCE1-AEA3I-CVXWL-E5LID-N4IGH-EFI5R-PTQOL-LFKEY-QKN45-FOMZX-R3PWH-76Y7V-E2RSK-R4CGC-JLQA3-SVR6P-PBM3S-CGFKO-M3W3X-UIKZZ-TIIIZ-2SI"
+  },
+  {
+   "name": "spaces for dashes",
+   "input": "LCE1 AEA3I CVXWL E5LID N4IGH EFI5R PTQOL LFKEY QKN45 FOMZX R3PWH 76Y7V E2RSK R4CGC JLQA3 SVR6P PBM3S CGFKO M3W3X UIKZZ TIIIZ 2SI",
+   "code": "LCE1-AEA3I-CVXWL-E5LID-N4IGH-EFI5R-PTQOL-LFKEY-QKN45-FOMZX-R3PWH-76Y7V-E2RSK-R4CGC-JLQA3-SVR6P-PBM3S-CGFKO-M3W3X-UIKZZ-TIIIZ-2SI"
+  },
+  {
+   "name": "no separators",
+   "input": "LCE1AEA3ICVXWLE5LIDN4IGHEFI5RPTQOLLFKEYQKN45FOMZXR3PWH76Y7VE2RSKR4CGCJLQA3SVR6PPBM3SCGFKOM3W3XUIKZZTIIIZ2SI",
+   "code": "LCE1-AEA3I-CVXWL-E5LID-N4IGH-EFI5R-PTQOL-LFKEY-QKN45-FOMZX-R3PWH-76Y7V-E2RSK-R4CGC-JLQA3-SVR6P-PBM3S-CGFKO-M3W3X-UIKZZ-TIIIZ-2SI"
+  },
+  {
+   "name": "surrounding spaces",
+   "input": "  LCE1-AEA3I-CVXWL-E5LID-N4IGH-EFI5R-PTQOL-LFKEY-QKN45-FOMZX-R3PWH-76Y7V-E2RSK-R4CGC-JLQA3-SVR6P-PBM3S-CGFKO-M3W3X-UIKZZ-TIIIZ-2SI ",
+   "code": "LCE1-AEA3I-CVXWL-E5LID-N4IGH-EFI5R-PTQOL-LFKEY-QKN45-FOMZX-R3PWH-76Y7V-E2RSK-R4CGC-JLQA3-SVR6P-PBM3S-CGFKO-M3W3X-UIKZZ-TIIIZ-2SI"
+  }
+ ],
+ "broken": [
+  {
+   "name": "wrong prefix",
+   "input": "LCE2-AEA3I-CVXWL-E5LID-N4IGH-EFI5R-PTQOL-LFKEY-QKN45-FOMZX-R3PWH-76Y7V-E2RSK-R4CGC-JLQA3-SVR6P-PBM3S-CGFKO-M3W3X-UIKZZ-TIIIZ-2SI",
+   "why": "prefix",
+   "code": "fleet-code"
+  },
+  {
+   "name": "one character missing",
+   "input": "LCE1-AEA3I-CVXWL-E5LID-N4IGH-EFI5R-PTQOL-LFKEY-QKN45-FOMZX-R3PWH-76Y7V-E2RSK-R4CGC-JLQA3-SVR6P-PBM3S-CGFKO-M3W3X-UIKZZ-TIIIZ-2S",
+   "why": "length",
+   "code": "fleet-code"
+  },
+  {
+   "name": "one character more",
+   "input": "LCE1-AEA3I-CVXWL-E5LID-N4IGH-EFI5R-PTQOL-LFKEY-QKN45-FOMZX-R3PWH-76Y7V-E2RSK-R4CGC-JLQA3-SVR6P-PBM3S-CGFKO-M3W3X-UIKZZ-TIIIZ-2SIA",
+   "why": "length",
+   "code": "fleet-code"
+  },
+  {
+   "name": "digit outside the alphabet",
+   "input": "LCE1-AEA3I-C1XWL-E5LID-N4IGH-EFI5R-PTQOL-LFKEY-QKN45-FOMZX-R3PWH-76Y7V-E2RSK-R4CGC-JLQA3-SVR6P-PBM3S-CGFKO-M3W3X-UIKZZ-TIIIZ-2SI",
+   "why": "alphabet",
+   "code": "fleet-code"
+  },
+  {
+   "name": "one character changed",
+   "input": "LCE1-AEA3I-CVXBL-E5LID-N4IGH-EFI5R-PTQOL-LFKEY-QKN45-FOMZX-R3PWH-76Y7V-E2RSK-R4CGC-JLQA3-SVR6P-PBM3S-CGFKO-M3W3X-UIKZZ-TIIIZ-2SI",
+   "why": "check",
+   "code": "fleet-code"
+  },
+  {
+   "name": "version 2",
+   "input": "LCE1-AIA3I-CVXWL-E5LID-N4IGH-EFI5R-PTQOL-LFKEY-QKN45-FOMZX-R3PWH-76Y7V-E2RSK-R4CGC-JLQA3-SVR6P-PBM3S-CGFKO-M3W3X-UIKZZ-TIIIU-ALA",
+   "why": "version",
+   "code": "fleet-code"
+  },
+  {
+   "name": "product byte 3",
+   "input": "LCE1-AEB3I-CVXWL-E5LID-N4IGH-EFI5R-PTQOL-LFKEY-QKN45-FOMZX-R3PWH-76Y7V-E2RSK-R4CGC-JLQA3-SVR6P-PBM3S-CGFKO-M3W3X-UIKZZ-TIIIQ-4EA",
+   "why": "product",
+   "code": "fleet-code"
+  }
+ ],
+ "proofs": {
+  "preview": {
+   "label": "lucid-fleet-preview-v1",
+   "id": "en_b40ab7b2c9d5a06d",
+   "host": "console.acme.example",
+   "input_hex": "000000166c756369642d666c6565742d707265766965772d763100000013656e5f6234306162376232633964356130366400000014636f6e736f6c652e61636d652e6578616d706c65",
+   "mac_b64u": "-WsozsaUJK2FKVtjbAN3WgJ4xT6fSrsBBNgoeT7snMc",
+   "request": {
+    "v": 1,
+    "id": "en_b40ab7b2c9d5a06d",
+    "mac": "-WsozsaUJK2FKVtjbAN3WgJ4xT6fSrsBBNgoeT7snMc"
+   },
+   "answer": {
+    "ok": true,
+    "previewHash": "4b4e479ff2488cd4160dbd67542294565121e627258d583df7a6922bc4150769",
+    "console": {
+     "id": "c_0123456789abcdef",
+     "origin": "https://console.acme.example",
+     "rpId": "console.acme.example",
+     "host": "console.acme.example"
+    },
+    "enrollment": {
+     "product": "spokes",
+     "name": "Berlin relay",
+     "site": "eu-central-1",
+     "scopes": [
+      "read-health",
+      "read-logs",
+      "people",
+      "config",
+      "license"
+     ],
+     "expires": 1794877200000
+    },
+    "policy": {
+     "profile": "standard",
+     "twoPerson": "off"
+    },
+    "roster": [
+     {
+      "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+      "cose": "pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE",
+      "email": "alice@acme.example",
+      "role": "admin",
+      "evidence": {
+       "fmt": "packed",
+       "attestationObject": "o2NmbXRmcGFja2VkZ2F0dFN0bXSiY2FsZyZjc2lnWEYwRAIgFDyJMDiXHa9eYuT3fRq0ta0oN9gR5ZQENXyBtCyKqlICIGKpbIP-Tcxm-oJ8ig-XdAhUKtOup8K4AaWMV8-VsNbgaGF1dGhEYXRhWKQXeKnjW1mhZ4580oIquezFxJ7IEiwYr0VPmPHQEMhu1EUAAAAAGsfxtQABSgCAAAAAAAAACgAgWNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoalAQIDJiABIVggHOVszWdETyK93WnbbCZSNPqjlcnSBSf4CqW3864YEHsiWCA7rTvxsDR6HqiapP6N9ynBZ_VgYt9wUzT31PQJoPoVsQ",
+       "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiUTFHMnVsZDRWR0RFa3RVcE5yRXk0aWVNUnMtZ1BNSlhPaFloQ1JQRUtsMCIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9"
+      },
+      "evidenceSha256": "e10e00d51f22088da61bf64ed4861bf52cb3d71bb44228622baf57338f79928b"
+     },
+     {
+      "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+      "cose": "pQECAyYgASFYIAzA_Ily0Yo7ycX88mWJmepE5zEgQ86hkWlY-QY5YTSiIlgg-QPspjbudaJw5WC3LbM7U5bT09VxSCkniUYZHTk_zto",
+      "email": "alice@acme.example",
+      "role": "admin",
+      "evidence": {
+       "fmt": "packed",
+       "attestationObject": "o2NmbXRmcGFja2VkZ2F0dFN0bXSiY2FsZyZjc2lnWEcwRQIgb8oA8DiTR_lP4JYX1vqQ9lmwcc4zcaLdcoAsgwYDL9kCIQCeEcyThgBXu1AGpopMKM28PwQM4caHUSpgWAdIYc4hb2hhdXRoRGF0YVikF3ip41tZoWeOfNKCKrnsxcSeyBIsGK9FT5jx0BDIbtRFAAAAABrH8bUAAUoAgAAAAAAAAAoAIMEM-Viggm7d9tzCnMmnANNUdyoPvaebPuB07Lkniqd4pQECAyYgASFYIAzA_Ily0Yo7ycX88mWJmepE5zEgQ86hkWlY-QY5YTSiIlgg-QPspjbudaJw5WC3LbM7U5bT09VxSCkniUYZHTk_zto",
+       "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiaTJwR3hkT2NiNUJka1ZvSi1lMEg0V1QtZVRBeGxhaGFWeUNUUFZoVENJayIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9"
+      },
+      "evidenceSha256": "db85a1e06dc5d2638ec8dd531d4a9300d2f5e73f0534aace4f5478e3d77e7bd7"
+     },
+     {
+      "credentialId": "65L3Do8pzAZEDxpHhTuyvjydaSB_bboGrXDElE8_VqQ",
+      "cose": "pQECAyYgASFYIFnOfFZki75mVP4JmZkLFwQqSID4-7T9Vk1zvprDqfMGIlggP4WOhfo6tVmG_EnnGqx1xW1r1a_PGPKOej39vE_u7Gs",
+      "email": "bob@acme.example",
+      "role": "admin",
+      "evidence": {
+       "fmt": "packed",
+       "attestationObject": "o2NmbXRmcGFja2VkZ2F0dFN0bXSiY2FsZyZjc2lnWEcwRQIhALJgJYNePcujYU8x-xoW5QllpJZywI4XZY7yR6FYpF2PAiA8znnl6SVECxLV4_ky_zjLfVw5pP3cbXqj3pHBFKOaA2hhdXRoRGF0YVikF3ip41tZoWeOfNKCKrnsxcSeyBIsGK9FT5jx0BDIbtRFAAAAABrH8bUAAUoAgAAAAAAAAAoAIOuS9w6PKcwGRA8aR4U7sr48nWkgf226Bq1wxJRPP1akpQECAyYgASFYIFnOfFZki75mVP4JmZkLFwQqSID4-7T9Vk1zvprDqfMGIlggP4WOhfo6tVmG_EnnGqx1xW1r1a_PGPKOej39vE_u7Gs",
+       "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiZ0lTb2JRV3BBVVpqOTR0QnVVMG5sWVlyMWtHeWlYa0NfWldYQWhrclVLVSIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9"
+      },
+      "evidenceSha256": "56cab30d9fde137ad27fb8514deffe674430b2eb715c0a974aff5c240ef706ce"
+     },
+     {
+      "credentialId": "FlcUSpTQ9cEex8q3dq9E5CTdf5XZZvZPAt32uG93wuc",
+      "cose": "pQECAyYgASFYIGjLwV0DLa0S7B5Uo5kWQN0IlUTw-rbVS2iTUgjpnQdbIlgg0KRwUrjCeweOd4-vR0tKHWqZTLr7tFvNYJnZRoPmYC4",
+      "email": "carol@acme.example",
+      "role": "user-manager",
+      "evidence": null,
+      "evidenceSha256": null
+     }
+    ],
+    "bootstrapRosterHash": "7c84d2b59a995ca1204d7050ec92057c39d4da4eb27cd4f8e1e536dc11794532"
+   },
+   "hashed_canonical_sha256": "4b4e479ff2488cd4160dbd67542294565121e627258d583df7a6922bc4150769",
+   "about": "previewHash = SHA-256(canonical_json(the answer without ok and previewHash))"
+  },
+  "enroll": {
+   "label": "lucid-fleet-enroll-v1",
+   "relay_spki_hex": "3059301306072a8648ce3d020106082a8648ce3d030107034200048e1bc841a90d28bacb96ee4b11f38d55822d0fde1e71acc855ad3c61caac1154a0e80f9992c1671c1bc9b667d4b07b85311d3583b5bb90f8cd1efe070f13476a",
+   "t_hex": "000000156c756369642d666c6565742d656e726f6c6c2d763100000013656e5f62343061623762326339643561303664000000204b4e479ff2488cd4160dbd67542294565121e627258d583df7a6922bc41507690000005b3059301306072a8648ce3d020106082a8648ce3d030107034200048e1bc841a90d28bacb96ee4b11f38d55822d0fde1e71acc855ad3c61caac1154a0e80f9992c1671c1bc9b667d4b07b85311d3583b5bb90f8cd1efe070f13476a0000008d7b2266697073223a66616c73652c22686f7374223a2272656c61792d6265726c696e2e61636d652e6578616d706c65222c226c6f63616c436f6e736f6c65223a66616c73652c226f73223a226c696e7578222c2270726f64756374223a2273706f6b6573222c2270726f66696c65223a227374616e64617264222c2276657273696f6e223a22322e352e30227d",
+   "body": {
+    "v": 1,
+    "id": "en_b40ab7b2c9d5a06d",
+    "spki": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEjhvIQakNKLrLlu5LEfONVYItD94ecazIVa08YcqsEVSg6A-ZksFnHBvJtmfUsHuFMR01g7W7kPjNHv4HDxNHag",
+    "previewHash": "4b4e479ff2488cd4160dbd67542294565121e627258d583df7a6922bc4150769",
+    "relay": {
+     "product": "spokes",
+     "version": "2.5.0",
+     "fips": false,
+     "profile": "standard",
+     "host": "relay-berlin.acme.example",
+     "os": "linux",
+     "localConsole": false
+    },
+    "mac": "WEN7Aj-_yPqdDei0xxEY1CMIDSRFeMZVD3gupn60aN4",
+    "sig": "MEUCIEIK3zHapYqNMGHl8IscRcqH1wGOHubsYxtyoiICQkA8AiEA35saCVH6s5lCT5Rsl1L3H6eykbFE-uAUX1pKW18V6fk"
+   },
+   "about": "T = lp(label, id, previewHash raw 32 bytes, spki DER, canonical_json(relay)); mac = HMAC-SHA-256(secret, T); sig = ECDSA P-256 SHA-256 by the new key over T"
+  },
+  "fingerprint": {
+   "spki_hex": "3059301306072a8648ce3d020106082a8648ce3d030107034200048e1bc841a90d28bacb96ee4b11f38d55822d0fde1e71acc855ad3c61caac1154a0e80f9992c1671c1bc9b667d4b07b85311d3583b5bb90f8cd1efe070f13476a",
+   "fingerprint": "c9f1 35fb 9067 f17a 1841",
+   "about": "the first 20 hex of SHA-256(spki) in groups of 4 separated by spaces"
+  },
+  "renew": {
+   "label": "lucid-fleet-renew-v1",
+   "relay_id": "r_3f0a9c2b7d5e1f48",
+   "old_serial_hex": "71ba231310aff865af9210a82529f4ab",
+   "spki_hex": "3059301306072a8648ce3d020106082a8648ce3d0301070342000473b3ef9df3a0822539d3889dc86946bf2955c0354b808275800507db13f7d2cff749beb35d95e3c470dfa16db3481207c4dd08b1d2fbbe25b77b6b92c7814925",
+   "input_hex": "000000146c756369642d666c6565742d72656e65772d763100000012725f336630613963326237643565316634380000001071ba231310aff865af9210a82529f4ab0000005b3059301306072a8648ce3d020106082a8648ce3d0301070342000473b3ef9df3a0822539d3889dc86946bf2955c0354b808275800507db13f7d2cff749beb35d95e3c470dfa16db3481207c4dd08b1d2fbbe25b77b6b92c7814925",
+   "body": {
+    "spki": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEc7PvnfOggiU504idyGlGvylVwDVLgIJ1gAUH2xP30s_3Sb6zXZXjxHDfoW2zSBIHxN0IsdL7viW3e2uSx4FJJQ",
+    "sigOld": "MEUCIDQd-ulWzjSQZ5na0bhIrEIHjNcmT4fWsf-U6XOrPCuHAiEAoN5ZDCmCbqd4mCOKDkCSKydA7tT5GEvdaoCBxIWhoNo",
+    "sigNew": "MEQCICyuBgR5LsSpjtDU5AyWmouIhSpdIHUjRYsMeSR1_kHcAiBXJQHxXf176sQSZKFRXY1BKDSTIHvAdx-OeI5KqK2E0A"
+   }
+  }
+ }
+}

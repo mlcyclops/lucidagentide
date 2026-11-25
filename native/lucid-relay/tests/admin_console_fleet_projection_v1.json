@@ -1,0 +1,763 @@
+{
+ "version": 1,
+ "contract": "AC-2a revision 3.4",
+ "about": "4.11 and 5.4 (revision 3, A2-H2): under read-health alone the relay builds each answer field by field from this list and nothing else may appear; paths are dotted, \"name[]\" is a list whose items have the fields \"name[].x\"; an \"object\" field lists its own fields under its path; nullable fields may be null (an object then has no sub-fields); the routes are exactly the 5.4 rows whose read-health projection is viewer or whole",
+ "types": {
+  "count": "a non-negative integer",
+  "days": "an integer (negative when past)",
+  "enum": "one of the field's values",
+  "version": "a string matching ^[0-9]+(\\.[0-9]+){1,3}$",
+  "bool": "true or false",
+  "date": "a time: an integer in seconds (form s) or milliseconds (form ms) as the AC-1 route gives it, or an ISO 8601 date YYYY-MM-DD (form iso)",
+  "object": "an object holding only its listed sub-fields",
+  "attention": "a list of attention items {kind, severity, args} from the allowlist below, args holding exactly that kind's fields"
+ },
+ "attention": {
+  "severity": [
+   "info",
+   "warn",
+   "bad"
+  ],
+  "allowlist": [
+   {
+    "kind": "license-none",
+    "args": [
+     {
+      "path": "product",
+      "type": "enum",
+      "values": [
+       "Remote Spokes",
+       "Meeting Hub"
+      ]
+     }
+    ]
+   },
+   {
+    "kind": "license-grace",
+    "args": [
+     {
+      "path": "date and time",
+      "type": "date",
+      "form": "ms"
+     }
+    ]
+   },
+   {
+    "kind": "license-expired",
+    "args": []
+   },
+   {
+    "kind": "license-expiring",
+    "args": [
+     {
+      "path": "n",
+      "type": "days"
+     },
+     {
+      "path": "date",
+      "type": "date",
+      "form": "iso"
+     }
+    ]
+   },
+   {
+    "kind": "license-stopped",
+    "args": [
+     {
+      "path": "product",
+      "type": "enum",
+      "values": [
+       "Remote Spokes",
+       "Meeting Hub"
+      ]
+     }
+    ]
+   },
+   {
+    "kind": "license-upgrade-period",
+    "args": [
+     {
+      "path": "date and time",
+      "type": "date",
+      "form": "ms"
+     }
+    ]
+   },
+   {
+    "kind": "crl-stale",
+    "args": []
+   },
+   {
+    "kind": "signer-unhealthy",
+    "args": []
+   },
+   {
+    "kind": "signer-expiring",
+    "args": [
+     {
+      "path": "n",
+      "type": "days"
+     }
+    ]
+   },
+   {
+    "kind": "tls-expiring",
+    "args": [
+     {
+      "path": "n",
+      "type": "days"
+     }
+    ]
+   },
+   {
+    "kind": "spokes-silent",
+    "args": [
+     {
+      "path": "n",
+      "type": "count"
+     }
+    ]
+   },
+   {
+    "kind": "seats-high",
+    "args": [
+     {
+      "path": "used",
+      "type": "count"
+     },
+     {
+      "path": "users",
+      "type": "count"
+     }
+    ]
+   },
+   {
+    "kind": "seats-over",
+    "args": [
+     {
+      "path": "used",
+      "type": "count"
+     },
+     {
+      "path": "users",
+      "type": "count"
+     },
+     {
+      "path": "day",
+      "type": "count"
+     },
+     {
+      "path": "n",
+      "type": "count"
+     },
+     {
+      "path": "date",
+      "type": "date",
+      "form": "iso"
+     },
+     {
+      "path": "seated",
+      "type": "count"
+     }
+    ]
+   },
+   {
+    "kind": "audit-broken",
+    "args": [
+     {
+      "path": "n",
+      "type": "count"
+     }
+    ]
+   },
+   {
+    "kind": "clock-uncertain",
+    "args": [
+     {
+      "path": "n",
+      "type": "count"
+     }
+    ]
+   }
+  ],
+  "about": "pushed attention under read-health alone (attention, 5.6) and the overview attention under read-health alone use this list; items carry kind, severity and args only (no go, banner or blocking)"
+ },
+ "routes": [
+  {
+   "route": "GET overview",
+   "product": "both",
+   "fields": [
+    {
+     "path": "ok",
+     "type": "bool"
+    },
+    {
+     "path": "product",
+     "type": "enum",
+     "values": [
+      "spokes",
+      "meet"
+     ]
+    },
+    {
+     "path": "relay.version",
+     "type": "version"
+    },
+    {
+     "path": "relay.uptimeSeconds",
+     "type": "count"
+    },
+    {
+     "path": "relay.fips",
+     "type": "bool"
+    },
+    {
+     "path": "relay.tlsNotAfter",
+     "type": "date",
+     "form": "s",
+     "nullable": true
+    },
+    {
+     "path": "license.state",
+     "type": "enum",
+     "values": [
+      "valid",
+      "grace",
+      "expired",
+      "none"
+     ]
+    },
+    {
+     "path": "license.product",
+     "type": "enum",
+     "values": [
+      "spokes",
+      "meet"
+     ],
+     "nullable": true
+    },
+    {
+     "path": "license.users",
+     "type": "count",
+     "nullable": true
+    },
+    {
+     "path": "license.used",
+     "type": "count",
+     "nullable": true
+    },
+    {
+     "path": "license.daysLeft",
+     "type": "days",
+     "nullable": true
+    },
+    {
+     "path": "license.exp",
+     "type": "date",
+     "form": "s",
+     "nullable": true
+    },
+    {
+     "path": "attention[]",
+     "type": "attention"
+    }
+   ]
+  },
+  {
+   "route": "GET license",
+   "product": "both",
+   "fields": [
+    {
+     "path": "ok",
+     "type": "bool"
+    },
+    {
+     "path": "license",
+     "type": "object",
+     "nullable": true
+    },
+    {
+     "path": "license.state",
+     "type": "enum",
+     "values": [
+      "valid",
+      "grace",
+      "expired",
+      "none"
+     ]
+    },
+    {
+     "path": "license.product",
+     "type": "enum",
+     "values": [
+      "spokes",
+      "meet"
+     ]
+    },
+    {
+     "path": "license.users",
+     "type": "count"
+    },
+    {
+     "path": "license.used",
+     "type": "count"
+    },
+    {
+     "path": "license.relays",
+     "type": "count"
+    },
+    {
+     "path": "license.exp",
+     "type": "date",
+     "form": "s"
+    },
+    {
+     "path": "license.daysLeft",
+     "type": "days"
+    },
+    {
+     "path": "license.dev",
+     "type": "bool"
+    },
+    {
+     "path": "license.graceDays",
+     "type": "count"
+    },
+    {
+     "path": "service",
+     "type": "object"
+    },
+    {
+     "path": "service.state",
+     "type": "enum",
+     "values": [
+      "on",
+      "grace",
+      "upgrade-period",
+      "stopped"
+     ]
+    },
+    {
+     "path": "service.stopsAt",
+     "type": "date",
+     "form": "ms",
+     "nullable": true
+    },
+    {
+     "path": "service.why",
+     "type": "enum",
+     "values": [
+      "none",
+      "wrong-product",
+      "wrong-root",
+      "expired"
+     ],
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "route": "GET spokes/counts",
+   "product": "spokes",
+   "fields": [
+    {
+     "path": "ok",
+     "type": "bool"
+    },
+    {
+     "path": "hubs.total",
+     "type": "count"
+    },
+    {
+     "path": "hubs.online",
+     "type": "count"
+    },
+    {
+     "path": "hubs.silent",
+     "type": "count"
+    },
+    {
+     "path": "hubs.expiring",
+     "type": "count"
+    },
+    {
+     "path": "hubs.expired",
+     "type": "count"
+    },
+    {
+     "path": "hubs.revoked",
+     "type": "count"
+    },
+    {
+     "path": "hubs.blocked",
+     "type": "count"
+    },
+    {
+     "path": "spokes.total",
+     "type": "count"
+    },
+    {
+     "path": "spokes.online",
+     "type": "count"
+    },
+    {
+     "path": "spokes.silent",
+     "type": "count"
+    },
+    {
+     "path": "spokes.busy",
+     "type": "count"
+    },
+    {
+     "path": "spokes.expiring",
+     "type": "count"
+    },
+    {
+     "path": "spokes.expired",
+     "type": "count"
+    },
+    {
+     "path": "spokes.revoked",
+     "type": "count"
+    },
+    {
+     "path": "spokes.blocked",
+     "type": "count"
+    },
+    {
+     "path": "lanes",
+     "type": "object",
+     "nullable": true
+    },
+    {
+     "path": "lanes.busy",
+     "type": "count"
+    },
+    {
+     "path": "lanes.total",
+     "type": "count"
+    }
+   ]
+  },
+  {
+   "route": "GET meet/counts",
+   "product": "meet",
+   "fields": [
+    {
+     "path": "ok",
+     "type": "bool"
+    },
+    {
+     "path": "people.online",
+     "type": "count"
+    },
+    {
+     "path": "people.seated",
+     "type": "count"
+    },
+    {
+     "path": "people.total",
+     "type": "count"
+    },
+    {
+     "path": "people.unseated",
+     "type": "count"
+    },
+    {
+     "path": "devices.online",
+     "type": "count"
+    },
+    {
+     "path": "devices.total",
+     "type": "count"
+    },
+    {
+     "path": "devices.blocked",
+     "type": "count"
+    },
+    {
+     "path": "devices.revoked",
+     "type": "count"
+    },
+    {
+     "path": "calls.active",
+     "type": "count"
+    },
+    {
+     "path": "calls.participants",
+     "type": "count"
+    },
+    {
+     "path": "enrollments.waiting",
+     "type": "count"
+    }
+   ]
+  },
+  {
+   "route": "GET spokes/relays",
+   "product": "spokes",
+   "fields": [
+    {
+     "path": "ok",
+     "type": "bool"
+    },
+    {
+     "path": "directory.version",
+     "type": "count",
+     "nullable": true
+    },
+    {
+     "path": "crl.version",
+     "type": "count",
+     "nullable": true
+    },
+    {
+     "path": "crl.nextUpdate",
+     "type": "date",
+     "form": "s",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "route": "GET meet/clock",
+   "product": "meet",
+   "fields": [
+    {
+     "path": "ok",
+     "type": "bool"
+    },
+    {
+     "path": "wall",
+     "type": "date",
+     "form": "ms"
+    },
+    {
+     "path": "effective",
+     "type": "date",
+     "form": "ms"
+    },
+    {
+     "path": "highWater",
+     "type": "date",
+     "form": "ms"
+    },
+    {
+     "path": "uncertain",
+     "type": "bool"
+    },
+    {
+     "path": "back",
+     "type": "bool"
+    },
+    {
+     "path": "heldGapMs",
+     "type": "count"
+    },
+    {
+     "path": "uncertainSince",
+     "type": "date",
+     "form": "ms",
+     "nullable": true
+    },
+    {
+     "path": "uncertainRunningMs",
+     "type": "count",
+     "nullable": true
+    },
+    {
+     "path": "holdAt",
+     "type": "date",
+     "form": "ms",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "route": "GET meet/release",
+   "product": "meet",
+   "fields": [
+    {
+     "path": "ok",
+     "type": "bool"
+    },
+    {
+     "path": "release.version",
+     "type": "version",
+     "nullable": true
+    },
+    {
+     "path": "release.ios",
+     "type": "version",
+     "nullable": true
+    },
+    {
+     "path": "minimums.hub",
+     "type": "version",
+     "nullable": true
+    },
+    {
+     "path": "minimums.ios",
+     "type": "version",
+     "nullable": true
+    },
+    {
+     "path": "min_client",
+     "type": "version",
+     "nullable": true
+    },
+    {
+     "path": "history[].version",
+     "type": "version"
+    },
+    {
+     "path": "history[].published",
+     "type": "date",
+     "form": "ms"
+    },
+    {
+     "path": "history[].until",
+     "type": "date",
+     "form": "ms",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "route": "GET meet/servers",
+   "product": "meet",
+   "fields": [
+    {
+     "path": "ok",
+     "type": "bool"
+    },
+    {
+     "path": "signer.healthy",
+     "type": "bool"
+    },
+    {
+     "path": "signer.days_left",
+     "type": "days",
+     "nullable": true
+    },
+    {
+     "path": "files",
+     "type": "object",
+     "nullable": true
+    },
+    {
+     "path": "files.state",
+     "type": "enum",
+     "values": [
+      "running",
+      "stopped"
+     ],
+     "nullable": true
+    },
+    {
+     "path": "files.since",
+     "type": "date",
+     "form": "ms",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "route": "GET meet/signer",
+   "product": "meet",
+   "fields": [
+    {
+     "path": "ok",
+     "type": "bool"
+    },
+    {
+     "path": "signer.healthy",
+     "type": "bool"
+    },
+    {
+     "path": "signer.not_after",
+     "type": "date",
+     "form": "s",
+     "nullable": true
+    },
+    {
+     "path": "signer.days_left",
+     "type": "days",
+     "nullable": true
+    },
+    {
+     "path": "signer.root_not_after",
+     "type": "date",
+     "form": "s",
+     "nullable": true
+    },
+    {
+     "path": "signer.root_crl_days_left",
+     "type": "days",
+     "nullable": true
+    },
+    {
+     "path": "signer.ledger_seq",
+     "type": "count",
+     "nullable": true
+    },
+    {
+     "path": "crl.root_days_left",
+     "type": "days",
+     "nullable": true
+    },
+    {
+     "path": "crl.next_update",
+     "type": "date",
+     "form": "s",
+     "nullable": true
+    }
+   ]
+  },
+  {
+   "route": "GET meet/push",
+   "product": "meet",
+   "fields": [
+    {
+     "path": "ok",
+     "type": "bool"
+    },
+    {
+     "path": "enabled",
+     "type": "bool"
+    },
+    {
+     "path": "devices.alert",
+     "type": "count"
+    },
+    {
+     "path": "devices.voip",
+     "type": "count"
+    },
+    {
+     "path": "sent24h",
+     "type": "count"
+    },
+    {
+     "path": "failed24h",
+     "type": "count",
+     "about": "the sum of the full answer's failed24h reasons; no reason names"
+    }
+   ]
+  },
+  {
+   "route": "GET meet/identity",
+   "product": "meet",
+   "fields": [
+    {
+     "path": "ok",
+     "type": "bool"
+    },
+    {
+     "path": "available",
+     "type": "bool"
+    }
+   ]
+  }
+ ]
+}

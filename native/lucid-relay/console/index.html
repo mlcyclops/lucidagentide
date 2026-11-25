@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en" data-theme="lucid-dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<meta name="referrer" content="no-referrer">
+<title>Lucid Admin Console</title>
+<link rel="icon" type="image/svg+xml" href="/console/favicon.svg">
+<link rel="manifest" href="/console/manifest.webmanifest">
+<link rel="stylesheet" href="/console/app.css">
+<script src="/console/theme.js"></script>
+<script src="/console/qr.js" defer></script>
+<script src="/console/charts.js" defer></script>
+<script src="/console/app.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main" data-act="skip">Skip to content</a>
+<header class="top">
+  <button type="button" class="menu-btn-only" id="menu-btn" data-act="nav-open" aria-haspopup="dialog" aria-controls="nav-sheet" hidden>Menu</button>
+  <h1 class="brand" aria-label="LUCID Admin Console"><span class="lucid-word">LUCID</span><span class="frame-pi" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" focusable="false"><path d="M5 8h14"/><path d="M9 8v9"/><path d="M16 8v7a2 2 0 0 0 2 2"/></svg></span><span class="frame-sub">Admin Console</span></h1>
+  <span class="where"><bdi class="host" id="hdr-host"></bdi><span class="chip" id="hdr-product" hidden></span><span class="chip" id="hdr-count" hidden></span><span class="chip" id="hdr-profile" hidden></span></span>
+  <div class="searchbox" role="search" id="hdr-search" hidden>
+    <label class="vh" for="search">Search</label>
+    <input id="search" type="search" autocomplete="off" spellcheck="false" maxlength="100" aria-controls="search-results" aria-describedby="search-hint">
+    <span class="vh" id="search-hint">Press slash to search from anywhere.</span>
+    <div class="search-results" id="search-results" hidden></div>
+  </div>
+  <div class="tools">
+    <a class="btn" id="hdr-approvals" href="#/approvals" hidden><span>Approvals</span><span class="badge" id="hdr-approvals-n" hidden></span></a>
+    <div class="menu-wrap" id="theme-wrap">
+      <button type="button" id="theme-btn" data-act="menu" aria-haspopup="menu" aria-expanded="false" aria-controls="theme-menu">Theme</button>
+      <ul class="menu" id="theme-menu" role="menu" aria-labelledby="theme-btn" hidden></ul>
+    </div>
+    <div class="menu-wrap" id="account-wrap" hidden>
+      <button type="button" id="account-btn" data-act="menu" aria-haspopup="menu" aria-expanded="false" aria-controls="account-menu"><bdi id="account-email"></bdi></button>
+      <ul class="menu" id="account-menu" role="menu" aria-labelledby="account-btn" hidden></ul>
+    </div>
+  </div>
+</header>
+<div class="shell bare" id="shell">
+  <nav class="sidenav" id="nav" aria-label="Sections" hidden></nav>
+  <main class="main" id="main" tabindex="-1">
+    <div class="messages">
+      <p class="msg-status" id="status" role="status"></p>
+      <p class="msg-alert" id="alert" role="alert"></p>
+      <div class="banner warn idle-warn" id="idle-warn" role="alert" hidden></div>
+    </div>
+    <div id="banner"></div>
+    <div class="content" id="view"></div>
+    <p class="foot" id="footer"></p>
+  </main>
+</div>
+
+<dialog class="sheet" id="nav-sheet" aria-label="Sections">
+  <div class="dlg-actions"><button type="button" data-act="nav-close">Close</button></div>
+  <nav id="nav-sheet-nav" aria-label="Sections"></nav>
+</dialog>
+
+<dialog class="confirm" id="confirm" aria-labelledby="confirm-title" aria-describedby="confirm-body">
+  <h2 id="confirm-title" tabindex="-1"></h2>
+  <div class="target" id="confirm-target">
+    <p class="name"><bdi id="confirm-name"></bdi></p>
+    <p class="id-line"><span class="id-label" id="confirm-id-label">ID</span> <code id="confirm-id"></code></p>
+  </div>
+  <div class="dlg-body" id="confirm-body"></div>
+  <p class="second" id="confirm-second" hidden></p>
+  <div id="confirm-fields"></div>
+  <dl class="pairs params" id="confirm-params" hidden></dl>
+  <p class="dlg-error" id="confirm-error" role="alert"></p>
+  <div class="dlg-actions">
+    <button type="button" data-act="dlg-cancel">Cancel</button>
+    <button type="button" class="primary" id="confirm-go" data-act="dlg-go"></button>
+  </div>
+</dialog>
+
+<dialog class="code" id="code-dlg" aria-labelledby="code-title" aria-describedby="code-body">
+  <h2 id="code-title" tabindex="-1"></h2>
+  <p id="code-body"></p>
+  <div class="field"><label for="code-input" id="code-label"></label><input id="code-input" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" spellcheck="false"></div>
+  <p class="dlg-error" id="code-error" role="alert"></p>
+  <div class="dlg-actions">
+    <button type="button" data-act="code-cancel">Cancel</button>
+    <button type="button" class="primary" id="code-go" data-act="code-go"></button>
+  </div>
+</dialog>
+</body>
+</html>

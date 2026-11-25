@@ -1,0 +1,4178 @@
+{
+ "version": 1,
+ "contract": "AC-2b-D revision 6",
+ "about": "AC-2b-D 14. header: 5.1, the 10 lines (no trailing newline; served text is the lines joined by newlines, a newline, then the body), refused naming the first input failing value_re, empty the deploy script header. pins: 4.3 from a fixed AC-2a trust manifest, current leaf first. cards and needs: 3.3. mint: 6.1 checks in order, stored the normalized deploy fields (turnHost \"\" means the DNS name). previews: 6.2 inside the AC-2a preview answer; previewHash = SHA-256(canonical_json(the answer without ok and previewHash)). decisions: 6.3 steps 1 to 5 and the delivered root rule (6.5, 6.7), words the first refusal or null. markers: 6.3 step 4. offered: 6.2 offered for the minting admin, fingerprint the AC-2a admin-key fingerprint. anchors: 6.7 in a dev-license program; licenses are AC-1 v2 tokens signed by the development key devPub. coturn: 5.2 step 9 peer lines in order. Times: now_ms (ms); license iat and exp are seconds.",
+ "now_ms": 1795089600000,
+ "enrollment": "en_b40ab7b2c9d5a06d",
+ "program": {
+  "version": "2.6.0",
+  "arch": "x86_64",
+  "sha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9"
+ },
+ "devPub": "MCowBQYDK2VwAyEAZh+F0210Xm7xfRH15vvf79EqJV7SLJWnh3lYe4YxgAM=",
+ "devPubPem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAZh+F0210Xm7xfRH15vvf79EqJV7SLJWnh3lYe4YxgAM=\n-----END PUBLIC KEY-----\n",
+ "header": {
+  "value_re": "^[A-Za-z0-9._:/+=;\\[\\]-]*$",
+  "cases": [
+   {
+    "name": "dns name",
+    "inputs": {
+     "console": "https://console.acme.example:7443",
+     "pins": "sha256//i7uO+hLUt6a0W2vknOjDNutBfolxxpj6fJbkm70UGcA=;sha256//8ppvdFo8FzA+R8SuqCAgy9oIQN5oFN6scf9mt3hVlQ0=",
+     "version": "2.6.0",
+     "arch": "x86_64",
+     "sha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+     "profile": "standard",
+     "enrollment": "en_b40ab7b2c9d5a06d"
+    },
+    "lines": [
+     "#!/usr/bin/env bash",
+     "# Lucid relay installer served by a Lucid Admin Console. Read it before you run it.",
+     "LUCID_CONSOLE='https://console.acme.example:7443'",
+     "LUCID_PINS='sha256//i7uO+hLUt6a0W2vknOjDNutBfolxxpj6fJbkm70UGcA=;sha256//8ppvdFo8FzA+R8SuqCAgy9oIQN5oFN6scf9mt3hVlQ0='",
+     "LUCID_VERSION='2.6.0'",
+     "LUCID_ARCH='x86_64'",
+     "LUCID_SHA256='68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9'",
+     "LUCID_PROFILE='standard'",
+     "LUCID_ENROLLMENT='en_b40ab7b2c9d5a06d'",
+     "# The lines below are the same for every console; their SHA-256 is in SHA256SUMS."
+    ],
+    "refused": null
+   },
+   {
+    "name": "ipv4 address, no enrollment",
+    "inputs": {
+     "console": "https://203.0.113.10:7443",
+     "pins": "sha256//i7uO+hLUt6a0W2vknOjDNutBfolxxpj6fJbkm70UGcA=;sha256//8ppvdFo8FzA+R8SuqCAgy9oIQN5oFN6scf9mt3hVlQ0=",
+     "version": "2.6.0",
+     "arch": "x86_64",
+     "sha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+     "profile": "standard",
+     "enrollment": ""
+    },
+    "lines": [
+     "#!/usr/bin/env bash",
+     "# Lucid relay installer served by a Lucid Admin Console. Read it before you run it.",
+     "LUCID_CONSOLE='https://203.0.113.10:7443'",
+     "LUCID_PINS='sha256//i7uO+hLUt6a0W2vknOjDNutBfolxxpj6fJbkm70UGcA=;sha256//8ppvdFo8FzA+R8SuqCAgy9oIQN5oFN6scf9mt3hVlQ0='",
+     "LUCID_VERSION='2.6.0'",
+     "LUCID_ARCH='x86_64'",
+     "LUCID_SHA256='68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9'",
+     "LUCID_PROFILE='standard'",
+     "LUCID_ENROLLMENT=''",
+     "# The lines below are the same for every console; their SHA-256 is in SHA256SUMS."
+    ],
+    "refused": null
+   },
+   {
+    "name": "ipv6 literal",
+    "inputs": {
+     "console": "https://[2001:db8::10]:7443",
+     "pins": "sha256//i7uO+hLUt6a0W2vknOjDNutBfolxxpj6fJbkm70UGcA=;sha256//8ppvdFo8FzA+R8SuqCAgy9oIQN5oFN6scf9mt3hVlQ0=",
+     "version": "2.6.0",
+     "arch": "x86_64",
+     "sha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+     "profile": "standard",
+     "enrollment": "en_b40ab7b2c9d5a06d"
+    },
+    "lines": [
+     "#!/usr/bin/env bash",
+     "# Lucid relay installer served by a Lucid Admin Console. Read it before you run it.",
+     "LUCID_CONSOLE='https://[2001:db8::10]:7443'",
+     "LUCID_PINS='sha256//i7uO+hLUt6a0W2vknOjDNutBfolxxpj6fJbkm70UGcA=;sha256//8ppvdFo8FzA+R8SuqCAgy9oIQN5oFN6scf9mt3hVlQ0='",
+     "LUCID_VERSION='2.6.0'",
+     "LUCID_ARCH='x86_64'",
+     "LUCID_SHA256='68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9'",
+     "LUCID_PROFILE='standard'",
+     "LUCID_ENROLLMENT='en_b40ab7b2c9d5a06d'",
+     "# The lines below are the same for every console; their SHA-256 is in SHA256SUMS."
+    ],
+    "refused": null
+   },
+   {
+    "name": "aarch64",
+    "inputs": {
+     "console": "https://console.acme.example:7443",
+     "pins": "sha256//i7uO+hLUt6a0W2vknOjDNutBfolxxpj6fJbkm70UGcA=;sha256//8ppvdFo8FzA+R8SuqCAgy9oIQN5oFN6scf9mt3hVlQ0=",
+     "version": "2.6.0",
+     "arch": "aarch64",
+     "sha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+     "profile": "standard",
+     "enrollment": "en_b40ab7b2c9d5a06d"
+    },
+    "lines": [
+     "#!/usr/bin/env bash",
+     "# Lucid relay installer served by a Lucid Admin Console. Read it before you run it.",
+     "LUCID_CONSOLE='https://console.acme.example:7443'",
+     "LUCID_PINS='sha256//i7uO+hLUt6a0W2vknOjDNutBfolxxpj6fJbkm70UGcA=;sha256//8ppvdFo8FzA+R8SuqCAgy9oIQN5oFN6scf9mt3hVlQ0='",
+     "LUCID_VERSION='2.6.0'",
+     "LUCID_ARCH='aarch64'",
+     "LUCID_SHA256='68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9'",
+     "LUCID_PROFILE='standard'",
+     "LUCID_ENROLLMENT='en_b40ab7b2c9d5a06d'",
+     "# The lines below are the same for every console; their SHA-256 is in SHA256SUMS."
+    ],
+    "refused": null
+   },
+   {
+    "name": "newline in pins",
+    "inputs": {
+     "console": "https://console.acme.example:7443",
+     "pins": "sha256//i7uO+hLUt6a0W2vknOjDNutBfolxxpj6fJbkm70UGcA=;sha256//8ppvdFo8FzA+R8SuqCAgy9oIQN5oFN6scf9mt3hVlQ0=\nrm -rf /",
+     "version": "2.6.0",
+     "arch": "x86_64",
+     "sha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+     "profile": "standard",
+     "enrollment": "en_b40ab7b2c9d5a06d"
+    },
+    "lines": null,
+    "refused": "pins"
+   },
+   {
+    "name": "trailing newline in version",
+    "inputs": {
+     "console": "https://console.acme.example:7443",
+     "pins": "sha256//i7uO+hLUt6a0W2vknOjDNutBfolxxpj6fJbkm70UGcA=;sha256//8ppvdFo8FzA+R8SuqCAgy9oIQN5oFN6scf9mt3hVlQ0=",
+     "version": "2.6.0\n",
+     "arch": "x86_64",
+     "sha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+     "profile": "standard",
+     "enrollment": "en_b40ab7b2c9d5a06d"
+    },
+    "lines": null,
+    "refused": "version"
+   },
+   {
+    "name": "quote in version",
+    "inputs": {
+     "console": "https://console.acme.example:7443",
+     "pins": "sha256//i7uO+hLUt6a0W2vknOjDNutBfolxxpj6fJbkm70UGcA=;sha256//8ppvdFo8FzA+R8SuqCAgy9oIQN5oFN6scf9mt3hVlQ0=",
+     "version": "2.6.0'; id; '",
+     "arch": "x86_64",
+     "sha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+     "profile": "standard",
+     "enrollment": "en_b40ab7b2c9d5a06d"
+    },
+    "lines": null,
+    "refused": "version"
+   },
+   {
+    "name": "space in console",
+    "inputs": {
+     "console": "https://console acme:7443",
+     "pins": "sha256//i7uO+hLUt6a0W2vknOjDNutBfolxxpj6fJbkm70UGcA=;sha256//8ppvdFo8FzA+R8SuqCAgy9oIQN5oFN6scf9mt3hVlQ0=",
+     "version": "2.6.0",
+     "arch": "x86_64",
+     "sha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+     "profile": "standard",
+     "enrollment": "en_b40ab7b2c9d5a06d"
+    },
+    "lines": null,
+    "refused": "console"
+   },
+   {
+    "name": "command in enrollment",
+    "inputs": {
+     "console": "https://console.acme.example:7443",
+     "pins": "sha256//i7uO+hLUt6a0W2vknOjDNutBfolxxpj6fJbkm70UGcA=;sha256//8ppvdFo8FzA+R8SuqCAgy9oIQN5oFN6scf9mt3hVlQ0=",
+     "version": "2.6.0",
+     "arch": "x86_64",
+     "sha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+     "profile": "standard",
+     "enrollment": "$(id)"
+    },
+    "lines": null,
+    "refused": "enrollment"
+   },
+   {
+    "name": "backtick in arch",
+    "inputs": {
+     "console": "https://console.acme.example:7443",
+     "pins": "sha256//i7uO+hLUt6a0W2vknOjDNutBfolxxpj6fJbkm70UGcA=;sha256//8ppvdFo8FzA+R8SuqCAgy9oIQN5oFN6scf9mt3hVlQ0=",
+     "version": "2.6.0",
+     "arch": "x86_64`id`",
+     "sha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+     "profile": "standard",
+     "enrollment": "en_b40ab7b2c9d5a06d"
+    },
+    "lines": null,
+    "refused": "arch"
+   },
+   {
+    "name": "quote in console",
+    "inputs": {
+     "console": "https://console.acme.example\":7443",
+     "pins": "sha256//i7uO+hLUt6a0W2vknOjDNutBfolxxpj6fJbkm70UGcA=;sha256//8ppvdFo8FzA+R8SuqCAgy9oIQN5oFN6scf9mt3hVlQ0=",
+     "version": "2.6.0",
+     "arch": "x86_64",
+     "sha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+     "profile": "standard",
+     "enrollment": "en_b40ab7b2c9d5a06d"
+    },
+    "lines": null,
+    "refused": "console"
+   }
+  ],
+  "empty": {
+   "lines": [
+    "#!/usr/bin/env bash",
+    "# Lucid relay installer served by a Lucid Admin Console. Read it before you run it.",
+    "LUCID_CONSOLE=''",
+    "LUCID_PINS=''",
+    "LUCID_VERSION=''",
+    "LUCID_ARCH=''",
+    "LUCID_SHA256=''",
+    "LUCID_PROFILE=''",
+    "LUCID_ENROLLMENT=''",
+    "# The lines below are the same for every console; their SHA-256 is in SHA256SUMS."
+   ]
+  }
+ },
+ "pins": {
+  "manifest": {
+   "v": 1,
+   "consoleId": "c_0123456789abcdef",
+   "caGeneration": 1,
+   "seq": 7,
+   "issuedAt": 1795737600000,
+   "expiresAt": 1796947200000,
+   "leaves": [
+    {
+     "spkiSha256": "f29a6f745a3c17303e47c4aea82020cbda0840de6814deac71ff66b77855950d",
+     "serial": "7aa919eb868df19c4efd16eecb19aba1",
+     "role": "next",
+     "notAfter": 1807833600000
+    },
+    {
+     "spkiSha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+     "serial": "60192cdd8390123ed602df899c7bf2c5",
+     "role": "current",
+     "notAfter": 1802649600000
+    }
+   ],
+   "revoked": [],
+   "nextCa": null,
+   "sig": "MGUCMCZe1GvvE-A3O2e-Mwp-ftWNE5fdhkDU1_pvTgsOkRsB8oYdpH19grmo954tkYglLQIxANWf4xxGnaRDqyTBYwl5c-d_z-gF8Qj0HeG-ZhzzaCzzkh_a2l2_ClExVHlRGmyvlQ"
+  },
+  "pins": "sha256//i7uO+hLUt6a0W2vknOjDNutBfolxxpj6fJbkm70UGcA=;sha256//8ppvdFo8FzA+R8SuqCAgy9oIQN5oFN6scf9mt3hVlQ0=",
+  "alone": {
+   "manifest": {
+    "v": 1,
+    "consoleId": "c_0123456789abcdef",
+    "caGeneration": 1,
+    "seq": 8,
+    "issuedAt": 1795824000000,
+    "expiresAt": 1797033600000,
+    "leaves": [
+     {
+      "spkiSha256": "8bbb8efa12d4b7a6b45b6be49ce8c336eb417e8971c698fa7c96e49bbd1419c0",
+      "serial": "60192cdd8390123ed602df899c7bf2c5",
+      "role": "current",
+      "notAfter": 1802649600000
+     }
+    ],
+    "revoked": [],
+    "nextCa": null,
+    "sig": "MGUCMAyzSvED9ItgNr91LCE-u79GaCgW8lpfnRaJYmqxlgCHZjhG3sX_cxY8kqfmTcVz4gIxAPwunannVd75_F_Jabr5oHMZCRpeH59y-SAO4YJc-lrJyjFu827oB1d9QgbXre8l_A"
+   },
+   "pins": "sha256//i7uO+hLUt6a0W2vknOjDNutBfolxxpj6fJbkm70UGcA="
+  }
+ },
+ "cards": [
+  {
+   "profile": "standard",
+   "os": "linux",
+   "arch": "x86_64",
+   "build": "release",
+   "serveDev": false,
+   "serves": true,
+   "cards": [
+    {
+     "env": "linux",
+     "state": "offered",
+     "words": null
+    },
+    {
+     "env": "proxmox",
+     "state": "offered",
+     "words": null
+    },
+    {
+     "env": "docker",
+     "state": "offered",
+     "words": null
+    },
+    {
+     "env": "installed",
+     "state": "offered",
+     "words": null
+    },
+    {
+     "env": "azure",
+     "state": "disabled",
+     "words": "deploy.env-next"
+    },
+    {
+     "env": "aws",
+     "state": "disabled",
+     "words": "deploy.env-next"
+    },
+    {
+     "env": "gcp",
+     "state": "disabled",
+     "words": "deploy.env-next"
+    },
+    {
+     "env": "windows",
+     "state": "disabled",
+     "words": "deploy.env-next"
+    }
+   ]
+  },
+  {
+   "profile": "standard",
+   "os": "linux",
+   "arch": "aarch64",
+   "build": "release",
+   "serveDev": false,
+   "serves": true,
+   "cards": [
+    {
+     "env": "linux",
+     "state": "offered",
+     "words": null
+    },
+    {
+     "env": "proxmox",
+     "state": "offered",
+     "words": null
+    },
+    {
+     "env": "docker",
+     "state": "offered",
+     "words": null
+    },
+    {
+     "env": "installed",
+     "state": "offered",
+     "words": null
+    },
+    {
+     "env": "azure",
+     "state": "disabled",
+     "words": "deploy.env-next"
+    },
+    {
+     "env": "aws",
+     "state": "disabled",
+     "words": "deploy.env-next"
+    },
+    {
+     "env": "gcp",
+     "state": "disabled",
+     "words": "deploy.env-next"
+    },
+    {
+     "env": "windows",
+     "state": "disabled",
+     "words": "deploy.env-next"
+    }
+   ]
+  },
+  {
+   "profile": "standard",
+   "os": "linux",
+   "arch": "riscv64",
+   "build": "release",
+   "serveDev": false,
+   "serves": false,
+   "cards": [
+    {
+     "env": "linux",
+     "state": "disabled",
+     "words": "deploy.env-os-mismatch"
+    },
+    {
+     "env": "proxmox",
+     "state": "disabled",
+     "words": "deploy.env-os-mismatch"
+    },
+    {
+     "env": "docker",
+     "state": "disabled",
+     "words": "deploy.env-os-mismatch"
+    },
+    {
+     "env": "installed",
+     "state": "offered",
+     "words": null
+    },
+    {
+     "env": "azure",
+     "state": "disabled",
+     "words": "deploy.env-next"
+    },
+    {
+     "env": "aws",
+     "state": "disabled",
+     "words": "deploy.env-next"
+    },
+    {
+     "env": "gcp",
+     "state": "disabled",
+     "words": "deploy.env-next"
+    },
+    {
+     "env": "windows",
+     "state": "disabled",
+     "words": "deploy.env-next"
+    }
+   ]
+  },
+  {
+   "profile": "standard",
+   "os": "windows",
+   "arch": "x86_64",
+   "build": "release",
+   "serveDev": false,
+   "serves": false,
+   "cards": [
+    {
+     "env": "linux",
+     "state": "disabled",
+     "words": "deploy.env-os-mismatch"
+    },
+    {
+     "env": "proxmox",
+     "state": "disabled",
+     "words": "deploy.env-os-mismatch"
+    },
+    {
+     "env": "docker",
+     "state": "disabled",
+     "words": "deploy.env-os-mismatch"
+    },
+    {
+     "env": "installed",
+     "state": "offered",
+     "words": null
+    },
+    {
+     "env": "azure",
+     "state": "disabled",
+     "words": "deploy.env-next"
+    },
+    {
+     "env": "aws",
+     "state": "disabled",
+     "words": "deploy.env-next"
+    },
+    {
+     "env": "gcp",
+     "state": "disabled",
+     "words": "deploy.env-next"
+    },
+    {
+     "env": "windows",
+     "state": "disabled",
+     "words": "deploy.env-next"
+    }
+   ]
+  },
+  {
+   "profile": "standard",
+   "os": "linux",
+   "arch": "x86_64",
+   "build": "dev-license",
+   "serveDev": false,
+   "serves": false,
+   "cards": [
+    {
+     "env": "linux",
+     "state": "disabled",
+     "words": "deploy.env-os-mismatch"
+    },
+    {
+     "env": "proxmox",
+     "state": "disabled",
+     "words": "deploy.env-os-mismatch"
+    },
+    {
+     "env": "docker",
+     "state": "disabled",
+     "words": "deploy.env-os-mismatch"
+    },
+    {
+     "env": "installed",
+     "state": "offered",
+     "words": null
+    },
+    {
+     "env": "azure",
+     "state": "disabled",
+     "words": "deploy.env-next"
+    },
+    {
+     "env": "aws",
+     "state": "disabled",
+     "words": "deploy.env-next"
+    },
+    {
+     "env": "gcp",
+     "state": "disabled",
+     "words": "deploy.env-next"
+    },
+    {
+     "env": "windows",
+     "state": "disabled",
+     "words": "deploy.env-next"
+    }
+   ]
+  },
+  {
+   "profile": "standard",
+   "os": "linux",
+   "arch": "x86_64",
+   "build": "dev-license",
+   "serveDev": true,
+   "serves": true,
+   "cards": [
+    {
+     "env": "linux",
+     "state": "offered",
+     "words": null
+    },
+    {
+     "env": "proxmox",
+     "state": "offered",
+     "words": null
+    },
+    {
+     "env": "docker",
+     "state": "offered",
+     "words": null
+    },
+    {
+     "env": "installed",
+     "state": "offered",
+     "words": null
+    },
+    {
+     "env": "azure",
+     "state": "disabled",
+     "words": "deploy.env-next"
+    },
+    {
+     "env": "aws",
+     "state": "disabled",
+     "words": "deploy.env-next"
+    },
+    {
+     "env": "gcp",
+     "state": "disabled",
+     "words": "deploy.env-next"
+    },
+    {
+     "env": "windows",
+     "state": "disabled",
+     "words": "deploy.env-next"
+    }
+   ]
+  },
+  {
+   "profile": "high",
+   "os": "linux",
+   "arch": "x86_64",
+   "build": "release",
+   "serveDev": false,
+   "serves": true,
+   "cards": [
+    {
+     "env": "linux",
+     "state": "offered",
+     "words": null
+    },
+    {
+     "env": "proxmox",
+     "state": "offered",
+     "words": null
+    },
+    {
+     "env": "docker",
+     "state": "disabled",
+     "words": "deploy.env-docker-high"
+    },
+    {
+     "env": "installed",
+     "state": "offered",
+     "words": null
+    },
+    {
+     "env": "azure",
+     "state": "disabled",
+     "words": "deploy.env-next"
+    },
+    {
+     "env": "aws",
+     "state": "disabled",
+     "words": "deploy.env-next"
+    },
+    {
+     "env": "gcp",
+     "state": "disabled",
+     "words": "deploy.env-next"
+    },
+    {
+     "env": "windows",
+     "state": "disabled",
+     "words": "deploy.env-next"
+    }
+   ]
+  },
+  {
+   "profile": "high",
+   "os": "windows",
+   "arch": "x86_64",
+   "build": "release",
+   "serveDev": false,
+   "serves": false,
+   "cards": [
+    {
+     "env": "linux",
+     "state": "offered",
+     "words": null
+    },
+    {
+     "env": "proxmox",
+     "state": "offered",
+     "words": null
+    },
+    {
+     "env": "docker",
+     "state": "disabled",
+     "words": "deploy.env-docker-high"
+    },
+    {
+     "env": "installed",
+     "state": "offered",
+     "words": null
+    },
+    {
+     "env": "azure",
+     "state": "disabled",
+     "words": "deploy.env-next"
+    },
+    {
+     "env": "aws",
+     "state": "disabled",
+     "words": "deploy.env-next"
+    },
+    {
+     "env": "gcp",
+     "state": "disabled",
+     "words": "deploy.env-next"
+    },
+    {
+     "env": "windows",
+     "state": "disabled",
+     "words": "deploy.env-next"
+    }
+   ]
+  }
+ ],
+ "needs": [
+  {
+   "env": "linux",
+   "product": "meet",
+   "pki": "console",
+   "signer": true,
+   "deliveredRoot": false,
+   "needs": [
+    "deploy.need-os",
+    "deploy.need-size-meet",
+    "deploy.need-dns-meet",
+    "deploy.need-ports-meet",
+    "deploy.need-console",
+    "deploy.need-tls-meet",
+    "deploy.need-signer",
+    "deploy.need-sudo"
+   ]
+  },
+  {
+   "env": "linux",
+   "product": "meet",
+   "pki": "console",
+   "signer": false,
+   "deliveredRoot": false,
+   "needs": [
+    "deploy.need-os",
+    "deploy.need-size-meet",
+    "deploy.need-dns-meet",
+    "deploy.need-ports-meet",
+    "deploy.need-console",
+    "deploy.need-tls-meet",
+    "deploy.need-sudo"
+   ]
+  },
+  {
+   "env": "linux",
+   "product": "meet",
+   "pki": "own",
+   "signer": false,
+   "deliveredRoot": false,
+   "needs": [
+    "deploy.need-os",
+    "deploy.need-size-meet",
+    "deploy.need-dns-meet",
+    "deploy.need-ports-meet",
+    "deploy.need-console",
+    "deploy.need-tls-meet-own",
+    "deploy.need-sudo"
+   ]
+  },
+  {
+   "env": "linux",
+   "product": "spokes",
+   "pki": null,
+   "signer": false,
+   "deliveredRoot": true,
+   "needs": [
+    "deploy.need-os",
+    "deploy.need-size-spokes",
+    "deploy.need-dns-spokes",
+    "deploy.need-ports-spokes",
+    "deploy.need-console",
+    "deploy.need-tls-spokes",
+    "deploy.need-sudo"
+   ]
+  },
+  {
+   "env": "linux",
+   "product": "spokes",
+   "pki": null,
+   "signer": false,
+   "deliveredRoot": false,
+   "needs": [
+    "deploy.need-os",
+    "deploy.need-size-spokes",
+    "deploy.need-dns-spokes",
+    "deploy.need-ports-spokes",
+    "deploy.need-console",
+    "deploy.need-tls-spokes",
+    "deploy.need-root-spokes",
+    "deploy.need-sudo"
+   ]
+  },
+  {
+   "env": "proxmox",
+   "product": "meet",
+   "pki": "console",
+   "signer": true,
+   "deliveredRoot": false,
+   "needs": [
+    "deploy.need-proxmox",
+    "deploy.need-os",
+    "deploy.need-size-meet",
+    "deploy.need-dns-meet",
+    "deploy.need-ports-meet",
+    "deploy.need-console",
+    "deploy.need-tls-meet",
+    "deploy.need-signer",
+    "deploy.need-sudo"
+   ]
+  },
+  {
+   "env": "proxmox",
+   "product": "meet",
+   "pki": "console",
+   "signer": false,
+   "deliveredRoot": false,
+   "needs": [
+    "deploy.need-proxmox",
+    "deploy.need-os",
+    "deploy.need-size-meet",
+    "deploy.need-dns-meet",
+    "deploy.need-ports-meet",
+    "deploy.need-console",
+    "deploy.need-tls-meet",
+    "deploy.need-sudo"
+   ]
+  },
+  {
+   "env": "proxmox",
+   "product": "meet",
+   "pki": "own",
+   "signer": false,
+   "deliveredRoot": false,
+   "needs": [
+    "deploy.need-proxmox",
+    "deploy.need-os",
+    "deploy.need-size-meet",
+    "deploy.need-dns-meet",
+    "deploy.need-ports-meet",
+    "deploy.need-console",
+    "deploy.need-tls-meet-own",
+    "deploy.need-sudo"
+   ]
+  },
+  {
+   "env": "proxmox",
+   "product": "spokes",
+   "pki": null,
+   "signer": false,
+   "deliveredRoot": true,
+   "needs": [
+    "deploy.need-proxmox",
+    "deploy.need-os",
+    "deploy.need-size-spokes",
+    "deploy.need-dns-spokes",
+    "deploy.need-ports-spokes",
+    "deploy.need-console",
+    "deploy.need-tls-spokes",
+    "deploy.need-sudo"
+   ]
+  },
+  {
+   "env": "proxmox",
+   "product": "spokes",
+   "pki": null,
+   "signer": false,
+   "deliveredRoot": false,
+   "needs": [
+    "deploy.need-proxmox",
+    "deploy.need-os",
+    "deploy.need-size-spokes",
+    "deploy.need-dns-spokes",
+    "deploy.need-ports-spokes",
+    "deploy.need-console",
+    "deploy.need-tls-spokes",
+    "deploy.need-root-spokes",
+    "deploy.need-sudo"
+   ]
+  },
+  {
+   "env": "docker",
+   "product": "meet",
+   "pki": "console",
+   "signer": true,
+   "deliveredRoot": false,
+   "needs": [
+    "deploy.need-docker",
+    "deploy.need-size-meet",
+    "deploy.need-dns-meet",
+    "deploy.need-ports-meet",
+    "deploy.need-console",
+    "deploy.need-tls-meet",
+    "deploy.need-signer",
+    "deploy.need-sudo",
+    "deploy.docker-turn-note"
+   ]
+  },
+  {
+   "env": "docker",
+   "product": "meet",
+   "pki": "console",
+   "signer": false,
+   "deliveredRoot": false,
+   "needs": [
+    "deploy.need-docker",
+    "deploy.need-size-meet",
+    "deploy.need-dns-meet",
+    "deploy.need-ports-meet",
+    "deploy.need-console",
+    "deploy.need-tls-meet",
+    "deploy.need-sudo",
+    "deploy.docker-turn-note"
+   ]
+  },
+  {
+   "env": "docker",
+   "product": "meet",
+   "pki": "own",
+   "signer": false,
+   "deliveredRoot": false,
+   "needs": [
+    "deploy.need-docker",
+    "deploy.need-size-meet",
+    "deploy.need-dns-meet",
+    "deploy.need-ports-meet",
+    "deploy.need-console",
+    "deploy.need-tls-meet-own",
+    "deploy.need-sudo",
+    "deploy.docker-turn-note"
+   ]
+  },
+  {
+   "env": "docker",
+   "product": "spokes",
+   "pki": null,
+   "signer": false,
+   "deliveredRoot": true,
+   "needs": [
+    "deploy.need-docker",
+    "deploy.need-size-spokes",
+    "deploy.need-dns-spokes",
+    "deploy.need-ports-spokes",
+    "deploy.need-console",
+    "deploy.need-tls-spokes",
+    "deploy.need-sudo"
+   ]
+  },
+  {
+   "env": "docker",
+   "product": "spokes",
+   "pki": null,
+   "signer": false,
+   "deliveredRoot": false,
+   "needs": [
+    "deploy.need-docker",
+    "deploy.need-size-spokes",
+    "deploy.need-dns-spokes",
+    "deploy.need-ports-spokes",
+    "deploy.need-console",
+    "deploy.need-tls-spokes",
+    "deploy.need-root-spokes",
+    "deploy.need-sudo"
+   ]
+  },
+  {
+   "env": "installed",
+   "product": "meet",
+   "pki": "console",
+   "signer": true,
+   "deliveredRoot": false,
+   "needs": [
+    "deploy.env-installed-help"
+   ]
+  },
+  {
+   "env": "installed",
+   "product": "meet",
+   "pki": "console",
+   "signer": false,
+   "deliveredRoot": false,
+   "needs": [
+    "deploy.env-installed-help"
+   ]
+  },
+  {
+   "env": "installed",
+   "product": "meet",
+   "pki": "own",
+   "signer": false,
+   "deliveredRoot": false,
+   "needs": [
+    "deploy.env-installed-help"
+   ]
+  },
+  {
+   "env": "installed",
+   "product": "spokes",
+   "pki": null,
+   "signer": false,
+   "deliveredRoot": true,
+   "needs": [
+    "deploy.env-installed-help"
+   ]
+  },
+  {
+   "env": "installed",
+   "product": "spokes",
+   "pki": null,
+   "signer": false,
+   "deliveredRoot": false,
+   "needs": [
+    "deploy.env-installed-help"
+   ]
+  }
+ ],
+ "mint": [
+  {
+   "name": "meet linux",
+   "context": {
+    "profile": "standard",
+    "serves": true,
+    "caId": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+    "spokesRoot": "n_c01f74fdded17dd19924398395187920",
+    "held": {
+     "meet-old.acme.example": "r_8c41d2e07b9a6f13"
+    }
+   },
+   "body": {
+    "product": "meet",
+    "env": "linux",
+    "deploy": {
+     "host": "Meet.Acme.Example",
+     "turnHost": "",
+     "pki": "console",
+     "license": {
+      "id": "l_00000000000000a1",
+      "product": "meet",
+      "root": "m_3d50cc4fe467cb0ab3e44d784c43267c"
+     }
+    }
+   },
+   "code": null,
+   "stored": {
+    "env": "linux",
+    "host": "meet.acme.example",
+    "turnHost": "",
+    "pki": "console",
+    "license": "l_00000000000000a1"
+   }
+  },
+  {
+   "name": "meet turn address",
+   "context": {
+    "profile": "standard",
+    "serves": true,
+    "caId": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+    "spokesRoot": "n_c01f74fdded17dd19924398395187920",
+    "held": {
+     "meet-old.acme.example": "r_8c41d2e07b9a6f13"
+    }
+   },
+   "body": {
+    "product": "meet",
+    "env": "linux",
+    "deploy": {
+     "host": "Meet.Acme.Example",
+     "turnHost": "198.51.100.7",
+     "pki": "console",
+     "license": {
+      "id": "l_00000000000000a1",
+      "product": "meet",
+      "root": "m_3d50cc4fe467cb0ab3e44d784c43267c"
+     }
+    }
+   },
+   "code": null,
+   "stored": {
+    "env": "linux",
+    "host": "meet.acme.example",
+    "turnHost": "198.51.100.7",
+    "pki": "console",
+    "license": "l_00000000000000a1"
+   }
+  },
+  {
+   "name": "spokes ipv6 host, default networks",
+   "context": {
+    "profile": "standard",
+    "serves": true,
+    "caId": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+    "spokesRoot": "n_c01f74fdded17dd19924398395187920",
+    "held": {
+     "meet-old.acme.example": "r_8c41d2e07b9a6f13"
+    }
+   },
+   "body": {
+    "product": "spokes",
+    "env": "docker",
+    "deploy": {
+     "host": "2001:db8::5",
+     "license": {
+      "id": "l_00000000000000b2",
+      "product": "spokes",
+      "root": "n_c01f74fdded17dd19924398395187920"
+     }
+    }
+   },
+   "code": null,
+   "stored": {
+    "env": "docker",
+    "host": "2001:db8::5",
+    "clients": [
+     "0.0.0.0/0",
+     "::/0"
+    ],
+    "pki": null,
+    "license": "l_00000000000000b2"
+   }
+  },
+  {
+   "name": "spokes networks",
+   "context": {
+    "profile": "standard",
+    "serves": true,
+    "caId": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+    "spokesRoot": "n_c01f74fdded17dd19924398395187920",
+    "held": {
+     "meet-old.acme.example": "r_8c41d2e07b9a6f13"
+    }
+   },
+   "body": {
+    "product": "spokes",
+    "env": "proxmox",
+    "deploy": {
+     "host": "relay-berlin.acme.example",
+     "license": {
+      "id": "l_00000000000000b2",
+      "product": "spokes",
+      "root": "n_c01f74fdded17dd19924398395187920"
+     },
+     "clients": [
+      "203.0.113.0/24",
+      "2001:db8::/32"
+     ]
+    }
+   },
+   "code": null,
+   "stored": {
+    "env": "proxmox",
+    "host": "relay-berlin.acme.example",
+    "clients": [
+     "203.0.113.0/24",
+     "2001:db8::/32"
+    ],
+    "pki": null,
+    "license": "l_00000000000000b2"
+   }
+  },
+  {
+   "name": "installed, no deploy",
+   "context": {
+    "profile": "standard",
+    "serves": true,
+    "caId": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+    "spokesRoot": "n_c01f74fdded17dd19924398395187920",
+    "held": {
+     "meet-old.acme.example": "r_8c41d2e07b9a6f13"
+    }
+   },
+   "body": {
+    "product": "spokes"
+   },
+   "code": null,
+   "stored": null
+  },
+  {
+   "name": "no product",
+   "context": {
+    "profile": "standard",
+    "serves": true,
+    "caId": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+    "spokesRoot": "n_c01f74fdded17dd19924398395187920",
+    "held": {
+     "meet-old.acme.example": "r_8c41d2e07b9a6f13"
+    }
+   },
+   "body": {
+    "product": "x",
+    "env": "linux",
+    "deploy": {
+     "host": "relay-berlin.acme.example",
+     "license": {
+      "id": "l_00000000000000b2",
+      "product": "spokes",
+      "root": "n_c01f74fdded17dd19924398395187920"
+     }
+    }
+   },
+   "code": "deploy-product",
+   "stored": null
+  },
+  {
+   "name": "azure",
+   "context": {
+    "profile": "standard",
+    "serves": true,
+    "caId": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+    "spokesRoot": "n_c01f74fdded17dd19924398395187920",
+    "held": {
+     "meet-old.acme.example": "r_8c41d2e07b9a6f13"
+    }
+   },
+   "body": {
+    "product": "spokes",
+    "env": "azure",
+    "deploy": {
+     "host": "relay-berlin.acme.example",
+     "license": {
+      "id": "l_00000000000000b2",
+      "product": "spokes",
+      "root": "n_c01f74fdded17dd19924398395187920"
+     }
+    }
+   },
+   "code": "deploy-env",
+   "stored": null
+  },
+  {
+   "name": "docker under high",
+   "context": {
+    "profile": "high",
+    "serves": true,
+    "caId": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+    "spokesRoot": "n_c01f74fdded17dd19924398395187920",
+    "held": {
+     "meet-old.acme.example": "r_8c41d2e07b9a6f13"
+    }
+   },
+   "body": {
+    "product": "spokes",
+    "env": "docker",
+    "deploy": {
+     "host": "relay-berlin.acme.example",
+     "license": {
+      "id": "l_00000000000000b2",
+      "product": "spokes",
+      "root": "n_c01f74fdded17dd19924398395187920"
+     }
+    }
+   },
+   "code": "deploy-high",
+   "stored": null
+  },
+  {
+   "name": "console cannot serve",
+   "context": {
+    "profile": "standard",
+    "serves": false,
+    "caId": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+    "spokesRoot": "n_c01f74fdded17dd19924398395187920",
+    "held": {
+     "meet-old.acme.example": "r_8c41d2e07b9a6f13"
+    }
+   },
+   "body": {
+    "product": "spokes",
+    "env": "linux",
+    "deploy": {
+     "host": "relay-berlin.acme.example",
+     "license": {
+      "id": "l_00000000000000b2",
+      "product": "spokes",
+      "root": "n_c01f74fdded17dd19924398395187920"
+     }
+    }
+   },
+   "code": "deploy-unavailable",
+   "stored": null
+  },
+  {
+   "name": "meet ip host",
+   "context": {
+    "profile": "standard",
+    "serves": true,
+    "caId": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+    "spokesRoot": "n_c01f74fdded17dd19924398395187920",
+    "held": {
+     "meet-old.acme.example": "r_8c41d2e07b9a6f13"
+    }
+   },
+   "body": {
+    "product": "meet",
+    "env": "linux",
+    "deploy": {
+     "host": "2001:db8::5",
+     "turnHost": "",
+     "pki": "console",
+     "license": {
+      "id": "l_00000000000000a1",
+      "product": "meet",
+      "root": "m_3d50cc4fe467cb0ab3e44d784c43267c"
+     }
+    }
+   },
+   "code": "deploy-host",
+   "stored": null
+  },
+  {
+   "name": "underscore",
+   "context": {
+    "profile": "standard",
+    "serves": true,
+    "caId": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+    "spokesRoot": "n_c01f74fdded17dd19924398395187920",
+    "held": {
+     "meet-old.acme.example": "r_8c41d2e07b9a6f13"
+    }
+   },
+   "body": {
+    "product": "meet",
+    "env": "linux",
+    "deploy": {
+     "host": "meet_relay.acme.example",
+     "turnHost": "",
+     "pki": "console",
+     "license": {
+      "id": "l_00000000000000a1",
+      "product": "meet",
+      "root": "m_3d50cc4fe467cb0ab3e44d784c43267c"
+     }
+    }
+   },
+   "code": "deploy-host",
+   "stored": null
+  },
+  {
+   "name": "empty label",
+   "context": {
+    "profile": "standard",
+    "serves": true,
+    "caId": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+    "spokesRoot": "n_c01f74fdded17dd19924398395187920",
+    "held": {
+     "meet-old.acme.example": "r_8c41d2e07b9a6f13"
+    }
+   },
+   "body": {
+    "product": "meet",
+    "env": "linux",
+    "deploy": {
+     "host": "meet..acme.example",
+     "turnHost": "",
+     "pki": "console",
+     "license": {
+      "id": "l_00000000000000a1",
+      "product": "meet",
+      "root": "m_3d50cc4fe467cb0ab3e44d784c43267c"
+     }
+    }
+   },
+   "code": "deploy-host",
+   "stored": null
+  },
+  {
+   "name": "254 characters",
+   "context": {
+    "profile": "standard",
+    "serves": true,
+    "caId": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+    "spokesRoot": "n_c01f74fdded17dd19924398395187920",
+    "held": {
+     "meet-old.acme.example": "r_8c41d2e07b9a6f13"
+    }
+   },
+   "body": {
+    "product": "meet",
+    "env": "linux",
+    "deploy": {
+     "host": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+     "turnHost": "",
+     "pki": "console",
+     "license": {
+      "id": "l_00000000000000a1",
+      "product": "meet",
+      "root": "m_3d50cc4fe467cb0ab3e44d784c43267c"
+     }
+    }
+   },
+   "code": "deploy-host",
+   "stored": null
+  },
+  {
+   "name": "bad turn host",
+   "context": {
+    "profile": "standard",
+    "serves": true,
+    "caId": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+    "spokesRoot": "n_c01f74fdded17dd19924398395187920",
+    "held": {
+     "meet-old.acme.example": "r_8c41d2e07b9a6f13"
+    }
+   },
+   "body": {
+    "product": "meet",
+    "env": "linux",
+    "deploy": {
+     "host": "Meet.Acme.Example",
+     "turnHost": "turn host",
+     "pki": "console",
+     "license": {
+      "id": "l_00000000000000a1",
+      "product": "meet",
+      "root": "m_3d50cc4fe467cb0ab3e44d784c43267c"
+     }
+    }
+   },
+   "code": "deploy-host",
+   "stored": null
+  },
+  {
+   "name": "network without prefix",
+   "context": {
+    "profile": "standard",
+    "serves": true,
+    "caId": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+    "spokesRoot": "n_c01f74fdded17dd19924398395187920",
+    "held": {
+     "meet-old.acme.example": "r_8c41d2e07b9a6f13"
+    }
+   },
+   "body": {
+    "product": "spokes",
+    "env": "linux",
+    "deploy": {
+     "host": "relay-berlin.acme.example",
+     "license": {
+      "id": "l_00000000000000b2",
+      "product": "spokes",
+      "root": "n_c01f74fdded17dd19924398395187920"
+     },
+     "clients": [
+      "203.0.113.0"
+     ]
+    }
+   },
+   "code": "deploy-clients",
+   "stored": null
+  },
+  {
+   "name": "network with host bits",
+   "context": {
+    "profile": "standard",
+    "serves": true,
+    "caId": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+    "spokesRoot": "n_c01f74fdded17dd19924398395187920",
+    "held": {
+     "meet-old.acme.example": "r_8c41d2e07b9a6f13"
+    }
+   },
+   "body": {
+    "product": "spokes",
+    "env": "linux",
+    "deploy": {
+     "host": "relay-berlin.acme.example",
+     "license": {
+      "id": "l_00000000000000b2",
+      "product": "spokes",
+      "root": "n_c01f74fdded17dd19924398395187920"
+     },
+     "clients": [
+      "203.0.113.5/24"
+     ]
+    }
+   },
+   "code": "deploy-clients",
+   "stored": null
+  },
+  {
+   "name": "17 networks",
+   "context": {
+    "profile": "standard",
+    "serves": true,
+    "caId": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+    "spokesRoot": "n_c01f74fdded17dd19924398395187920",
+    "held": {
+     "meet-old.acme.example": "r_8c41d2e07b9a6f13"
+    }
+   },
+   "body": {
+    "product": "spokes",
+    "env": "linux",
+    "deploy": {
+     "host": "relay-berlin.acme.example",
+     "license": {
+      "id": "l_00000000000000b2",
+      "product": "spokes",
+      "root": "n_c01f74fdded17dd19924398395187920"
+     },
+     "clients": [
+      "10.0.0.0/24",
+      "10.0.1.0/24",
+      "10.0.2.0/24",
+      "10.0.3.0/24",
+      "10.0.4.0/24",
+      "10.0.5.0/24",
+      "10.0.6.0/24",
+      "10.0.7.0/24",
+      "10.0.8.0/24",
+      "10.0.9.0/24",
+      "10.0.10.0/24",
+      "10.0.11.0/24",
+      "10.0.12.0/24",
+      "10.0.13.0/24",
+      "10.0.14.0/24",
+      "10.0.15.0/24",
+      "10.0.16.0/24"
+     ]
+    }
+   },
+   "code": "deploy-clients",
+   "stored": null
+  },
+  {
+   "name": "host taken",
+   "context": {
+    "profile": "standard",
+    "serves": true,
+    "caId": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+    "spokesRoot": "n_c01f74fdded17dd19924398395187920",
+    "held": {
+     "meet-old.acme.example": "r_8c41d2e07b9a6f13"
+    }
+   },
+   "body": {
+    "product": "meet",
+    "env": "linux",
+    "deploy": {
+     "host": "meet-old.acme.example",
+     "turnHost": "",
+     "pki": "console",
+     "license": {
+      "id": "l_00000000000000a1",
+      "product": "meet",
+      "root": "m_3d50cc4fe467cb0ab3e44d784c43267c"
+     }
+    }
+   },
+   "code": "deploy-host-taken",
+   "stored": null
+  },
+  {
+   "name": "host taken, replaced",
+   "context": {
+    "profile": "standard",
+    "serves": true,
+    "caId": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+    "spokesRoot": "n_c01f74fdded17dd19924398395187920",
+    "held": {
+     "meet-old.acme.example": "r_8c41d2e07b9a6f13"
+    }
+   },
+   "body": {
+    "product": "meet",
+    "env": "linux",
+    "replaces": "r_8c41d2e07b9a6f13",
+    "deploy": {
+     "host": "meet-old.acme.example",
+     "turnHost": "",
+     "pki": "console",
+     "license": {
+      "id": "l_00000000000000a1",
+      "product": "meet",
+      "root": "m_3d50cc4fe467cb0ab3e44d784c43267c"
+     }
+    }
+   },
+   "code": null,
+   "stored": {
+    "env": "linux",
+    "host": "meet-old.acme.example",
+    "turnHost": "",
+    "pki": "console",
+    "license": "l_00000000000000a1"
+   }
+  },
+  {
+   "name": "console pki under high",
+   "context": {
+    "profile": "high",
+    "serves": true,
+    "caId": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+    "spokesRoot": "n_c01f74fdded17dd19924398395187920",
+    "held": {
+     "meet-old.acme.example": "r_8c41d2e07b9a6f13"
+    }
+   },
+   "body": {
+    "product": "meet",
+    "env": "linux",
+    "deploy": {
+     "host": "Meet.Acme.Example",
+     "turnHost": "",
+     "pki": "console",
+     "license": {
+      "id": "l_00000000000000a1",
+      "product": "meet",
+      "root": "m_3d50cc4fe467cb0ab3e44d784c43267c"
+     }
+    }
+   },
+   "code": "meet-ca-high",
+   "stored": null
+  },
+  {
+   "name": "console pki without a CA",
+   "context": {
+    "profile": "standard",
+    "serves": true,
+    "caId": null,
+    "spokesRoot": "n_c01f74fdded17dd19924398395187920",
+    "held": {
+     "meet-old.acme.example": "r_8c41d2e07b9a6f13"
+    }
+   },
+   "body": {
+    "product": "meet",
+    "env": "linux",
+    "deploy": {
+     "host": "Meet.Acme.Example",
+     "turnHost": "",
+     "pki": "console",
+     "license": {
+      "id": "l_00000000000000a1",
+      "product": "meet",
+      "root": "m_3d50cc4fe467cb0ab3e44d784c43267c"
+     }
+    }
+   },
+   "code": "deploy-ca-needed",
+   "stored": null
+  },
+  {
+   "name": "own pki without a CA",
+   "context": {
+    "profile": "standard",
+    "serves": true,
+    "caId": null,
+    "spokesRoot": "n_c01f74fdded17dd19924398395187920",
+    "held": {
+     "meet-old.acme.example": "r_8c41d2e07b9a6f13"
+    }
+   },
+   "body": {
+    "product": "meet",
+    "env": "linux",
+    "deploy": {
+     "host": "Meet.Acme.Example",
+     "turnHost": "",
+     "pki": "own",
+     "license": {
+      "id": "l_00000000000000a1",
+      "product": "meet",
+      "root": "m_00000000000000000000000000000000"
+     }
+    }
+   },
+   "code": null,
+   "stored": {
+    "env": "linux",
+    "host": "meet.acme.example",
+    "turnHost": "",
+    "pki": "own",
+    "license": "l_00000000000000a1"
+   }
+  },
+  {
+   "name": "license of the other product",
+   "context": {
+    "profile": "standard",
+    "serves": true,
+    "caId": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+    "spokesRoot": "n_c01f74fdded17dd19924398395187920",
+    "held": {
+     "meet-old.acme.example": "r_8c41d2e07b9a6f13"
+    }
+   },
+   "body": {
+    "product": "meet",
+    "env": "linux",
+    "deploy": {
+     "host": "Meet.Acme.Example",
+     "turnHost": "",
+     "pki": "console",
+     "license": {
+      "id": "l_00000000000000b2",
+      "product": "spokes",
+      "root": "n_c01f74fdded17dd19924398395187920"
+     }
+    }
+   },
+   "code": "deploy-license-product",
+   "stored": null
+  },
+  {
+   "name": "license of another CA",
+   "context": {
+    "profile": "standard",
+    "serves": true,
+    "caId": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+    "spokesRoot": "n_c01f74fdded17dd19924398395187920",
+    "held": {
+     "meet-old.acme.example": "r_8c41d2e07b9a6f13"
+    }
+   },
+   "body": {
+    "product": "meet",
+    "env": "linux",
+    "deploy": {
+     "host": "Meet.Acme.Example",
+     "turnHost": "",
+     "pki": "console",
+     "license": {
+      "id": "l_00000000000000a1",
+      "product": "meet",
+      "root": "m_00000000000000000000000000000000"
+     }
+    }
+   },
+   "code": "deploy-license-root",
+   "stored": null
+  },
+  {
+   "name": "license of another root",
+   "context": {
+    "profile": "standard",
+    "serves": true,
+    "caId": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+    "spokesRoot": "n_c01f74fdded17dd19924398395187920",
+    "held": {
+     "meet-old.acme.example": "r_8c41d2e07b9a6f13"
+    }
+   },
+   "body": {
+    "product": "spokes",
+    "env": "linux",
+    "deploy": {
+     "host": "relay-berlin.acme.example",
+     "license": {
+      "id": "l_00000000000000b2",
+      "product": "spokes",
+      "root": "n_83657db8bd8a4e55bb4df17809b42268"
+     }
+    }
+   },
+   "code": "deploy-license-root",
+   "stored": null
+  },
+  {
+   "name": "no license",
+   "context": {
+    "profile": "standard",
+    "serves": true,
+    "caId": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+    "spokesRoot": "n_c01f74fdded17dd19924398395187920",
+    "held": {
+     "meet-old.acme.example": "r_8c41d2e07b9a6f13"
+    }
+   },
+   "body": {
+    "product": "spokes",
+    "env": "linux",
+    "deploy": {
+     "host": "relay-berlin.acme.example",
+     "license": null
+    }
+   },
+   "code": null,
+   "stored": {
+    "env": "linux",
+    "host": "relay-berlin.acme.example",
+    "clients": [
+     "0.0.0.0/0",
+     "::/0"
+    ],
+    "pki": null,
+    "license": null
+   }
+  }
+ ],
+ "previews": [
+  {
+   "name": "meet, console CA",
+   "answer": {
+    "ok": true,
+    "previewHash": "400b2fb25ae47d1b52cb574ef97067cbf188a8c57656544e0923067fb5a14331",
+    "console": {
+     "id": "c_0123456789abcdef",
+     "origin": "https://console.acme.example",
+     "rpId": "console.acme.example",
+     "host": "console.acme.example"
+    },
+    "enrollment": {
+     "product": "meet",
+     "name": "Main relay",
+     "site": "eu-central-1",
+     "scopes": [
+      "read-health",
+      "config",
+      "license"
+     ],
+     "expires": 1795093200000
+    },
+    "policy": {
+     "profile": "standard",
+     "twoPerson": "off"
+    },
+    "roster": [
+     {
+      "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+      "cose": "pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE",
+      "email": "alice@acme.example",
+      "role": "admin",
+      "evidence": {
+       "fmt": "packed",
+       "attestationObject": "o2NmbXRmcGFja2VkZ2F0dFN0bXSiY2FsZyZjc2lnWEYwRAIgFDyJMDiXHa9eYuT3fRq0ta0oN9gR5ZQENXyBtCyKqlICIGKpbIP-Tcxm-oJ8ig-XdAhUKtOup8K4AaWMV8-VsNbgaGF1dGhEYXRhWKQXeKnjW1mhZ4580oIquezFxJ7IEiwYr0VPmPHQEMhu1EUAAAAAGsfxtQABSgCAAAAAAAAACgAgWNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoalAQIDJiABIVggHOVszWdETyK93WnbbCZSNPqjlcnSBSf4CqW3864YEHsiWCA7rTvxsDR6HqiapP6N9ynBZ_VgYt9wUzT31PQJoPoVsQ",
+       "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiUTFHMnVsZDRWR0RFa3RVcE5yRXk0aWVNUnMtZ1BNSlhPaFloQ1JQRUtsMCIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9"
+      },
+      "evidenceSha256": "e10e00d51f22088da61bf64ed4861bf52cb3d71bb44228622baf57338f79928b"
+     },
+     {
+      "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+      "cose": "pQECAyYgASFYIAzA_Ily0Yo7ycX88mWJmepE5zEgQ86hkWlY-QY5YTSiIlgg-QPspjbudaJw5WC3LbM7U5bT09VxSCkniUYZHTk_zto",
+      "email": "alice@acme.example",
+      "role": "admin",
+      "evidence": {
+       "fmt": "packed",
+       "attestationObject": "o2NmbXRmcGFja2VkZ2F0dFN0bXSiY2FsZyZjc2lnWEcwRQIgb8oA8DiTR_lP4JYX1vqQ9lmwcc4zcaLdcoAsgwYDL9kCIQCeEcyThgBXu1AGpopMKM28PwQM4caHUSpgWAdIYc4hb2hhdXRoRGF0YVikF3ip41tZoWeOfNKCKrnsxcSeyBIsGK9FT5jx0BDIbtRFAAAAABrH8bUAAUoAgAAAAAAAAAoAIMEM-Viggm7d9tzCnMmnANNUdyoPvaebPuB07Lkniqd4pQECAyYgASFYIAzA_Ily0Yo7ycX88mWJmepE5zEgQ86hkWlY-QY5YTSiIlgg-QPspjbudaJw5WC3LbM7U5bT09VxSCkniUYZHTk_zto",
+       "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiaTJwR3hkT2NiNUJka1ZvSi1lMEg0V1QtZVRBeGxhaGFWeUNUUFZoVENJayIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9"
+      },
+      "evidenceSha256": "db85a1e06dc5d2638ec8dd531d4a9300d2f5e73f0534aace4f5478e3d77e7bd7"
+     },
+     {
+      "credentialId": "65L3Do8pzAZEDxpHhTuyvjydaSB_bboGrXDElE8_VqQ",
+      "cose": "pQECAyYgASFYIFnOfFZki75mVP4JmZkLFwQqSID4-7T9Vk1zvprDqfMGIlggP4WOhfo6tVmG_EnnGqx1xW1r1a_PGPKOej39vE_u7Gs",
+      "email": "bob@acme.example",
+      "role": "admin",
+      "evidence": {
+       "fmt": "packed",
+       "attestationObject": "o2NmbXRmcGFja2VkZ2F0dFN0bXSiY2FsZyZjc2lnWEcwRQIhALJgJYNePcujYU8x-xoW5QllpJZywI4XZY7yR6FYpF2PAiA8znnl6SVECxLV4_ky_zjLfVw5pP3cbXqj3pHBFKOaA2hhdXRoRGF0YVikF3ip41tZoWeOfNKCKrnsxcSeyBIsGK9FT5jx0BDIbtRFAAAAABrH8bUAAUoAgAAAAAAAAAoAIOuS9w6PKcwGRA8aR4U7sr48nWkgf226Bq1wxJRPP1akpQECAyYgASFYIFnOfFZki75mVP4JmZkLFwQqSID4-7T9Vk1zvprDqfMGIlggP4WOhfo6tVmG_EnnGqx1xW1r1a_PGPKOej39vE_u7Gs",
+       "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiZ0lTb2JRV3BBVVpqOTR0QnVVMG5sWVlyMWtHeWlYa0NfWldYQWhrclVLVSIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9"
+      },
+      "evidenceSha256": "56cab30d9fde137ad27fb8514deffe674430b2eb715c0a974aff5c240ef706ce"
+     },
+     {
+      "credentialId": "FlcUSpTQ9cEex8q3dq9E5CTdf5XZZvZPAt32uG93wuc",
+      "cose": "pQECAyYgASFYIGjLwV0DLa0S7B5Uo5kWQN0IlUTw-rbVS2iTUgjpnQdbIlgg0KRwUrjCeweOd4-vR0tKHWqZTLr7tFvNYJnZRoPmYC4",
+      "email": "carol@acme.example",
+      "role": "user-manager",
+      "evidence": null,
+      "evidenceSha256": null
+     }
+    ],
+    "bootstrapRosterHash": "7c84d2b59a995ca1204d7050ec92057c39d4da4eb27cd4f8e1e536dc11794532",
+    "deploy": {
+     "env": "linux",
+     "host": "meet.acme.example",
+     "turnHost": "198.51.100.7",
+     "clients": null,
+     "pki": "console",
+     "binarySha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+     "ca": {
+      "pem": "-----BEGIN CERTIFICATE-----\nMIIBnTCCAUOgAwIBAgIQaC4blDSnJLHRSsoVHb02NDAKBggqhkjOPQQDAjAtMRww\nGgYDVQQDDBNBY21lIE1lZXRpbmcgSHViIENBMQ0wCwYDVQQKDARBY21lMB4XDTI2\nMDEwMTAwMDAwMFoXDTM2MDEwMTAwMDAwMFowLTEcMBoGA1UEAwwTQWNtZSBNZWV0\naW5nIEh1YiBDQTENMAsGA1UECgwEQWNtZTBZMBMGByqGSM49AgEGCCqGSM49AwEH\nA0IABOLd5iHBbqfGIT7AUI6OxYhQKvQUDf/PCgpEPctsqN42aXa3t6knTBvbVWOE\nZphUs1TNtWdJ4nfP0SB1xV8WihijRTBDMBIGA1UdEwEB/wQIMAYBAf8CAQAwDgYD\nVR0PAQH/BAQDAgEGMB0GA1UdDgQWBBTX0KtCNNAeKUur1YoK3lLUgMoQiTAKBggq\nhkjOPQQDAgNIADBFAiAcGxebwanxUxhhEY+KC7KdroSy81CH9M6YoT7O5dpyZgIh\nALjE6WgXuSOV8LZ3qO6A5QIUeqA0H3hux9VCK1Ril+6T\n-----END CERTIFICATE-----\n",
+      "id": "m_3d50cc4fe467cb0ab3e44d784c43267c"
+     },
+     "signer": {
+      "url": "https://signer.acme.example"
+     },
+     "spokesRoot": null,
+     "license": {
+      "id": "l_00000000000000a1",
+      "org": "Acme Corp",
+      "edition": "enterprise",
+      "users": 50,
+      "relays": 5,
+      "exp": 1821009600,
+      "root": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+      "token": "eyJ2IjoyLCJ0eXAiOiJsdWNpZC1yZWxheS1saWNlbnNlIiwiaWQiOiJsXzAwMDAwMDAwMDAwMDAwYTEiLCJvcmciOiJBY21lIENvcnAiLCJyb290IjoibV8zZDUwY2M0ZmU0NjdjYjBhYjNlNDRkNzg0YzQzMjY3YyIsImVkaXRpb24iOiJlbnRlcnByaXNlIiwidXNlcnMiOjUwLCJyZWxheXMiOjUsImZlYXR1cmVzIjpbIm1lZXQiXSwiaWF0IjoxNzk0MjI1NjAwLCJleHAiOjE4MjEwMDk2MDB9.0dqiT3Uws0lqA7PuW5j9z0l9Gx72qEdRxrhYgCnFYRubnBSEAvCEMcl4_jmVcqxK7RxSLET-MgCSpSpnHi8dCQ"
+     },
+     "offered": [
+      {
+       "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+       "email": "alice@acme.example",
+       "role": "admin",
+       "hint": "9c0370f292ba5efb",
+       "fingerprint": "5806eb62432bf0ca940467341d4bf9f0af3dcc7b37fe85b0b0e1f1742c4f8b1f"
+      },
+      {
+       "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+       "email": "alice@acme.example",
+       "role": "admin",
+       "hint": "78a2fe095dc1a9d6",
+       "fingerprint": "7dc59a4ca3e86b4fa87b4f18e1f96d55767e8a135401526d51245d30334b83c6"
+      }
+     ]
+    }
+   },
+   "hashed_canonical_sha256": "400b2fb25ae47d1b52cb574ef97067cbf188a8c57656544e0923067fb5a14331"
+  },
+  {
+   "name": "spokes, delivered root",
+   "answer": {
+    "ok": true,
+    "previewHash": "e0543c00e6f934edc833ab18030b18d51fd37baf610bbbc6cd14c882fa991df0",
+    "console": {
+     "id": "c_0123456789abcdef",
+     "origin": "https://console.acme.example",
+     "rpId": "console.acme.example",
+     "host": "console.acme.example"
+    },
+    "enrollment": {
+     "product": "spokes",
+     "name": "Main relay",
+     "site": "eu-central-1",
+     "scopes": [
+      "read-health",
+      "config",
+      "license"
+     ],
+     "expires": 1795093200000
+    },
+    "policy": {
+     "profile": "standard",
+     "twoPerson": "off"
+    },
+    "roster": [
+     {
+      "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+      "cose": "pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE",
+      "email": "alice@acme.example",
+      "role": "admin",
+      "evidence": {
+       "fmt": "packed",
+       "attestationObject": "o2NmbXRmcGFja2VkZ2F0dFN0bXSiY2FsZyZjc2lnWEYwRAIgFDyJMDiXHa9eYuT3fRq0ta0oN9gR5ZQENXyBtCyKqlICIGKpbIP-Tcxm-oJ8ig-XdAhUKtOup8K4AaWMV8-VsNbgaGF1dGhEYXRhWKQXeKnjW1mhZ4580oIquezFxJ7IEiwYr0VPmPHQEMhu1EUAAAAAGsfxtQABSgCAAAAAAAAACgAgWNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoalAQIDJiABIVggHOVszWdETyK93WnbbCZSNPqjlcnSBSf4CqW3864YEHsiWCA7rTvxsDR6HqiapP6N9ynBZ_VgYt9wUzT31PQJoPoVsQ",
+       "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiUTFHMnVsZDRWR0RFa3RVcE5yRXk0aWVNUnMtZ1BNSlhPaFloQ1JQRUtsMCIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9"
+      },
+      "evidenceSha256": "e10e00d51f22088da61bf64ed4861bf52cb3d71bb44228622baf57338f79928b"
+     },
+     {
+      "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+      "cose": "pQECAyYgASFYIAzA_Ily0Yo7ycX88mWJmepE5zEgQ86hkWlY-QY5YTSiIlgg-QPspjbudaJw5WC3LbM7U5bT09VxSCkniUYZHTk_zto",
+      "email": "alice@acme.example",
+      "role": "admin",
+      "evidence": {
+       "fmt": "packed",
+       "attestationObject": "o2NmbXRmcGFja2VkZ2F0dFN0bXSiY2FsZyZjc2lnWEcwRQIgb8oA8DiTR_lP4JYX1vqQ9lmwcc4zcaLdcoAsgwYDL9kCIQCeEcyThgBXu1AGpopMKM28PwQM4caHUSpgWAdIYc4hb2hhdXRoRGF0YVikF3ip41tZoWeOfNKCKrnsxcSeyBIsGK9FT5jx0BDIbtRFAAAAABrH8bUAAUoAgAAAAAAAAAoAIMEM-Viggm7d9tzCnMmnANNUdyoPvaebPuB07Lkniqd4pQECAyYgASFYIAzA_Ily0Yo7ycX88mWJmepE5zEgQ86hkWlY-QY5YTSiIlgg-QPspjbudaJw5WC3LbM7U5bT09VxSCkniUYZHTk_zto",
+       "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiaTJwR3hkT2NiNUJka1ZvSi1lMEg0V1QtZVRBeGxhaGFWeUNUUFZoVENJayIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9"
+      },
+      "evidenceSha256": "db85a1e06dc5d2638ec8dd531d4a9300d2f5e73f0534aace4f5478e3d77e7bd7"
+     },
+     {
+      "credentialId": "65L3Do8pzAZEDxpHhTuyvjydaSB_bboGrXDElE8_VqQ",
+      "cose": "pQECAyYgASFYIFnOfFZki75mVP4JmZkLFwQqSID4-7T9Vk1zvprDqfMGIlggP4WOhfo6tVmG_EnnGqx1xW1r1a_PGPKOej39vE_u7Gs",
+      "email": "bob@acme.example",
+      "role": "admin",
+      "evidence": {
+       "fmt": "packed",
+       "attestationObject": "o2NmbXRmcGFja2VkZ2F0dFN0bXSiY2FsZyZjc2lnWEcwRQIhALJgJYNePcujYU8x-xoW5QllpJZywI4XZY7yR6FYpF2PAiA8znnl6SVECxLV4_ky_zjLfVw5pP3cbXqj3pHBFKOaA2hhdXRoRGF0YVikF3ip41tZoWeOfNKCKrnsxcSeyBIsGK9FT5jx0BDIbtRFAAAAABrH8bUAAUoAgAAAAAAAAAoAIOuS9w6PKcwGRA8aR4U7sr48nWkgf226Bq1wxJRPP1akpQECAyYgASFYIFnOfFZki75mVP4JmZkLFwQqSID4-7T9Vk1zvprDqfMGIlggP4WOhfo6tVmG_EnnGqx1xW1r1a_PGPKOej39vE_u7Gs",
+       "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiZ0lTb2JRV3BBVVpqOTR0QnVVMG5sWVlyMWtHeWlYa0NfWldYQWhrclVLVSIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9"
+      },
+      "evidenceSha256": "56cab30d9fde137ad27fb8514deffe674430b2eb715c0a974aff5c240ef706ce"
+     },
+     {
+      "credentialId": "FlcUSpTQ9cEex8q3dq9E5CTdf5XZZvZPAt32uG93wuc",
+      "cose": "pQECAyYgASFYIGjLwV0DLa0S7B5Uo5kWQN0IlUTw-rbVS2iTUgjpnQdbIlgg0KRwUrjCeweOd4-vR0tKHWqZTLr7tFvNYJnZRoPmYC4",
+      "email": "carol@acme.example",
+      "role": "user-manager",
+      "evidence": null,
+      "evidenceSha256": null
+     }
+    ],
+    "bootstrapRosterHash": "7c84d2b59a995ca1204d7050ec92057c39d4da4eb27cd4f8e1e536dc11794532",
+    "deploy": {
+     "env": "linux",
+     "host": "relay-berlin.acme.example",
+     "turnHost": null,
+     "clients": [
+      "0.0.0.0/0",
+      "::/0"
+     ],
+     "pki": null,
+     "binarySha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+     "ca": null,
+     "signer": null,
+     "spokesRoot": {
+      "pem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEQjAfKAGRn0TsrzbbuDSCb11EtQox\nCJOaLSuUw/iFWQ+UkFpYLC3TghMijIDS52uph9MG3lKEwG0l6ZMX3UvK/Q==\n-----END PUBLIC KEY-----\n",
+      "id": "n_c01f74fdded17dd19924398395187920"
+     },
+     "license": {
+      "id": "l_00000000000000b2",
+      "org": "Acme Corp",
+      "edition": "enterprise",
+      "users": 50,
+      "relays": 5,
+      "exp": 1821009600,
+      "root": "n_c01f74fdded17dd19924398395187920",
+      "token": "eyJ2IjoyLCJ0eXAiOiJsdWNpZC1yZWxheS1saWNlbnNlIiwiaWQiOiJsXzAwMDAwMDAwMDAwMDAwYjIiLCJvcmciOiJBY21lIENvcnAiLCJyb290Ijoibl9jMDFmNzRmZGRlZDE3ZGQxOTkyNDM5ODM5NTE4NzkyMCIsImVkaXRpb24iOiJlbnRlcnByaXNlIiwidXNlcnMiOjUwLCJyZWxheXMiOjUsImZlYXR1cmVzIjpbInJlbGF5Iiwic3Bva2VzIl0sImlhdCI6MTc5NDIyNTYwMCwiZXhwIjoxODIxMDA5NjAwfQ.cOY2lEhu0QeQIdxGDf1Sq2wLLuG7IrY6xL46cJkc-b4vEe75_iUyCuHL3r53UEojHz_cPV_pXXCLm1_tqZPSCA"
+     },
+     "offered": [
+      {
+       "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+       "email": "alice@acme.example",
+       "role": "admin",
+       "hint": "9c0370f292ba5efb",
+       "fingerprint": "5806eb62432bf0ca940467341d4bf9f0af3dcc7b37fe85b0b0e1f1742c4f8b1f"
+      },
+      {
+       "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+       "email": "alice@acme.example",
+       "role": "admin",
+       "hint": "78a2fe095dc1a9d6",
+       "fingerprint": "7dc59a4ca3e86b4fa87b4f18e1f96d55767e8a135401526d51245d30334b83c6"
+      }
+     ]
+    }
+   },
+   "hashed_canonical_sha256": "e0543c00e6f934edc833ab18030b18d51fd37baf610bbbc6cd14c882fa991df0"
+  },
+  {
+   "name": "installed",
+   "answer": {
+    "ok": true,
+    "previewHash": "1d69f7437127ec5995a5e1d8e9fd05ef6dc11122bd438086a40cbb0ddb4590fc",
+    "console": {
+     "id": "c_0123456789abcdef",
+     "origin": "https://console.acme.example",
+     "rpId": "console.acme.example",
+     "host": "console.acme.example"
+    },
+    "enrollment": {
+     "product": "spokes",
+     "name": "Main relay",
+     "site": "eu-central-1",
+     "scopes": [
+      "read-health",
+      "config",
+      "license"
+     ],
+     "expires": 1795093200000
+    },
+    "policy": {
+     "profile": "standard",
+     "twoPerson": "off"
+    },
+    "roster": [
+     {
+      "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+      "cose": "pQECAyYgASFYIBzlbM1nRE8ivd1p22wmUjT6o5XJ0gUn-Aqlt_OuGBB7IlggO6078bA0eh6omqT-jfcpwWf1YGLfcFM099T0CaD6FbE",
+      "email": "alice@acme.example",
+      "role": "admin",
+      "evidence": {
+       "fmt": "packed",
+       "attestationObject": "o2NmbXRmcGFja2VkZ2F0dFN0bXSiY2FsZyZjc2lnWEYwRAIgFDyJMDiXHa9eYuT3fRq0ta0oN9gR5ZQENXyBtCyKqlICIGKpbIP-Tcxm-oJ8ig-XdAhUKtOup8K4AaWMV8-VsNbgaGF1dGhEYXRhWKQXeKnjW1mhZ4580oIquezFxJ7IEiwYr0VPmPHQEMhu1EUAAAAAGsfxtQABSgCAAAAAAAAACgAgWNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoalAQIDJiABIVggHOVszWdETyK93WnbbCZSNPqjlcnSBSf4CqW3864YEHsiWCA7rTvxsDR6HqiapP6N9ynBZ_VgYt9wUzT31PQJoPoVsQ",
+       "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiUTFHMnVsZDRWR0RFa3RVcE5yRXk0aWVNUnMtZ1BNSlhPaFloQ1JQRUtsMCIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9"
+      },
+      "evidenceSha256": "e10e00d51f22088da61bf64ed4861bf52cb3d71bb44228622baf57338f79928b"
+     },
+     {
+      "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+      "cose": "pQECAyYgASFYIAzA_Ily0Yo7ycX88mWJmepE5zEgQ86hkWlY-QY5YTSiIlgg-QPspjbudaJw5WC3LbM7U5bT09VxSCkniUYZHTk_zto",
+      "email": "alice@acme.example",
+      "role": "admin",
+      "evidence": {
+       "fmt": "packed",
+       "attestationObject": "o2NmbXRmcGFja2VkZ2F0dFN0bXSiY2FsZyZjc2lnWEcwRQIgb8oA8DiTR_lP4JYX1vqQ9lmwcc4zcaLdcoAsgwYDL9kCIQCeEcyThgBXu1AGpopMKM28PwQM4caHUSpgWAdIYc4hb2hhdXRoRGF0YVikF3ip41tZoWeOfNKCKrnsxcSeyBIsGK9FT5jx0BDIbtRFAAAAABrH8bUAAUoAgAAAAAAAAAoAIMEM-Viggm7d9tzCnMmnANNUdyoPvaebPuB07Lkniqd4pQECAyYgASFYIAzA_Ily0Yo7ycX88mWJmepE5zEgQ86hkWlY-QY5YTSiIlgg-QPspjbudaJw5WC3LbM7U5bT09VxSCkniUYZHTk_zto",
+       "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiaTJwR3hkT2NiNUJka1ZvSi1lMEg0V1QtZVRBeGxhaGFWeUNUUFZoVENJayIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9"
+      },
+      "evidenceSha256": "db85a1e06dc5d2638ec8dd531d4a9300d2f5e73f0534aace4f5478e3d77e7bd7"
+     },
+     {
+      "credentialId": "65L3Do8pzAZEDxpHhTuyvjydaSB_bboGrXDElE8_VqQ",
+      "cose": "pQECAyYgASFYIFnOfFZki75mVP4JmZkLFwQqSID4-7T9Vk1zvprDqfMGIlggP4WOhfo6tVmG_EnnGqx1xW1r1a_PGPKOej39vE_u7Gs",
+      "email": "bob@acme.example",
+      "role": "admin",
+      "evidence": {
+       "fmt": "packed",
+       "attestationObject": "o2NmbXRmcGFja2VkZ2F0dFN0bXSiY2FsZyZjc2lnWEcwRQIhALJgJYNePcujYU8x-xoW5QllpJZywI4XZY7yR6FYpF2PAiA8znnl6SVECxLV4_ky_zjLfVw5pP3cbXqj3pHBFKOaA2hhdXRoRGF0YVikF3ip41tZoWeOfNKCKrnsxcSeyBIsGK9FT5jx0BDIbtRFAAAAABrH8bUAAUoAgAAAAAAAAAoAIOuS9w6PKcwGRA8aR4U7sr48nWkgf226Bq1wxJRPP1akpQECAyYgASFYIFnOfFZki75mVP4JmZkLFwQqSID4-7T9Vk1zvprDqfMGIlggP4WOhfo6tVmG_EnnGqx1xW1r1a_PGPKOej39vE_u7Gs",
+       "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiZ0lTb2JRV3BBVVpqOTR0QnVVMG5sWVlyMWtHeWlYa0NfWldYQWhrclVLVSIsIm9yaWdpbiI6Imh0dHBzOi8vY29uc29sZS5hY21lLmV4YW1wbGUiLCJjcm9zc09yaWdpbiI6ZmFsc2V9"
+      },
+      "evidenceSha256": "56cab30d9fde137ad27fb8514deffe674430b2eb715c0a974aff5c240ef706ce"
+     },
+     {
+      "credentialId": "FlcUSpTQ9cEex8q3dq9E5CTdf5XZZvZPAt32uG93wuc",
+      "cose": "pQECAyYgASFYIGjLwV0DLa0S7B5Uo5kWQN0IlUTw-rbVS2iTUgjpnQdbIlgg0KRwUrjCeweOd4-vR0tKHWqZTLr7tFvNYJnZRoPmYC4",
+      "email": "carol@acme.example",
+      "role": "user-manager",
+      "evidence": null,
+      "evidenceSha256": null
+     }
+    ],
+    "bootstrapRosterHash": "7c84d2b59a995ca1204d7050ec92057c39d4da4eb27cd4f8e1e536dc11794532",
+    "deploy": null
+   },
+   "hashed_canonical_sha256": "1d69f7437127ec5995a5e1d8e9fd05ef6dc11122bd438086a40cbb0ddb4590fc"
+  }
+ ],
+ "decisions": [
+  {
+   "name": "plain enroll, deploy preview",
+   "product": "meet",
+   "local": {
+    "profile": "standard",
+    "pki": "console",
+    "host": null,
+    "turnHost": null,
+    "clients": null,
+    "placedCa": null,
+    "placedRoot": null,
+    "consoleInstalled": true,
+    "fresh": true,
+    "keptProfile": null
+   },
+   "preview": {
+    "deploy": {
+     "env": "linux",
+     "host": "meet.acme.example",
+     "turnHost": "198.51.100.7",
+     "clients": null,
+     "pki": "console",
+     "binarySha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+     "ca": {
+      "pem": "-----BEGIN CERTIFICATE-----\nMIIBnTCCAUOgAwIBAgIQaC4blDSnJLHRSsoVHb02NDAKBggqhkjOPQQDAjAtMRww\nGgYDVQQDDBNBY21lIE1lZXRpbmcgSHViIENBMQ0wCwYDVQQKDARBY21lMB4XDTI2\nMDEwMTAwMDAwMFoXDTM2MDEwMTAwMDAwMFowLTEcMBoGA1UEAwwTQWNtZSBNZWV0\naW5nIEh1YiBDQTENMAsGA1UECgwEQWNtZTBZMBMGByqGSM49AgEGCCqGSM49AwEH\nA0IABOLd5iHBbqfGIT7AUI6OxYhQKvQUDf/PCgpEPctsqN42aXa3t6knTBvbVWOE\nZphUs1TNtWdJ4nfP0SB1xV8WihijRTBDMBIGA1UdEwEB/wQIMAYBAf8CAQAwDgYD\nVR0PAQH/BAQDAgEGMB0GA1UdDgQWBBTX0KtCNNAeKUur1YoK3lLUgMoQiTAKBggq\nhkjOPQQDAgNIADBFAiAcGxebwanxUxhhEY+KC7KdroSy81CH9M6YoT7O5dpyZgIh\nALjE6WgXuSOV8LZ3qO6A5QIUeqA0H3hux9VCK1Ril+6T\n-----END CERTIFICATE-----\n",
+      "id": "m_3d50cc4fe467cb0ab3e44d784c43267c"
+     },
+     "signer": {
+      "url": "https://signer.acme.example"
+     },
+     "spokesRoot": null,
+     "license": {
+      "id": "l_00000000000000a1",
+      "org": "Acme Corp",
+      "edition": "enterprise",
+      "users": 50,
+      "relays": 5,
+      "exp": 1821009600,
+      "root": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+      "token": "eyJ2IjoyLCJ0eXAiOiJsdWNpZC1yZWxheS1saWNlbnNlIiwiaWQiOiJsXzAwMDAwMDAwMDAwMDAwYTEiLCJvcmciOiJBY21lIENvcnAiLCJyb290IjoibV8zZDUwY2M0ZmU0NjdjYjBhYjNlNDRkNzg0YzQzMjY3YyIsImVkaXRpb24iOiJlbnRlcnByaXNlIiwidXNlcnMiOjUwLCJyZWxheXMiOjUsImZlYXR1cmVzIjpbIm1lZXQiXSwiaWF0IjoxNzk0MjI1NjAwLCJleHAiOjE4MjEwMDk2MDB9.0dqiT3Uws0lqA7PuW5j9z0l9Gx72qEdRxrhYgCnFYRubnBSEAvCEMcl4_jmVcqxK7RxSLET-MgCSpSpnHi8dCQ"
+     },
+     "offered": [
+      {
+       "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+       "email": "alice@acme.example",
+       "role": "admin",
+       "hint": "9c0370f292ba5efb",
+       "fingerprint": "5806eb62432bf0ca940467341d4bf9f0af3dcc7b37fe85b0b0e1f1742c4f8b1f"
+      },
+      {
+       "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+       "email": "alice@acme.example",
+       "role": "admin",
+       "hint": "78a2fe095dc1a9d6",
+       "fingerprint": "7dc59a4ca3e86b4fa87b4f18e1f96d55767e8a135401526d51245d30334b83c6"
+      }
+     ]
+    },
+    "policyProfile": "standard"
+   },
+   "deployFlag": null,
+   "words": "cli.deploy-needs-deploy"
+  },
+  {
+   "name": "plain enroll, installed preview",
+   "product": "meet",
+   "local": {
+    "profile": "standard",
+    "pki": "console",
+    "host": null,
+    "turnHost": null,
+    "clients": null,
+    "placedCa": null,
+    "placedRoot": null,
+    "consoleInstalled": true,
+    "fresh": true,
+    "keptProfile": null
+   },
+   "preview": {
+    "deploy": null,
+    "policyProfile": "standard"
+   },
+   "deployFlag": null,
+   "words": null
+  },
+  {
+   "name": "deploy flag, installed preview",
+   "product": "meet",
+   "local": {
+    "profile": "standard",
+    "pki": "console",
+    "host": null,
+    "turnHost": null,
+    "clients": null,
+    "placedCa": null,
+    "placedRoot": null,
+    "consoleInstalled": true,
+    "fresh": true,
+    "keptProfile": null
+   },
+   "preview": {
+    "deploy": null,
+    "policyProfile": "standard"
+   },
+   "deployFlag": "linux",
+   "words": "cli.deploy-not-deploy"
+  },
+  {
+   "name": "another env",
+   "product": "meet",
+   "local": {
+    "profile": "standard",
+    "pki": "console",
+    "host": null,
+    "turnHost": null,
+    "clients": null,
+    "placedCa": null,
+    "placedRoot": null,
+    "consoleInstalled": true,
+    "fresh": true,
+    "keptProfile": null
+   },
+   "preview": {
+    "deploy": {
+     "env": "linux",
+     "host": "meet.acme.example",
+     "turnHost": "198.51.100.7",
+     "clients": null,
+     "pki": "console",
+     "binarySha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+     "ca": {
+      "pem": "-----BEGIN CERTIFICATE-----\nMIIBnTCCAUOgAwIBAgIQaC4blDSnJLHRSsoVHb02NDAKBggqhkjOPQQDAjAtMRww\nGgYDVQQDDBNBY21lIE1lZXRpbmcgSHViIENBMQ0wCwYDVQQKDARBY21lMB4XDTI2\nMDEwMTAwMDAwMFoXDTM2MDEwMTAwMDAwMFowLTEcMBoGA1UEAwwTQWNtZSBNZWV0\naW5nIEh1YiBDQTENMAsGA1UECgwEQWNtZTBZMBMGByqGSM49AgEGCCqGSM49AwEH\nA0IABOLd5iHBbqfGIT7AUI6OxYhQKvQUDf/PCgpEPctsqN42aXa3t6knTBvbVWOE\nZphUs1TNtWdJ4nfP0SB1xV8WihijRTBDMBIGA1UdEwEB/wQIMAYBAf8CAQAwDgYD\nVR0PAQH/BAQDAgEGMB0GA1UdDgQWBBTX0KtCNNAeKUur1YoK3lLUgMoQiTAKBggq\nhkjOPQQDAgNIADBFAiAcGxebwanxUxhhEY+KC7KdroSy81CH9M6YoT7O5dpyZgIh\nALjE6WgXuSOV8LZ3qO6A5QIUeqA0H3hux9VCK1Ril+6T\n-----END CERTIFICATE-----\n",
+      "id": "m_3d50cc4fe467cb0ab3e44d784c43267c"
+     },
+     "signer": {
+      "url": "https://signer.acme.example"
+     },
+     "spokesRoot": null,
+     "license": {
+      "id": "l_00000000000000a1",
+      "org": "Acme Corp",
+      "edition": "enterprise",
+      "users": 50,
+      "relays": 5,
+      "exp": 1821009600,
+      "root": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+      "token": "eyJ2IjoyLCJ0eXAiOiJsdWNpZC1yZWxheS1saWNlbnNlIiwiaWQiOiJsXzAwMDAwMDAwMDAwMDAwYTEiLCJvcmciOiJBY21lIENvcnAiLCJyb290IjoibV8zZDUwY2M0ZmU0NjdjYjBhYjNlNDRkNzg0YzQzMjY3YyIsImVkaXRpb24iOiJlbnRlcnByaXNlIiwidXNlcnMiOjUwLCJyZWxheXMiOjUsImZlYXR1cmVzIjpbIm1lZXQiXSwiaWF0IjoxNzk0MjI1NjAwLCJleHAiOjE4MjEwMDk2MDB9.0dqiT3Uws0lqA7PuW5j9z0l9Gx72qEdRxrhYgCnFYRubnBSEAvCEMcl4_jmVcqxK7RxSLET-MgCSpSpnHi8dCQ"
+     },
+     "offered": [
+      {
+       "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+       "email": "alice@acme.example",
+       "role": "admin",
+       "hint": "9c0370f292ba5efb",
+       "fingerprint": "5806eb62432bf0ca940467341d4bf9f0af3dcc7b37fe85b0b0e1f1742c4f8b1f"
+      },
+      {
+       "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+       "email": "alice@acme.example",
+       "role": "admin",
+       "hint": "78a2fe095dc1a9d6",
+       "fingerprint": "7dc59a4ca3e86b4fa87b4f18e1f96d55767e8a135401526d51245d30334b83c6"
+      }
+     ]
+    },
+    "policyProfile": "standard"
+   },
+   "deployFlag": "docker",
+   "words": "cli.deploy-env"
+  },
+  {
+   "name": "kept relay.json with another profile",
+   "product": "meet",
+   "local": {
+    "profile": "standard",
+    "pki": "console",
+    "host": null,
+    "turnHost": null,
+    "clients": null,
+    "placedCa": null,
+    "placedRoot": null,
+    "consoleInstalled": true,
+    "fresh": true,
+    "keptProfile": "high"
+   },
+   "preview": {
+    "deploy": {
+     "env": "linux",
+     "host": "meet.acme.example",
+     "turnHost": "198.51.100.7",
+     "clients": null,
+     "pki": "console",
+     "binarySha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+     "ca": {
+      "pem": "-----BEGIN CERTIFICATE-----\nMIIBnTCCAUOgAwIBAgIQaC4blDSnJLHRSsoVHb02NDAKBggqhkjOPQQDAjAtMRww\nGgYDVQQDDBNBY21lIE1lZXRpbmcgSHViIENBMQ0wCwYDVQQKDARBY21lMB4XDTI2\nMDEwMTAwMDAwMFoXDTM2MDEwMTAwMDAwMFowLTEcMBoGA1UEAwwTQWNtZSBNZWV0\naW5nIEh1YiBDQTENMAsGA1UECgwEQWNtZTBZMBMGByqGSM49AgEGCCqGSM49AwEH\nA0IABOLd5iHBbqfGIT7AUI6OxYhQKvQUDf/PCgpEPctsqN42aXa3t6knTBvbVWOE\nZphUs1TNtWdJ4nfP0SB1xV8WihijRTBDMBIGA1UdEwEB/wQIMAYBAf8CAQAwDgYD\nVR0PAQH/BAQDAgEGMB0GA1UdDgQWBBTX0KtCNNAeKUur1YoK3lLUgMoQiTAKBggq\nhkjOPQQDAgNIADBFAiAcGxebwanxUxhhEY+KC7KdroSy81CH9M6YoT7O5dpyZgIh\nALjE6WgXuSOV8LZ3qO6A5QIUeqA0H3hux9VCK1Ril+6T\n-----END CERTIFICATE-----\n",
+      "id": "m_3d50cc4fe467cb0ab3e44d784c43267c"
+     },
+     "signer": {
+      "url": "https://signer.acme.example"
+     },
+     "spokesRoot": null,
+     "license": {
+      "id": "l_00000000000000a1",
+      "org": "Acme Corp",
+      "edition": "enterprise",
+      "users": 50,
+      "relays": 5,
+      "exp": 1821009600,
+      "root": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+      "token": "eyJ2IjoyLCJ0eXAiOiJsdWNpZC1yZWxheS1saWNlbnNlIiwiaWQiOiJsXzAwMDAwMDAwMDAwMDAwYTEiLCJvcmciOiJBY21lIENvcnAiLCJyb290IjoibV8zZDUwY2M0ZmU0NjdjYjBhYjNlNDRkNzg0YzQzMjY3YyIsImVkaXRpb24iOiJlbnRlcnByaXNlIiwidXNlcnMiOjUwLCJyZWxheXMiOjUsImZlYXR1cmVzIjpbIm1lZXQiXSwiaWF0IjoxNzk0MjI1NjAwLCJleHAiOjE4MjEwMDk2MDB9.0dqiT3Uws0lqA7PuW5j9z0l9Gx72qEdRxrhYgCnFYRubnBSEAvCEMcl4_jmVcqxK7RxSLET-MgCSpSpnHi8dCQ"
+     },
+     "offered": [
+      {
+       "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+       "email": "alice@acme.example",
+       "role": "admin",
+       "hint": "9c0370f292ba5efb",
+       "fingerprint": "5806eb62432bf0ca940467341d4bf9f0af3dcc7b37fe85b0b0e1f1742c4f8b1f"
+      },
+      {
+       "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+       "email": "alice@acme.example",
+       "role": "admin",
+       "hint": "78a2fe095dc1a9d6",
+       "fingerprint": "7dc59a4ca3e86b4fa87b4f18e1f96d55767e8a135401526d51245d30334b83c6"
+      }
+     ]
+    },
+    "policyProfile": "standard"
+   },
+   "deployFlag": "linux",
+   "words": "cli.deploy-profile-changed"
+  },
+  {
+   "name": "high relay, standard console",
+   "product": "meet",
+   "local": {
+    "profile": "high",
+    "pki": "own",
+    "host": "meet.acme.example",
+    "turnHost": "198.51.100.7",
+    "clients": null,
+    "placedCa": null,
+    "placedRoot": null,
+    "consoleInstalled": false,
+    "fresh": true,
+    "keptProfile": null
+   },
+   "preview": {
+    "deploy": {
+     "env": "linux",
+     "host": "meet.acme.example",
+     "turnHost": "198.51.100.7",
+     "clients": null,
+     "pki": "own",
+     "binarySha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+     "ca": null,
+     "signer": null,
+     "spokesRoot": null,
+     "license": {
+      "id": "l_00000000000000a1",
+      "org": "Acme Corp",
+      "edition": "enterprise",
+      "users": 50,
+      "relays": 5,
+      "exp": 1821009600,
+      "root": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+      "token": "eyJ2IjoyLCJ0eXAiOiJsdWNpZC1yZWxheS1saWNlbnNlIiwiaWQiOiJsXzAwMDAwMDAwMDAwMDAwYTEiLCJvcmciOiJBY21lIENvcnAiLCJyb290IjoibV8zZDUwY2M0ZmU0NjdjYjBhYjNlNDRkNzg0YzQzMjY3YyIsImVkaXRpb24iOiJlbnRlcnByaXNlIiwidXNlcnMiOjUwLCJyZWxheXMiOjUsImZlYXR1cmVzIjpbIm1lZXQiXSwiaWF0IjoxNzk0MjI1NjAwLCJleHAiOjE4MjEwMDk2MDB9.0dqiT3Uws0lqA7PuW5j9z0l9Gx72qEdRxrhYgCnFYRubnBSEAvCEMcl4_jmVcqxK7RxSLET-MgCSpSpnHi8dCQ"
+     },
+     "offered": []
+    },
+    "policyProfile": "standard"
+   },
+   "deployFlag": "linux",
+   "words": "cli.enroll-high-standard"
+  },
+  {
+   "name": "standard relay, high console",
+   "product": "meet",
+   "local": {
+    "profile": "standard",
+    "pki": "console",
+    "host": null,
+    "turnHost": null,
+    "clients": null,
+    "placedCa": null,
+    "placedRoot": null,
+    "consoleInstalled": true,
+    "fresh": true,
+    "keptProfile": null
+   },
+   "preview": {
+    "deploy": {
+     "env": "linux",
+     "host": "meet.acme.example",
+     "turnHost": "198.51.100.7",
+     "clients": null,
+     "pki": "console",
+     "binarySha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+     "ca": {
+      "pem": "-----BEGIN CERTIFICATE-----\nMIIBnTCCAUOgAwIBAgIQaC4blDSnJLHRSsoVHb02NDAKBggqhkjOPQQDAjAtMRww\nGgYDVQQDDBNBY21lIE1lZXRpbmcgSHViIENBMQ0wCwYDVQQKDARBY21lMB4XDTI2\nMDEwMTAwMDAwMFoXDTM2MDEwMTAwMDAwMFowLTEcMBoGA1UEAwwTQWNtZSBNZWV0\naW5nIEh1YiBDQTENMAsGA1UECgwEQWNtZTBZMBMGByqGSM49AgEGCCqGSM49AwEH\nA0IABOLd5iHBbqfGIT7AUI6OxYhQKvQUDf/PCgpEPctsqN42aXa3t6knTBvbVWOE\nZphUs1TNtWdJ4nfP0SB1xV8WihijRTBDMBIGA1UdEwEB/wQIMAYBAf8CAQAwDgYD\nVR0PAQH/BAQDAgEGMB0GA1UdDgQWBBTX0KtCNNAeKUur1YoK3lLUgMoQiTAKBggq\nhkjOPQQDAgNIADBFAiAcGxebwanxUxhhEY+KC7KdroSy81CH9M6YoT7O5dpyZgIh\nALjE6WgXuSOV8LZ3qO6A5QIUeqA0H3hux9VCK1Ril+6T\n-----END CERTIFICATE-----\n",
+      "id": "m_3d50cc4fe467cb0ab3e44d784c43267c"
+     },
+     "signer": {
+      "url": "https://signer.acme.example"
+     },
+     "spokesRoot": null,
+     "license": {
+      "id": "l_00000000000000a1",
+      "org": "Acme Corp",
+      "edition": "enterprise",
+      "users": 50,
+      "relays": 5,
+      "exp": 1821009600,
+      "root": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+      "token": "eyJ2IjoyLCJ0eXAiOiJsdWNpZC1yZWxheS1saWNlbnNlIiwiaWQiOiJsXzAwMDAwMDAwMDAwMDAwYTEiLCJvcmciOiJBY21lIENvcnAiLCJyb290IjoibV8zZDUwY2M0ZmU0NjdjYjBhYjNlNDRkNzg0YzQzMjY3YyIsImVkaXRpb24iOiJlbnRlcnByaXNlIiwidXNlcnMiOjUwLCJyZWxheXMiOjUsImZlYXR1cmVzIjpbIm1lZXQiXSwiaWF0IjoxNzk0MjI1NjAwLCJleHAiOjE4MjEwMDk2MDB9.0dqiT3Uws0lqA7PuW5j9z0l9Gx72qEdRxrhYgCnFYRubnBSEAvCEMcl4_jmVcqxK7RxSLET-MgCSpSpnHi8dCQ"
+     },
+     "offered": [
+      {
+       "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+       "email": "alice@acme.example",
+       "role": "admin",
+       "hint": "9c0370f292ba5efb",
+       "fingerprint": "5806eb62432bf0ca940467341d4bf9f0af3dcc7b37fe85b0b0e1f1742c4f8b1f"
+      },
+      {
+       "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+       "email": "alice@acme.example",
+       "role": "admin",
+       "hint": "78a2fe095dc1a9d6",
+       "fingerprint": "7dc59a4ca3e86b4fa87b4f18e1f96d55767e8a135401526d51245d30334b83c6"
+      }
+     ]
+    },
+    "policyProfile": "high"
+   },
+   "deployFlag": "linux",
+   "words": "cli.deploy-profile"
+  },
+  {
+   "name": "pki differs",
+   "product": "meet",
+   "local": {
+    "profile": "standard",
+    "pki": "own",
+    "host": null,
+    "turnHost": null,
+    "clients": null,
+    "placedCa": null,
+    "placedRoot": null,
+    "consoleInstalled": true,
+    "fresh": true,
+    "keptProfile": null
+   },
+   "preview": {
+    "deploy": {
+     "env": "linux",
+     "host": "meet.acme.example",
+     "turnHost": "198.51.100.7",
+     "clients": null,
+     "pki": "console",
+     "binarySha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+     "ca": {
+      "pem": "-----BEGIN CERTIFICATE-----\nMIIBnTCCAUOgAwIBAgIQaC4blDSnJLHRSsoVHb02NDAKBggqhkjOPQQDAjAtMRww\nGgYDVQQDDBNBY21lIE1lZXRpbmcgSHViIENBMQ0wCwYDVQQKDARBY21lMB4XDTI2\nMDEwMTAwMDAwMFoXDTM2MDEwMTAwMDAwMFowLTEcMBoGA1UEAwwTQWNtZSBNZWV0\naW5nIEh1YiBDQTENMAsGA1UECgwEQWNtZTBZMBMGByqGSM49AgEGCCqGSM49AwEH\nA0IABOLd5iHBbqfGIT7AUI6OxYhQKvQUDf/PCgpEPctsqN42aXa3t6knTBvbVWOE\nZphUs1TNtWdJ4nfP0SB1xV8WihijRTBDMBIGA1UdEwEB/wQIMAYBAf8CAQAwDgYD\nVR0PAQH/BAQDAgEGMB0GA1UdDgQWBBTX0KtCNNAeKUur1YoK3lLUgMoQiTAKBggq\nhkjOPQQDAgNIADBFAiAcGxebwanxUxhhEY+KC7KdroSy81CH9M6YoT7O5dpyZgIh\nALjE6WgXuSOV8LZ3qO6A5QIUeqA0H3hux9VCK1Ril+6T\n-----END CERTIFICATE-----\n",
+      "id": "m_3d50cc4fe467cb0ab3e44d784c43267c"
+     },
+     "signer": {
+      "url": "https://signer.acme.example"
+     },
+     "spokesRoot": null,
+     "license": {
+      "id": "l_00000000000000a1",
+      "org": "Acme Corp",
+      "edition": "enterprise",
+      "users": 50,
+      "relays": 5,
+      "exp": 1821009600,
+      "root": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+      "token": "eyJ2IjoyLCJ0eXAiOiJsdWNpZC1yZWxheS1saWNlbnNlIiwiaWQiOiJsXzAwMDAwMDAwMDAwMDAwYTEiLCJvcmciOiJBY21lIENvcnAiLCJyb290IjoibV8zZDUwY2M0ZmU0NjdjYjBhYjNlNDRkNzg0YzQzMjY3YyIsImVkaXRpb24iOiJlbnRlcnByaXNlIiwidXNlcnMiOjUwLCJyZWxheXMiOjUsImZlYXR1cmVzIjpbIm1lZXQiXSwiaWF0IjoxNzk0MjI1NjAwLCJleHAiOjE4MjEwMDk2MDB9.0dqiT3Uws0lqA7PuW5j9z0l9Gx72qEdRxrhYgCnFYRubnBSEAvCEMcl4_jmVcqxK7RxSLET-MgCSpSpnHi8dCQ"
+     },
+     "offered": [
+      {
+       "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+       "email": "alice@acme.example",
+       "role": "admin",
+       "hint": "9c0370f292ba5efb",
+       "fingerprint": "5806eb62432bf0ca940467341d4bf9f0af3dcc7b37fe85b0b0e1f1742c4f8b1f"
+      },
+      {
+       "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+       "email": "alice@acme.example",
+       "role": "admin",
+       "hint": "78a2fe095dc1a9d6",
+       "fingerprint": "7dc59a4ca3e86b4fa87b4f18e1f96d55767e8a135401526d51245d30334b83c6"
+      }
+     ]
+    },
+    "policyProfile": "standard"
+   },
+   "deployFlag": "linux",
+   "words": "cli.deploy-pki"
+  },
+  {
+   "name": "high, host differs",
+   "product": "meet",
+   "local": {
+    "profile": "high",
+    "pki": "own",
+    "host": "other.acme.example",
+    "turnHost": "198.51.100.7",
+    "clients": null,
+    "placedCa": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+    "placedRoot": null,
+    "consoleInstalled": false,
+    "fresh": true,
+    "keptProfile": null
+   },
+   "preview": {
+    "deploy": {
+     "env": "linux",
+     "host": "meet.acme.example",
+     "turnHost": "198.51.100.7",
+     "clients": null,
+     "pki": "own",
+     "binarySha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+     "ca": null,
+     "signer": null,
+     "spokesRoot": null,
+     "license": {
+      "id": "l_00000000000000a1",
+      "org": "Acme Corp",
+      "edition": "enterprise",
+      "users": 50,
+      "relays": 5,
+      "exp": 1821009600,
+      "root": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+      "token": "eyJ2IjoyLCJ0eXAiOiJsdWNpZC1yZWxheS1saWNlbnNlIiwiaWQiOiJsXzAwMDAwMDAwMDAwMDAwYTEiLCJvcmciOiJBY21lIENvcnAiLCJyb290IjoibV8zZDUwY2M0ZmU0NjdjYjBhYjNlNDRkNzg0YzQzMjY3YyIsImVkaXRpb24iOiJlbnRlcnByaXNlIiwidXNlcnMiOjUwLCJyZWxheXMiOjUsImZlYXR1cmVzIjpbIm1lZXQiXSwiaWF0IjoxNzk0MjI1NjAwLCJleHAiOjE4MjEwMDk2MDB9.0dqiT3Uws0lqA7PuW5j9z0l9Gx72qEdRxrhYgCnFYRubnBSEAvCEMcl4_jmVcqxK7RxSLET-MgCSpSpnHi8dCQ"
+     },
+     "offered": []
+    },
+    "policyProfile": "high"
+   },
+   "deployFlag": "linux",
+   "words": "cli.deploy-host-differs"
+  },
+  {
+   "name": "high, offered key",
+   "product": "meet",
+   "local": {
+    "profile": "high",
+    "pki": "own",
+    "host": "meet.acme.example",
+    "turnHost": "198.51.100.7",
+    "clients": null,
+    "placedCa": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+    "placedRoot": null,
+    "consoleInstalled": false,
+    "fresh": true,
+    "keptProfile": null
+   },
+   "preview": {
+    "deploy": {
+     "env": "linux",
+     "host": "meet.acme.example",
+     "turnHost": "198.51.100.7",
+     "clients": null,
+     "pki": "own",
+     "binarySha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+     "ca": null,
+     "signer": null,
+     "spokesRoot": null,
+     "license": {
+      "id": "l_00000000000000a1",
+      "org": "Acme Corp",
+      "edition": "enterprise",
+      "users": 50,
+      "relays": 5,
+      "exp": 1821009600,
+      "root": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+      "token": "eyJ2IjoyLCJ0eXAiOiJsdWNpZC1yZWxheS1saWNlbnNlIiwiaWQiOiJsXzAwMDAwMDAwMDAwMDAwYTEiLCJvcmciOiJBY21lIENvcnAiLCJyb290IjoibV8zZDUwY2M0ZmU0NjdjYjBhYjNlNDRkNzg0YzQzMjY3YyIsImVkaXRpb24iOiJlbnRlcnByaXNlIiwidXNlcnMiOjUwLCJyZWxheXMiOjUsImZlYXR1cmVzIjpbIm1lZXQiXSwiaWF0IjoxNzk0MjI1NjAwLCJleHAiOjE4MjEwMDk2MDB9.0dqiT3Uws0lqA7PuW5j9z0l9Gx72qEdRxrhYgCnFYRubnBSEAvCEMcl4_jmVcqxK7RxSLET-MgCSpSpnHi8dCQ"
+     },
+     "offered": [
+      {
+       "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+       "email": "alice@acme.example",
+       "role": "admin",
+       "hint": "9c0370f292ba5efb",
+       "fingerprint": "5806eb62432bf0ca940467341d4bf9f0af3dcc7b37fe85b0b0e1f1742c4f8b1f"
+      },
+      {
+       "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+       "email": "alice@acme.example",
+       "role": "admin",
+       "hint": "78a2fe095dc1a9d6",
+       "fingerprint": "7dc59a4ca3e86b4fa87b4f18e1f96d55767e8a135401526d51245d30334b83c6"
+      }
+     ]
+    },
+    "policyProfile": "high"
+   },
+   "deployFlag": "linux",
+   "words": "cli.deploy-high-preview"
+  },
+  {
+   "name": "high, delivered CA",
+   "product": "meet",
+   "local": {
+    "profile": "high",
+    "pki": "own",
+    "host": "meet.acme.example",
+    "turnHost": "198.51.100.7",
+    "clients": null,
+    "placedCa": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+    "placedRoot": null,
+    "consoleInstalled": false,
+    "fresh": true,
+    "keptProfile": null
+   },
+   "preview": {
+    "deploy": {
+     "env": "linux",
+     "host": "meet.acme.example",
+     "turnHost": "198.51.100.7",
+     "clients": null,
+     "pki": "own",
+     "binarySha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+     "ca": {
+      "pem": "-----BEGIN CERTIFICATE-----\nMIIBnTCCAUOgAwIBAgIQaC4blDSnJLHRSsoVHb02NDAKBggqhkjOPQQDAjAtMRww\nGgYDVQQDDBNBY21lIE1lZXRpbmcgSHViIENBMQ0wCwYDVQQKDARBY21lMB4XDTI2\nMDEwMTAwMDAwMFoXDTM2MDEwMTAwMDAwMFowLTEcMBoGA1UEAwwTQWNtZSBNZWV0\naW5nIEh1YiBDQTENMAsGA1UECgwEQWNtZTBZMBMGByqGSM49AgEGCCqGSM49AwEH\nA0IABOLd5iHBbqfGIT7AUI6OxYhQKvQUDf/PCgpEPctsqN42aXa3t6knTBvbVWOE\nZphUs1TNtWdJ4nfP0SB1xV8WihijRTBDMBIGA1UdEwEB/wQIMAYBAf8CAQAwDgYD\nVR0PAQH/BAQDAgEGMB0GA1UdDgQWBBTX0KtCNNAeKUur1YoK3lLUgMoQiTAKBggq\nhkjOPQQDAgNIADBFAiAcGxebwanxUxhhEY+KC7KdroSy81CH9M6YoT7O5dpyZgIh\nALjE6WgXuSOV8LZ3qO6A5QIUeqA0H3hux9VCK1Ril+6T\n-----END CERTIFICATE-----\n",
+      "id": "m_3d50cc4fe467cb0ab3e44d784c43267c"
+     },
+     "signer": null,
+     "spokesRoot": null,
+     "license": {
+      "id": "l_00000000000000a1",
+      "org": "Acme Corp",
+      "edition": "enterprise",
+      "users": 50,
+      "relays": 5,
+      "exp": 1821009600,
+      "root": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+      "token": "eyJ2IjoyLCJ0eXAiOiJsdWNpZC1yZWxheS1saWNlbnNlIiwiaWQiOiJsXzAwMDAwMDAwMDAwMDAwYTEiLCJvcmciOiJBY21lIENvcnAiLCJyb290IjoibV8zZDUwY2M0ZmU0NjdjYjBhYjNlNDRkNzg0YzQzMjY3YyIsImVkaXRpb24iOiJlbnRlcnByaXNlIiwidXNlcnMiOjUwLCJyZWxheXMiOjUsImZlYXR1cmVzIjpbIm1lZXQiXSwiaWF0IjoxNzk0MjI1NjAwLCJleHAiOjE4MjEwMDk2MDB9.0dqiT3Uws0lqA7PuW5j9z0l9Gx72qEdRxrhYgCnFYRubnBSEAvCEMcl4_jmVcqxK7RxSLET-MgCSpSpnHi8dCQ"
+     },
+     "offered": []
+    },
+    "policyProfile": "high"
+   },
+   "deployFlag": "linux",
+   "words": "cli.deploy-high-preview"
+  },
+  {
+   "name": "high, nothing placed",
+   "product": "meet",
+   "local": {
+    "profile": "high",
+    "pki": "own",
+    "host": "meet.acme.example",
+    "turnHost": "198.51.100.7",
+    "clients": null,
+    "placedCa": null,
+    "placedRoot": null,
+    "consoleInstalled": false,
+    "fresh": true,
+    "keptProfile": null
+   },
+   "preview": {
+    "deploy": {
+     "env": "linux",
+     "host": "meet.acme.example",
+     "turnHost": "198.51.100.7",
+     "clients": null,
+     "pki": "own",
+     "binarySha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+     "ca": null,
+     "signer": null,
+     "spokesRoot": null,
+     "license": {
+      "id": "l_00000000000000a1",
+      "org": "Acme Corp",
+      "edition": "enterprise",
+      "users": 50,
+      "relays": 5,
+      "exp": 1821009600,
+      "root": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+      "token": "eyJ2IjoyLCJ0eXAiOiJsdWNpZC1yZWxheS1saWNlbnNlIiwiaWQiOiJsXzAwMDAwMDAwMDAwMDAwYTEiLCJvcmciOiJBY21lIENvcnAiLCJyb290IjoibV8zZDUwY2M0ZmU0NjdjYjBhYjNlNDRkNzg0YzQzMjY3YyIsImVkaXRpb24iOiJlbnRlcnByaXNlIiwidXNlcnMiOjUwLCJyZWxheXMiOjUsImZlYXR1cmVzIjpbIm1lZXQiXSwiaWF0IjoxNzk0MjI1NjAwLCJleHAiOjE4MjEwMDk2MDB9.0dqiT3Uws0lqA7PuW5j9z0l9Gx72qEdRxrhYgCnFYRubnBSEAvCEMcl4_jmVcqxK7RxSLET-MgCSpSpnHi8dCQ"
+     },
+     "offered": []
+    },
+    "policyProfile": "high"
+   },
+   "deployFlag": "linux",
+   "words": "cli.deploy-anchor"
+  },
+  {
+   "name": "high, placed",
+   "product": "meet",
+   "local": {
+    "profile": "high",
+    "pki": "own",
+    "host": "meet.acme.example",
+    "turnHost": "198.51.100.7",
+    "clients": null,
+    "placedCa": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+    "placedRoot": null,
+    "consoleInstalled": false,
+    "fresh": true,
+    "keptProfile": null
+   },
+   "preview": {
+    "deploy": {
+     "env": "linux",
+     "host": "meet.acme.example",
+     "turnHost": "198.51.100.7",
+     "clients": null,
+     "pki": "own",
+     "binarySha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+     "ca": null,
+     "signer": null,
+     "spokesRoot": null,
+     "license": {
+      "id": "l_00000000000000a1",
+      "org": "Acme Corp",
+      "edition": "enterprise",
+      "users": 50,
+      "relays": 5,
+      "exp": 1821009600,
+      "root": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+      "token": "eyJ2IjoyLCJ0eXAiOiJsdWNpZC1yZWxheS1saWNlbnNlIiwiaWQiOiJsXzAwMDAwMDAwMDAwMDAwYTEiLCJvcmciOiJBY21lIENvcnAiLCJyb290IjoibV8zZDUwY2M0ZmU0NjdjYjBhYjNlNDRkNzg0YzQzMjY3YyIsImVkaXRpb24iOiJlbnRlcnByaXNlIiwidXNlcnMiOjUwLCJyZWxheXMiOjUsImZlYXR1cmVzIjpbIm1lZXQiXSwiaWF0IjoxNzk0MjI1NjAwLCJleHAiOjE4MjEwMDk2MDB9.0dqiT3Uws0lqA7PuW5j9z0l9Gx72qEdRxrhYgCnFYRubnBSEAvCEMcl4_jmVcqxK7RxSLET-MgCSpSpnHi8dCQ"
+     },
+     "offered": []
+    },
+    "policyProfile": "high"
+   },
+   "deployFlag": "linux",
+   "words": null
+  },
+  {
+   "name": "placed CA differs",
+   "product": "meet",
+   "local": {
+    "profile": "standard",
+    "pki": "console",
+    "host": null,
+    "turnHost": null,
+    "clients": null,
+    "placedCa": "m_00000000000000000000000000000000",
+    "placedRoot": null,
+    "consoleInstalled": true,
+    "fresh": true,
+    "keptProfile": null
+   },
+   "preview": {
+    "deploy": {
+     "env": "linux",
+     "host": "meet.acme.example",
+     "turnHost": "198.51.100.7",
+     "clients": null,
+     "pki": "console",
+     "binarySha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+     "ca": {
+      "pem": "-----BEGIN CERTIFICATE-----\nMIIBnTCCAUOgAwIBAgIQaC4blDSnJLHRSsoVHb02NDAKBggqhkjOPQQDAjAtMRww\nGgYDVQQDDBNBY21lIE1lZXRpbmcgSHViIENBMQ0wCwYDVQQKDARBY21lMB4XDTI2\nMDEwMTAwMDAwMFoXDTM2MDEwMTAwMDAwMFowLTEcMBoGA1UEAwwTQWNtZSBNZWV0\naW5nIEh1YiBDQTENMAsGA1UECgwEQWNtZTBZMBMGByqGSM49AgEGCCqGSM49AwEH\nA0IABOLd5iHBbqfGIT7AUI6OxYhQKvQUDf/PCgpEPctsqN42aXa3t6knTBvbVWOE\nZphUs1TNtWdJ4nfP0SB1xV8WihijRTBDMBIGA1UdEwEB/wQIMAYBAf8CAQAwDgYD\nVR0PAQH/BAQDAgEGMB0GA1UdDgQWBBTX0KtCNNAeKUur1YoK3lLUgMoQiTAKBggq\nhkjOPQQDAgNIADBFAiAcGxebwanxUxhhEY+KC7KdroSy81CH9M6YoT7O5dpyZgIh\nALjE6WgXuSOV8LZ3qO6A5QIUeqA0H3hux9VCK1Ril+6T\n-----END CERTIFICATE-----\n",
+      "id": "m_3d50cc4fe467cb0ab3e44d784c43267c"
+     },
+     "signer": {
+      "url": "https://signer.acme.example"
+     },
+     "spokesRoot": null,
+     "license": {
+      "id": "l_00000000000000a1",
+      "org": "Acme Corp",
+      "edition": "enterprise",
+      "users": 50,
+      "relays": 5,
+      "exp": 1821009600,
+      "root": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+      "token": "eyJ2IjoyLCJ0eXAiOiJsdWNpZC1yZWxheS1saWNlbnNlIiwiaWQiOiJsXzAwMDAwMDAwMDAwMDAwYTEiLCJvcmciOiJBY21lIENvcnAiLCJyb290IjoibV8zZDUwY2M0ZmU0NjdjYjBhYjNlNDRkNzg0YzQzMjY3YyIsImVkaXRpb24iOiJlbnRlcnByaXNlIiwidXNlcnMiOjUwLCJyZWxheXMiOjUsImZlYXR1cmVzIjpbIm1lZXQiXSwiaWF0IjoxNzk0MjI1NjAwLCJleHAiOjE4MjEwMDk2MDB9.0dqiT3Uws0lqA7PuW5j9z0l9Gx72qEdRxrhYgCnFYRubnBSEAvCEMcl4_jmVcqxK7RxSLET-MgCSpSpnHi8dCQ"
+     },
+     "offered": [
+      {
+       "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+       "email": "alice@acme.example",
+       "role": "admin",
+       "hint": "9c0370f292ba5efb",
+       "fingerprint": "5806eb62432bf0ca940467341d4bf9f0af3dcc7b37fe85b0b0e1f1742c4f8b1f"
+      },
+      {
+       "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+       "email": "alice@acme.example",
+       "role": "admin",
+       "hint": "78a2fe095dc1a9d6",
+       "fingerprint": "7dc59a4ca3e86b4fa87b4f18e1f96d55767e8a135401526d51245d30334b83c6"
+      }
+     ]
+    },
+    "policyProfile": "standard"
+   },
+   "deployFlag": "linux",
+   "words": "cli.deploy-root-differs"
+  },
+  {
+   "name": "console CA delivered, console-installed",
+   "product": "meet",
+   "local": {
+    "profile": "standard",
+    "pki": "console",
+    "host": null,
+    "turnHost": null,
+    "clients": null,
+    "placedCa": null,
+    "placedRoot": null,
+    "consoleInstalled": true,
+    "fresh": true,
+    "keptProfile": null
+   },
+   "preview": {
+    "deploy": {
+     "env": "linux",
+     "host": "meet.acme.example",
+     "turnHost": "198.51.100.7",
+     "clients": null,
+     "pki": "console",
+     "binarySha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+     "ca": {
+      "pem": "-----BEGIN CERTIFICATE-----\nMIIBnTCCAUOgAwIBAgIQaC4blDSnJLHRSsoVHb02NDAKBggqhkjOPQQDAjAtMRww\nGgYDVQQDDBNBY21lIE1lZXRpbmcgSHViIENBMQ0wCwYDVQQKDARBY21lMB4XDTI2\nMDEwMTAwMDAwMFoXDTM2MDEwMTAwMDAwMFowLTEcMBoGA1UEAwwTQWNtZSBNZWV0\naW5nIEh1YiBDQTENMAsGA1UECgwEQWNtZTBZMBMGByqGSM49AgEGCCqGSM49AwEH\nA0IABOLd5iHBbqfGIT7AUI6OxYhQKvQUDf/PCgpEPctsqN42aXa3t6knTBvbVWOE\nZphUs1TNtWdJ4nfP0SB1xV8WihijRTBDMBIGA1UdEwEB/wQIMAYBAf8CAQAwDgYD\nVR0PAQH/BAQDAgEGMB0GA1UdDgQWBBTX0KtCNNAeKUur1YoK3lLUgMoQiTAKBggq\nhkjOPQQDAgNIADBFAiAcGxebwanxUxhhEY+KC7KdroSy81CH9M6YoT7O5dpyZgIh\nALjE6WgXuSOV8LZ3qO6A5QIUeqA0H3hux9VCK1Ril+6T\n-----END CERTIFICATE-----\n",
+      "id": "m_3d50cc4fe467cb0ab3e44d784c43267c"
+     },
+     "signer": {
+      "url": "https://signer.acme.example"
+     },
+     "spokesRoot": null,
+     "license": {
+      "id": "l_00000000000000a1",
+      "org": "Acme Corp",
+      "edition": "enterprise",
+      "users": 50,
+      "relays": 5,
+      "exp": 1821009600,
+      "root": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+      "token": "eyJ2IjoyLCJ0eXAiOiJsdWNpZC1yZWxheS1saWNlbnNlIiwiaWQiOiJsXzAwMDAwMDAwMDAwMDAwYTEiLCJvcmciOiJBY21lIENvcnAiLCJyb290IjoibV8zZDUwY2M0ZmU0NjdjYjBhYjNlNDRkNzg0YzQzMjY3YyIsImVkaXRpb24iOiJlbnRlcnByaXNlIiwidXNlcnMiOjUwLCJyZWxheXMiOjUsImZlYXR1cmVzIjpbIm1lZXQiXSwiaWF0IjoxNzk0MjI1NjAwLCJleHAiOjE4MjEwMDk2MDB9.0dqiT3Uws0lqA7PuW5j9z0l9Gx72qEdRxrhYgCnFYRubnBSEAvCEMcl4_jmVcqxK7RxSLET-MgCSpSpnHi8dCQ"
+     },
+     "offered": [
+      {
+       "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+       "email": "alice@acme.example",
+       "role": "admin",
+       "hint": "9c0370f292ba5efb",
+       "fingerprint": "5806eb62432bf0ca940467341d4bf9f0af3dcc7b37fe85b0b0e1f1742c4f8b1f"
+      },
+      {
+       "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+       "email": "alice@acme.example",
+       "role": "admin",
+       "hint": "78a2fe095dc1a9d6",
+       "fingerprint": "7dc59a4ca3e86b4fa87b4f18e1f96d55767e8a135401526d51245d30334b83c6"
+      }
+     ]
+    },
+    "policyProfile": "standard"
+   },
+   "deployFlag": "linux",
+   "words": null
+  },
+  {
+   "name": "console CA, not console-installed",
+   "product": "meet",
+   "local": {
+    "profile": "standard",
+    "pki": "console",
+    "host": null,
+    "turnHost": null,
+    "clients": null,
+    "placedCa": null,
+    "placedRoot": null,
+    "consoleInstalled": false,
+    "fresh": true,
+    "keptProfile": null
+   },
+   "preview": {
+    "deploy": {
+     "env": "linux",
+     "host": "meet.acme.example",
+     "turnHost": "198.51.100.7",
+     "clients": null,
+     "pki": "console",
+     "binarySha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+     "ca": {
+      "pem": "-----BEGIN CERTIFICATE-----\nMIIBnTCCAUOgAwIBAgIQaC4blDSnJLHRSsoVHb02NDAKBggqhkjOPQQDAjAtMRww\nGgYDVQQDDBNBY21lIE1lZXRpbmcgSHViIENBMQ0wCwYDVQQKDARBY21lMB4XDTI2\nMDEwMTAwMDAwMFoXDTM2MDEwMTAwMDAwMFowLTEcMBoGA1UEAwwTQWNtZSBNZWV0\naW5nIEh1YiBDQTENMAsGA1UECgwEQWNtZTBZMBMGByqGSM49AgEGCCqGSM49AwEH\nA0IABOLd5iHBbqfGIT7AUI6OxYhQKvQUDf/PCgpEPctsqN42aXa3t6knTBvbVWOE\nZphUs1TNtWdJ4nfP0SB1xV8WihijRTBDMBIGA1UdEwEB/wQIMAYBAf8CAQAwDgYD\nVR0PAQH/BAQDAgEGMB0GA1UdDgQWBBTX0KtCNNAeKUur1YoK3lLUgMoQiTAKBggq\nhkjOPQQDAgNIADBFAiAcGxebwanxUxhhEY+KC7KdroSy81CH9M6YoT7O5dpyZgIh\nALjE6WgXuSOV8LZ3qO6A5QIUeqA0H3hux9VCK1Ril+6T\n-----END CERTIFICATE-----\n",
+      "id": "m_3d50cc4fe467cb0ab3e44d784c43267c"
+     },
+     "signer": {
+      "url": "https://signer.acme.example"
+     },
+     "spokesRoot": null,
+     "license": {
+      "id": "l_00000000000000a1",
+      "org": "Acme Corp",
+      "edition": "enterprise",
+      "users": 50,
+      "relays": 5,
+      "exp": 1821009600,
+      "root": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+      "token": "eyJ2IjoyLCJ0eXAiOiJsdWNpZC1yZWxheS1saWNlbnNlIiwiaWQiOiJsXzAwMDAwMDAwMDAwMDAwYTEiLCJvcmciOiJBY21lIENvcnAiLCJyb290IjoibV8zZDUwY2M0ZmU0NjdjYjBhYjNlNDRkNzg0YzQzMjY3YyIsImVkaXRpb24iOiJlbnRlcnByaXNlIiwidXNlcnMiOjUwLCJyZWxheXMiOjUsImZlYXR1cmVzIjpbIm1lZXQiXSwiaWF0IjoxNzk0MjI1NjAwLCJleHAiOjE4MjEwMDk2MDB9.0dqiT3Uws0lqA7PuW5j9z0l9Gx72qEdRxrhYgCnFYRubnBSEAvCEMcl4_jmVcqxK7RxSLET-MgCSpSpnHi8dCQ"
+     },
+     "offered": [
+      {
+       "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+       "email": "alice@acme.example",
+       "role": "admin",
+       "hint": "9c0370f292ba5efb",
+       "fingerprint": "5806eb62432bf0ca940467341d4bf9f0af3dcc7b37fe85b0b0e1f1742c4f8b1f"
+      },
+      {
+       "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+       "email": "alice@acme.example",
+       "role": "admin",
+       "hint": "78a2fe095dc1a9d6",
+       "fingerprint": "7dc59a4ca3e86b4fa87b4f18e1f96d55767e8a135401526d51245d30334b83c6"
+      }
+     ]
+    },
+    "policyProfile": "standard"
+   },
+   "deployFlag": "linux",
+   "words": "cli.deploy-anchor"
+  },
+  {
+   "name": "console CA placed with --ca",
+   "product": "meet",
+   "local": {
+    "profile": "standard",
+    "pki": "console",
+    "host": null,
+    "turnHost": null,
+    "clients": null,
+    "placedCa": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+    "placedRoot": null,
+    "consoleInstalled": false,
+    "fresh": true,
+    "keptProfile": null
+   },
+   "preview": {
+    "deploy": {
+     "env": "linux",
+     "host": "meet.acme.example",
+     "turnHost": "198.51.100.7",
+     "clients": null,
+     "pki": "console",
+     "binarySha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+     "ca": {
+      "pem": "-----BEGIN CERTIFICATE-----\nMIIBnTCCAUOgAwIBAgIQaC4blDSnJLHRSsoVHb02NDAKBggqhkjOPQQDAjAtMRww\nGgYDVQQDDBNBY21lIE1lZXRpbmcgSHViIENBMQ0wCwYDVQQKDARBY21lMB4XDTI2\nMDEwMTAwMDAwMFoXDTM2MDEwMTAwMDAwMFowLTEcMBoGA1UEAwwTQWNtZSBNZWV0\naW5nIEh1YiBDQTENMAsGA1UECgwEQWNtZTBZMBMGByqGSM49AgEGCCqGSM49AwEH\nA0IABOLd5iHBbqfGIT7AUI6OxYhQKvQUDf/PCgpEPctsqN42aXa3t6knTBvbVWOE\nZphUs1TNtWdJ4nfP0SB1xV8WihijRTBDMBIGA1UdEwEB/wQIMAYBAf8CAQAwDgYD\nVR0PAQH/BAQDAgEGMB0GA1UdDgQWBBTX0KtCNNAeKUur1YoK3lLUgMoQiTAKBggq\nhkjOPQQDAgNIADBFAiAcGxebwanxUxhhEY+KC7KdroSy81CH9M6YoT7O5dpyZgIh\nALjE6WgXuSOV8LZ3qO6A5QIUeqA0H3hux9VCK1Ril+6T\n-----END CERTIFICATE-----\n",
+      "id": "m_3d50cc4fe467cb0ab3e44d784c43267c"
+     },
+     "signer": {
+      "url": "https://signer.acme.example"
+     },
+     "spokesRoot": null,
+     "license": {
+      "id": "l_00000000000000a1",
+      "org": "Acme Corp",
+      "edition": "enterprise",
+      "users": 50,
+      "relays": 5,
+      "exp": 1821009600,
+      "root": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+      "token": "eyJ2IjoyLCJ0eXAiOiJsdWNpZC1yZWxheS1saWNlbnNlIiwiaWQiOiJsXzAwMDAwMDAwMDAwMDAwYTEiLCJvcmciOiJBY21lIENvcnAiLCJyb290IjoibV8zZDUwY2M0ZmU0NjdjYjBhYjNlNDRkNzg0YzQzMjY3YyIsImVkaXRpb24iOiJlbnRlcnByaXNlIiwidXNlcnMiOjUwLCJyZWxheXMiOjUsImZlYXR1cmVzIjpbIm1lZXQiXSwiaWF0IjoxNzk0MjI1NjAwLCJleHAiOjE4MjEwMDk2MDB9.0dqiT3Uws0lqA7PuW5j9z0l9Gx72qEdRxrhYgCnFYRubnBSEAvCEMcl4_jmVcqxK7RxSLET-MgCSpSpnHi8dCQ"
+     },
+     "offered": [
+      {
+       "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+       "email": "alice@acme.example",
+       "role": "admin",
+       "hint": "9c0370f292ba5efb",
+       "fingerprint": "5806eb62432bf0ca940467341d4bf9f0af3dcc7b37fe85b0b0e1f1742c4f8b1f"
+      },
+      {
+       "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+       "email": "alice@acme.example",
+       "role": "admin",
+       "hint": "78a2fe095dc1a9d6",
+       "fingerprint": "7dc59a4ca3e86b4fa87b4f18e1f96d55767e8a135401526d51245d30334b83c6"
+      }
+     ]
+    },
+    "policyProfile": "standard"
+   },
+   "deployFlag": "linux",
+   "words": null
+  },
+  {
+   "name": "own pki, nothing placed",
+   "product": "meet",
+   "local": {
+    "profile": "standard",
+    "pki": "own",
+    "host": null,
+    "turnHost": null,
+    "clients": null,
+    "placedCa": null,
+    "placedRoot": null,
+    "consoleInstalled": true,
+    "fresh": true,
+    "keptProfile": null
+   },
+   "preview": {
+    "deploy": {
+     "env": "linux",
+     "host": "meet.acme.example",
+     "turnHost": "198.51.100.7",
+     "clients": null,
+     "pki": "own",
+     "binarySha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+     "ca": null,
+     "signer": null,
+     "spokesRoot": null,
+     "license": {
+      "id": "l_00000000000000a1",
+      "org": "Acme Corp",
+      "edition": "enterprise",
+      "users": 50,
+      "relays": 5,
+      "exp": 1821009600,
+      "root": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+      "token": "eyJ2IjoyLCJ0eXAiOiJsdWNpZC1yZWxheS1saWNlbnNlIiwiaWQiOiJsXzAwMDAwMDAwMDAwMDAwYTEiLCJvcmciOiJBY21lIENvcnAiLCJyb290IjoibV8zZDUwY2M0ZmU0NjdjYjBhYjNlNDRkNzg0YzQzMjY3YyIsImVkaXRpb24iOiJlbnRlcnByaXNlIiwidXNlcnMiOjUwLCJyZWxheXMiOjUsImZlYXR1cmVzIjpbIm1lZXQiXSwiaWF0IjoxNzk0MjI1NjAwLCJleHAiOjE4MjEwMDk2MDB9.0dqiT3Uws0lqA7PuW5j9z0l9Gx72qEdRxrhYgCnFYRubnBSEAvCEMcl4_jmVcqxK7RxSLET-MgCSpSpnHi8dCQ"
+     },
+     "offered": []
+    },
+    "policyProfile": "standard"
+   },
+   "deployFlag": "linux",
+   "words": "cli.deploy-anchor"
+  },
+  {
+   "name": "spokes delivered root",
+   "product": "spokes",
+   "local": {
+    "profile": "standard",
+    "pki": null,
+    "host": null,
+    "turnHost": null,
+    "clients": null,
+    "placedCa": null,
+    "placedRoot": null,
+    "consoleInstalled": true,
+    "fresh": true,
+    "keptProfile": null
+   },
+   "preview": {
+    "deploy": {
+     "env": "linux",
+     "host": "relay-berlin.acme.example",
+     "turnHost": null,
+     "clients": [
+      "0.0.0.0/0",
+      "::/0"
+     ],
+     "pki": null,
+     "binarySha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+     "ca": null,
+     "signer": null,
+     "spokesRoot": {
+      "pem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEQjAfKAGRn0TsrzbbuDSCb11EtQox\nCJOaLSuUw/iFWQ+UkFpYLC3TghMijIDS52uph9MG3lKEwG0l6ZMX3UvK/Q==\n-----END PUBLIC KEY-----\n",
+      "id": "n_c01f74fdded17dd19924398395187920"
+     },
+     "license": {
+      "id": "l_00000000000000b2",
+      "org": "Acme Corp",
+      "edition": "enterprise",
+      "users": 50,
+      "relays": 5,
+      "exp": 1821009600,
+      "root": "n_c01f74fdded17dd19924398395187920",
+      "token": "eyJ2IjoyLCJ0eXAiOiJsdWNpZC1yZWxheS1saWNlbnNlIiwiaWQiOiJsXzAwMDAwMDAwMDAwMDAwYjIiLCJvcmciOiJBY21lIENvcnAiLCJyb290Ijoibl9jMDFmNzRmZGRlZDE3ZGQxOTkyNDM5ODM5NTE4NzkyMCIsImVkaXRpb24iOiJlbnRlcnByaXNlIiwidXNlcnMiOjUwLCJyZWxheXMiOjUsImZlYXR1cmVzIjpbInJlbGF5Iiwic3Bva2VzIl0sImlhdCI6MTc5NDIyNTYwMCwiZXhwIjoxODIxMDA5NjAwfQ.cOY2lEhu0QeQIdxGDf1Sq2wLLuG7IrY6xL46cJkc-b4vEe75_iUyCuHL3r53UEojHz_cPV_pXXCLm1_tqZPSCA"
+     },
+     "offered": [
+      {
+       "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+       "email": "alice@acme.example",
+       "role": "admin",
+       "hint": "9c0370f292ba5efb",
+       "fingerprint": "5806eb62432bf0ca940467341d4bf9f0af3dcc7b37fe85b0b0e1f1742c4f8b1f"
+      },
+      {
+       "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+       "email": "alice@acme.example",
+       "role": "admin",
+       "hint": "78a2fe095dc1a9d6",
+       "fingerprint": "7dc59a4ca3e86b4fa87b4f18e1f96d55767e8a135401526d51245d30334b83c6"
+      }
+     ]
+    },
+    "policyProfile": "standard"
+   },
+   "deployFlag": "linux",
+   "words": null
+  },
+  {
+   "name": "spokes delivered root, not console-installed",
+   "product": "spokes",
+   "local": {
+    "profile": "standard",
+    "pki": null,
+    "host": null,
+    "turnHost": null,
+    "clients": null,
+    "placedCa": null,
+    "placedRoot": null,
+    "consoleInstalled": false,
+    "fresh": true,
+    "keptProfile": null
+   },
+   "preview": {
+    "deploy": {
+     "env": "linux",
+     "host": "relay-berlin.acme.example",
+     "turnHost": null,
+     "clients": [
+      "0.0.0.0/0",
+      "::/0"
+     ],
+     "pki": null,
+     "binarySha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+     "ca": null,
+     "signer": null,
+     "spokesRoot": {
+      "pem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEQjAfKAGRn0TsrzbbuDSCb11EtQox\nCJOaLSuUw/iFWQ+UkFpYLC3TghMijIDS52uph9MG3lKEwG0l6ZMX3UvK/Q==\n-----END PUBLIC KEY-----\n",
+      "id": "n_c01f74fdded17dd19924398395187920"
+     },
+     "license": {
+      "id": "l_00000000000000b2",
+      "org": "Acme Corp",
+      "edition": "enterprise",
+      "users": 50,
+      "relays": 5,
+      "exp": 1821009600,
+      "root": "n_c01f74fdded17dd19924398395187920",
+      "token": "eyJ2IjoyLCJ0eXAiOiJsdWNpZC1yZWxheS1saWNlbnNlIiwiaWQiOiJsXzAwMDAwMDAwMDAwMDAwYjIiLCJvcmciOiJBY21lIENvcnAiLCJyb290Ijoibl9jMDFmNzRmZGRlZDE3ZGQxOTkyNDM5ODM5NTE4NzkyMCIsImVkaXRpb24iOiJlbnRlcnByaXNlIiwidXNlcnMiOjUwLCJyZWxheXMiOjUsImZlYXR1cmVzIjpbInJlbGF5Iiwic3Bva2VzIl0sImlhdCI6MTc5NDIyNTYwMCwiZXhwIjoxODIxMDA5NjAwfQ.cOY2lEhu0QeQIdxGDf1Sq2wLLuG7IrY6xL46cJkc-b4vEe75_iUyCuHL3r53UEojHz_cPV_pXXCLm1_tqZPSCA"
+     },
+     "offered": [
+      {
+       "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+       "email": "alice@acme.example",
+       "role": "admin",
+       "hint": "9c0370f292ba5efb",
+       "fingerprint": "5806eb62432bf0ca940467341d4bf9f0af3dcc7b37fe85b0b0e1f1742c4f8b1f"
+      },
+      {
+       "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+       "email": "alice@acme.example",
+       "role": "admin",
+       "hint": "78a2fe095dc1a9d6",
+       "fingerprint": "7dc59a4ca3e86b4fa87b4f18e1f96d55767e8a135401526d51245d30334b83c6"
+      }
+     ]
+    },
+    "policyProfile": "standard"
+   },
+   "deployFlag": "linux",
+   "words": "cli.deploy-anchor"
+  },
+  {
+   "name": "spokes placed root differs",
+   "product": "spokes",
+   "local": {
+    "profile": "standard",
+    "pki": null,
+    "host": null,
+    "turnHost": null,
+    "clients": null,
+    "placedCa": null,
+    "placedRoot": "n_83657db8bd8a4e55bb4df17809b42268",
+    "consoleInstalled": true,
+    "fresh": true,
+    "keptProfile": null
+   },
+   "preview": {
+    "deploy": {
+     "env": "linux",
+     "host": "relay-berlin.acme.example",
+     "turnHost": null,
+     "clients": [
+      "0.0.0.0/0",
+      "::/0"
+     ],
+     "pki": null,
+     "binarySha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+     "ca": null,
+     "signer": null,
+     "spokesRoot": {
+      "pem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEQjAfKAGRn0TsrzbbuDSCb11EtQox\nCJOaLSuUw/iFWQ+UkFpYLC3TghMijIDS52uph9MG3lKEwG0l6ZMX3UvK/Q==\n-----END PUBLIC KEY-----\n",
+      "id": "n_c01f74fdded17dd19924398395187920"
+     },
+     "license": {
+      "id": "l_00000000000000b2",
+      "org": "Acme Corp",
+      "edition": "enterprise",
+      "users": 50,
+      "relays": 5,
+      "exp": 1821009600,
+      "root": "n_c01f74fdded17dd19924398395187920",
+      "token": "eyJ2IjoyLCJ0eXAiOiJsdWNpZC1yZWxheS1saWNlbnNlIiwiaWQiOiJsXzAwMDAwMDAwMDAwMDAwYjIiLCJvcmciOiJBY21lIENvcnAiLCJyb290Ijoibl9jMDFmNzRmZGRlZDE3ZGQxOTkyNDM5ODM5NTE4NzkyMCIsImVkaXRpb24iOiJlbnRlcnByaXNlIiwidXNlcnMiOjUwLCJyZWxheXMiOjUsImZlYXR1cmVzIjpbInJlbGF5Iiwic3Bva2VzIl0sImlhdCI6MTc5NDIyNTYwMCwiZXhwIjoxODIxMDA5NjAwfQ.cOY2lEhu0QeQIdxGDf1Sq2wLLuG7IrY6xL46cJkc-b4vEe75_iUyCuHL3r53UEojHz_cPV_pXXCLm1_tqZPSCA"
+     },
+     "offered": [
+      {
+       "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+       "email": "alice@acme.example",
+       "role": "admin",
+       "hint": "9c0370f292ba5efb",
+       "fingerprint": "5806eb62432bf0ca940467341d4bf9f0af3dcc7b37fe85b0b0e1f1742c4f8b1f"
+      },
+      {
+       "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+       "email": "alice@acme.example",
+       "role": "admin",
+       "hint": "78a2fe095dc1a9d6",
+       "fingerprint": "7dc59a4ca3e86b4fa87b4f18e1f96d55767e8a135401526d51245d30334b83c6"
+      }
+     ]
+    },
+    "policyProfile": "standard"
+   },
+   "deployFlag": "linux",
+   "words": "cli.deploy-root-differs"
+  },
+  {
+   "name": "spokes high, clients differ",
+   "product": "spokes",
+   "local": {
+    "profile": "high",
+    "pki": null,
+    "host": "relay-berlin.acme.example",
+    "turnHost": null,
+    "clients": [
+     "10.0.0.0/8"
+    ],
+    "placedCa": null,
+    "placedRoot": "n_c01f74fdded17dd19924398395187920",
+    "consoleInstalled": false,
+    "fresh": true,
+    "keptProfile": null
+   },
+   "preview": {
+    "deploy": {
+     "env": "linux",
+     "host": "relay-berlin.acme.example",
+     "turnHost": null,
+     "clients": [
+      "0.0.0.0/0",
+      "::/0"
+     ],
+     "pki": null,
+     "binarySha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+     "ca": null,
+     "signer": null,
+     "spokesRoot": null,
+     "license": {
+      "id": "l_00000000000000b2",
+      "org": "Acme Corp",
+      "edition": "enterprise",
+      "users": 50,
+      "relays": 5,
+      "exp": 1821009600,
+      "root": "n_c01f74fdded17dd19924398395187920",
+      "token": "eyJ2IjoyLCJ0eXAiOiJsdWNpZC1yZWxheS1saWNlbnNlIiwiaWQiOiJsXzAwMDAwMDAwMDAwMDAwYjIiLCJvcmciOiJBY21lIENvcnAiLCJyb290Ijoibl9jMDFmNzRmZGRlZDE3ZGQxOTkyNDM5ODM5NTE4NzkyMCIsImVkaXRpb24iOiJlbnRlcnByaXNlIiwidXNlcnMiOjUwLCJyZWxheXMiOjUsImZlYXR1cmVzIjpbInJlbGF5Iiwic3Bva2VzIl0sImlhdCI6MTc5NDIyNTYwMCwiZXhwIjoxODIxMDA5NjAwfQ.cOY2lEhu0QeQIdxGDf1Sq2wLLuG7IrY6xL46cJkc-b4vEe75_iUyCuHL3r53UEojHz_cPV_pXXCLm1_tqZPSCA"
+     },
+     "offered": []
+    },
+    "policyProfile": "high"
+   },
+   "deployFlag": "linux",
+   "words": "cli.deploy-host-differs"
+  },
+  {
+   "name": "spokes high, placed",
+   "product": "spokes",
+   "local": {
+    "profile": "high",
+    "pki": null,
+    "host": "relay-berlin.acme.example",
+    "turnHost": null,
+    "clients": [
+     "0.0.0.0/0",
+     "::/0"
+    ],
+    "placedCa": null,
+    "placedRoot": "n_c01f74fdded17dd19924398395187920",
+    "consoleInstalled": false,
+    "fresh": true,
+    "keptProfile": null
+   },
+   "preview": {
+    "deploy": {
+     "env": "linux",
+     "host": "relay-berlin.acme.example",
+     "turnHost": null,
+     "clients": [
+      "0.0.0.0/0",
+      "::/0"
+     ],
+     "pki": null,
+     "binarySha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+     "ca": null,
+     "signer": null,
+     "spokesRoot": null,
+     "license": {
+      "id": "l_00000000000000b2",
+      "org": "Acme Corp",
+      "edition": "enterprise",
+      "users": 50,
+      "relays": 5,
+      "exp": 1821009600,
+      "root": "n_c01f74fdded17dd19924398395187920",
+      "token": "eyJ2IjoyLCJ0eXAiOiJsdWNpZC1yZWxheS1saWNlbnNlIiwiaWQiOiJsXzAwMDAwMDAwMDAwMDAwYjIiLCJvcmciOiJBY21lIENvcnAiLCJyb290Ijoibl9jMDFmNzRmZGRlZDE3ZGQxOTkyNDM5ODM5NTE4NzkyMCIsImVkaXRpb24iOiJlbnRlcnByaXNlIiwidXNlcnMiOjUwLCJyZWxheXMiOjUsImZlYXR1cmVzIjpbInJlbGF5Iiwic3Bva2VzIl0sImlhdCI6MTc5NDIyNTYwMCwiZXhwIjoxODIxMDA5NjAwfQ.cOY2lEhu0QeQIdxGDf1Sq2wLLuG7IrY6xL46cJkc-b4vEe75_iUyCuHL3r53UEojHz_cPV_pXXCLm1_tqZPSCA"
+     },
+     "offered": []
+    },
+    "policyProfile": "high"
+   },
+   "deployFlag": "linux",
+   "words": null
+  }
+ ],
+ "markers": [
+  {
+   "name": "written by the served script",
+   "product": "meet",
+   "marker": {
+    "uid": 0,
+    "mode": 384,
+    "symlink": false,
+    "regular": true,
+    "enrollment": "en_b40ab7b2c9d5a06d",
+    "sha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+    "ageSeconds": 120
+   },
+   "binary": false,
+   "docker": false,
+   "dockerImage": false,
+   "codeEnrollment": "en_b40ab7b2c9d5a06d",
+   "exeSha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+   "previewSha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+   "profile": "standard",
+   "consoleInstalled": true,
+   "words": null
+  },
+  {
+   "name": "absent",
+   "product": "meet",
+   "marker": null,
+   "binary": false,
+   "docker": false,
+   "dockerImage": false,
+   "codeEnrollment": "en_b40ab7b2c9d5a06d",
+   "exeSha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+   "previewSha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+   "profile": "standard",
+   "consoleInstalled": false,
+   "words": null
+  },
+  {
+   "name": "owned by another user",
+   "product": "meet",
+   "marker": {
+    "uid": 1000,
+    "mode": 384,
+    "symlink": false,
+    "regular": true,
+    "enrollment": "en_b40ab7b2c9d5a06d",
+    "sha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+    "ageSeconds": 120
+   },
+   "binary": false,
+   "docker": false,
+   "dockerImage": false,
+   "codeEnrollment": "en_b40ab7b2c9d5a06d",
+   "exeSha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+   "previewSha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+   "profile": "standard",
+   "consoleInstalled": false,
+   "words": null
+  },
+  {
+   "name": "group-writable",
+   "product": "meet",
+   "marker": {
+    "uid": 0,
+    "mode": 400,
+    "symlink": false,
+    "regular": true,
+    "enrollment": "en_b40ab7b2c9d5a06d",
+    "sha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+    "ageSeconds": 120
+   },
+   "binary": false,
+   "docker": false,
+   "dockerImage": false,
+   "codeEnrollment": "en_b40ab7b2c9d5a06d",
+   "exeSha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+   "previewSha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+   "profile": "standard",
+   "consoleInstalled": false,
+   "words": null
+  },
+  {
+   "name": "a symbolic link",
+   "product": "spokes",
+   "marker": {
+    "uid": 0,
+    "mode": 384,
+    "symlink": true,
+    "regular": false,
+    "enrollment": "en_b40ab7b2c9d5a06d",
+    "sha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+    "ageSeconds": 120
+   },
+   "binary": false,
+   "docker": false,
+   "dockerImage": false,
+   "codeEnrollment": "en_b40ab7b2c9d5a06d",
+   "exeSha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+   "previewSha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+   "profile": "standard",
+   "consoleInstalled": false,
+   "words": null
+  },
+  {
+   "name": "another enrollment id",
+   "product": "meet",
+   "marker": {
+    "uid": 0,
+    "mode": 384,
+    "symlink": false,
+    "regular": true,
+    "enrollment": "en_0000000000000000",
+    "sha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+    "ageSeconds": 120
+   },
+   "binary": false,
+   "docker": false,
+   "dockerImage": false,
+   "codeEnrollment": "en_b40ab7b2c9d5a06d",
+   "exeSha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+   "previewSha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+   "profile": "standard",
+   "consoleInstalled": false,
+   "words": "cli.deploy-marker-other"
+  },
+  {
+   "name": "another digest",
+   "product": "meet",
+   "marker": {
+    "uid": 0,
+    "mode": 384,
+    "symlink": false,
+    "regular": true,
+    "enrollment": "en_b40ab7b2c9d5a06d",
+    "sha256": "60f787c0cff51e6d575260e89b89f42c99e2dec420fefcd7741146e41ae19939",
+    "ageSeconds": 120
+   },
+   "binary": false,
+   "docker": false,
+   "dockerImage": false,
+   "codeEnrollment": "en_b40ab7b2c9d5a06d",
+   "exeSha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+   "previewSha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+   "profile": "standard",
+   "consoleInstalled": false,
+   "words": null
+  },
+  {
+   "name": "running program differs",
+   "product": "meet",
+   "marker": {
+    "uid": 0,
+    "mode": 384,
+    "symlink": false,
+    "regular": true,
+    "enrollment": "en_b40ab7b2c9d5a06d",
+    "sha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+    "ageSeconds": 120
+   },
+   "binary": false,
+   "docker": false,
+   "dockerImage": false,
+   "codeEnrollment": "en_b40ab7b2c9d5a06d",
+   "exeSha256": "60f787c0cff51e6d575260e89b89f42c99e2dec420fefcd7741146e41ae19939",
+   "previewSha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+   "profile": "standard",
+   "consoleInstalled": false,
+   "words": null
+  },
+  {
+   "name": "one hour old",
+   "product": "spokes",
+   "marker": {
+    "uid": 0,
+    "mode": 384,
+    "symlink": false,
+    "regular": true,
+    "enrollment": "en_b40ab7b2c9d5a06d",
+    "sha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+    "ageSeconds": 3600
+   },
+   "binary": false,
+   "docker": false,
+   "dockerImage": false,
+   "codeEnrollment": "en_b40ab7b2c9d5a06d",
+   "exeSha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+   "previewSha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+   "profile": "standard",
+   "consoleInstalled": false,
+   "words": null
+  },
+  {
+   "name": "--binary (the script writes none)",
+   "product": "meet",
+   "marker": null,
+   "binary": true,
+   "docker": false,
+   "dockerImage": false,
+   "codeEnrollment": "en_b40ab7b2c9d5a06d",
+   "exeSha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+   "previewSha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+   "profile": "standard",
+   "consoleInstalled": false,
+   "words": null
+  },
+  {
+   "name": "docker with the enroll image",
+   "product": "meet",
+   "marker": {
+    "uid": 0,
+    "mode": 384,
+    "symlink": false,
+    "regular": true,
+    "enrollment": "en_b40ab7b2c9d5a06d",
+    "sha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+    "ageSeconds": 120
+   },
+   "binary": false,
+   "docker": true,
+   "dockerImage": true,
+   "codeEnrollment": "en_b40ab7b2c9d5a06d",
+   "exeSha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+   "previewSha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+   "profile": "standard",
+   "consoleInstalled": true,
+   "words": null
+  },
+  {
+   "name": "docker without the enroll image",
+   "product": "spokes",
+   "marker": null,
+   "binary": false,
+   "docker": true,
+   "dockerImage": false,
+   "codeEnrollment": "en_b40ab7b2c9d5a06d",
+   "exeSha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+   "previewSha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+   "profile": "standard",
+   "consoleInstalled": false,
+   "words": null
+  },
+  {
+   "name": "high profile",
+   "product": "meet",
+   "marker": {
+    "uid": 0,
+    "mode": 384,
+    "symlink": false,
+    "regular": true,
+    "enrollment": "en_b40ab7b2c9d5a06d",
+    "sha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+    "ageSeconds": 120
+   },
+   "binary": false,
+   "docker": false,
+   "dockerImage": false,
+   "codeEnrollment": "en_b40ab7b2c9d5a06d",
+   "exeSha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+   "previewSha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+   "profile": "high",
+   "consoleInstalled": false,
+   "words": null
+  }
+ ],
+ "offered": [
+  {
+   "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+   "email": "alice@acme.example",
+   "role": "admin",
+   "hint": "9c0370f292ba5efb",
+   "fingerprint": "5806eb62432bf0ca940467341d4bf9f0af3dcc7b37fe85b0b0e1f1742c4f8b1f"
+  },
+  {
+   "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+   "email": "alice@acme.example",
+   "role": "admin",
+   "hint": "78a2fe095dc1a9d6",
+   "fingerprint": "7dc59a4ca3e86b4fa87b4f18e1f96d55767e8a135401526d51245d30334b83c6"
+  }
+ ],
+ "anchors": [
+  {
+   "name": "in date",
+   "product": "spokes",
+   "consoleInstalled": true,
+   "placed": false,
+   "preview": {
+    "env": "linux",
+    "host": "relay-berlin.acme.example",
+    "turnHost": null,
+    "clients": [
+     "0.0.0.0/0",
+     "::/0"
+    ],
+    "pki": null,
+    "binarySha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+    "ca": null,
+    "signer": null,
+    "spokesRoot": {
+     "pem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEQjAfKAGRn0TsrzbbuDSCb11EtQox\nCJOaLSuUw/iFWQ+UkFpYLC3TghMijIDS52uph9MG3lKEwG0l6ZMX3UvK/Q==\n-----END PUBLIC KEY-----\n",
+     "id": "n_c01f74fdded17dd19924398395187920"
+    },
+    "license": {
+     "id": "l_00000000000000c3",
+     "org": "Acme Corp",
+     "edition": "enterprise",
+     "users": 50,
+     "relays": 5,
+     "exp": 1821009600,
+     "root": "n_c01f74fdded17dd19924398395187920",
+     "token": "eyJ2IjoyLCJ0eXAiOiJsdWNpZC1yZWxheS1saWNlbnNlIiwiaWQiOiJsXzAwMDAwMDAwMDAwMDAwYzMiLCJvcmciOiJBY21lIENvcnAiLCJyb290Ijoibl9jMDFmNzRmZGRlZDE3ZGQxOTkyNDM5ODM5NTE4NzkyMCIsImVkaXRpb24iOiJlbnRlcnByaXNlIiwidXNlcnMiOjUwLCJyZWxheXMiOjUsImZlYXR1cmVzIjpbInJlbGF5Iiwic3Bva2VzIl0sImlhdCI6MTc5NDIyNTYwMCwiZXhwIjoxODIxMDA5NjAwfQ.vm6K31HIIuxfQFxpbnLX3rD3EmPO7J1hB2xUxgoozNpllmJrilrnNtmATXpZdG-woWjuraPzhnx12UN-jyyEBg"
+    },
+    "offered": [
+     {
+      "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+      "email": "alice@acme.example",
+      "role": "admin",
+      "hint": "9c0370f292ba5efb",
+      "fingerprint": "5806eb62432bf0ca940467341d4bf9f0af3dcc7b37fe85b0b0e1f1742c4f8b1f"
+     },
+     {
+      "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+      "email": "alice@acme.example",
+      "role": "admin",
+      "hint": "78a2fe095dc1a9d6",
+      "fingerprint": "7dc59a4ca3e86b4fa87b4f18e1f96d55767e8a135401526d51245d30334b83c6"
+     }
+    ]
+   },
+   "taken": true,
+   "why": null,
+   "words": "cli.deploy-root-id"
+  },
+  {
+   "name": "expired",
+   "product": "spokes",
+   "consoleInstalled": true,
+   "placed": false,
+   "preview": {
+    "env": "linux",
+    "host": "relay-berlin.acme.example",
+    "turnHost": null,
+    "clients": [
+     "0.0.0.0/0",
+     "::/0"
+    ],
+    "pki": null,
+    "binarySha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+    "ca": null,
+    "signer": null,
+    "spokesRoot": {
+     "pem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEQjAfKAGRn0TsrzbbuDSCb11EtQox\nCJOaLSuUw/iFWQ+UkFpYLC3TghMijIDS52uph9MG3lKEwG0l6ZMX3UvK/Q==\n-----END PUBLIC KEY-----\n",
+     "id": "n_c01f74fdded17dd19924398395187920"
+    },
+    "license": {
+     "id": "l_00000000000000c3",
+     "org": "Acme Corp",
+     "edition": "enterprise",
+     "users": 50,
+     "relays": 5,
+     "exp": 1795003200,
+     "root": "n_c01f74fdded17dd19924398395187920",
+     "token": "eyJ2IjoyLCJ0eXAiOiJsdWNpZC1yZWxheS1saWNlbnNlIiwiaWQiOiJsXzAwMDAwMDAwMDAwMDAwYzMiLCJvcmciOiJBY21lIENvcnAiLCJyb290Ijoibl9jMDFmNzRmZGRlZDE3ZGQxOTkyNDM5ODM5NTE4NzkyMCIsImVkaXRpb24iOiJlbnRlcnByaXNlIiwidXNlcnMiOjUwLCJyZWxheXMiOjUsImZlYXR1cmVzIjpbInJlbGF5Iiwic3Bva2VzIl0sImlhdCI6MTc2MDUyOTYwMCwiZXhwIjoxNzk1MDAzMjAwfQ.Y1PzhcHTI5CBjNLao2Lyg66dV6wEuHqWy074ecwAyA-kod8tcO9VhgVMxqjjYCs9qVYAu0vqgneci_-WOfGXBw"
+    },
+    "offered": [
+     {
+      "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+      "email": "alice@acme.example",
+      "role": "admin",
+      "hint": "9c0370f292ba5efb",
+      "fingerprint": "5806eb62432bf0ca940467341d4bf9f0af3dcc7b37fe85b0b0e1f1742c4f8b1f"
+     },
+     {
+      "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+      "email": "alice@acme.example",
+      "role": "admin",
+      "hint": "78a2fe095dc1a9d6",
+      "fingerprint": "7dc59a4ca3e86b4fa87b4f18e1f96d55767e8a135401526d51245d30334b83c6"
+     }
+    ]
+   },
+   "taken": false,
+   "why": "expired",
+   "words": "cli.deploy-anchor"
+  },
+  {
+   "name": "not yet valid",
+   "product": "spokes",
+   "consoleInstalled": true,
+   "placed": false,
+   "preview": {
+    "env": "linux",
+    "host": "relay-berlin.acme.example",
+    "turnHost": null,
+    "clients": [
+     "0.0.0.0/0",
+     "::/0"
+    ],
+    "pki": null,
+    "binarySha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+    "ca": null,
+    "signer": null,
+    "spokesRoot": {
+     "pem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEQjAfKAGRn0TsrzbbuDSCb11EtQox\nCJOaLSuUw/iFWQ+UkFpYLC3TghMijIDS52uph9MG3lKEwG0l6ZMX3UvK/Q==\n-----END PUBLIC KEY-----\n",
+     "id": "n_c01f74fdded17dd19924398395187920"
+    },
+    "license": {
+     "id": "l_00000000000000c3",
+     "org": "Acme Corp",
+     "edition": "enterprise",
+     "users": 50,
+     "relays": 5,
+     "exp": 1829649600,
+     "root": "n_c01f74fdded17dd19924398395187920",
+     "token": "eyJ2IjoyLCJ0eXAiOiJsdWNpZC1yZWxheS1saWNlbnNlIiwiaWQiOiJsXzAwMDAwMDAwMDAwMDAwYzMiLCJvcmciOiJBY21lIENvcnAiLCJyb290Ijoibl9jMDFmNzRmZGRlZDE3ZGQxOTkyNDM5ODM5NTE4NzkyMCIsImVkaXRpb24iOiJlbnRlcnByaXNlIiwidXNlcnMiOjUwLCJyZWxheXMiOjUsImZlYXR1cmVzIjpbInJlbGF5Iiwic3Bva2VzIl0sImlhdCI6MTc5NTE3NjAwMCwiZXhwIjoxODI5NjQ5NjAwfQ.7OTU4IO248l6F0Ah7DbH8xiUlujtr8tqP7b1bQZN9BFVWw2G0wb3rM0Xnb7tWLijblhnX1l5gsUe6xqyd5STCw"
+    },
+    "offered": [
+     {
+      "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+      "email": "alice@acme.example",
+      "role": "admin",
+      "hint": "9c0370f292ba5efb",
+      "fingerprint": "5806eb62432bf0ca940467341d4bf9f0af3dcc7b37fe85b0b0e1f1742c4f8b1f"
+     },
+     {
+      "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+      "email": "alice@acme.example",
+      "role": "admin",
+      "hint": "78a2fe095dc1a9d6",
+      "fingerprint": "7dc59a4ca3e86b4fa87b4f18e1f96d55767e8a135401526d51245d30334b83c6"
+     }
+    ]
+   },
+   "taken": false,
+   "why": "not-yet-valid",
+   "words": "cli.deploy-anchor"
+  },
+  {
+   "name": "wrong root",
+   "product": "spokes",
+   "consoleInstalled": true,
+   "placed": false,
+   "preview": {
+    "env": "linux",
+    "host": "relay-berlin.acme.example",
+    "turnHost": null,
+    "clients": [
+     "0.0.0.0/0",
+     "::/0"
+    ],
+    "pki": null,
+    "binarySha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+    "ca": null,
+    "signer": null,
+    "spokesRoot": {
+     "pem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEQjAfKAGRn0TsrzbbuDSCb11EtQox\nCJOaLSuUw/iFWQ+UkFpYLC3TghMijIDS52uph9MG3lKEwG0l6ZMX3UvK/Q==\n-----END PUBLIC KEY-----\n",
+     "id": "n_c01f74fdded17dd19924398395187920"
+    },
+    "license": {
+     "id": "l_00000000000000c3",
+     "org": "Acme Corp",
+     "edition": "enterprise",
+     "users": 50,
+     "relays": 5,
+     "exp": 1821009600,
+     "root": "n_83657db8bd8a4e55bb4df17809b42268",
+     "token": "eyJ2IjoyLCJ0eXAiOiJsdWNpZC1yZWxheS1saWNlbnNlIiwiaWQiOiJsXzAwMDAwMDAwMDAwMDAwYzMiLCJvcmciOiJBY21lIENvcnAiLCJyb290Ijoibl84MzY1N2RiOGJkOGE0ZTU1YmI0ZGYxNzgwOWI0MjI2OCIsImVkaXRpb24iOiJlbnRlcnByaXNlIiwidXNlcnMiOjUwLCJyZWxheXMiOjUsImZlYXR1cmVzIjpbInJlbGF5Iiwic3Bva2VzIl0sImlhdCI6MTc5NDIyNTYwMCwiZXhwIjoxODIxMDA5NjAwfQ.wvPPVj2w4N7mPx43J9jUteRO7ppmEn4vEs45e8ip8iVRNu_rxCAx353S0P41uypYsZPRh3rPjycYT1d07pvvCQ"
+    },
+    "offered": [
+     {
+      "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+      "email": "alice@acme.example",
+      "role": "admin",
+      "hint": "9c0370f292ba5efb",
+      "fingerprint": "5806eb62432bf0ca940467341d4bf9f0af3dcc7b37fe85b0b0e1f1742c4f8b1f"
+     },
+     {
+      "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+      "email": "alice@acme.example",
+      "role": "admin",
+      "hint": "78a2fe095dc1a9d6",
+      "fingerprint": "7dc59a4ca3e86b4fa87b4f18e1f96d55767e8a135401526d51245d30334b83c6"
+     }
+    ]
+   },
+   "taken": false,
+   "why": "root",
+   "words": "cli.deploy-anchor"
+  },
+  {
+   "name": "wrong product",
+   "product": "spokes",
+   "consoleInstalled": true,
+   "placed": false,
+   "preview": {
+    "env": "linux",
+    "host": "relay-berlin.acme.example",
+    "turnHost": null,
+    "clients": [
+     "0.0.0.0/0",
+     "::/0"
+    ],
+    "pki": null,
+    "binarySha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+    "ca": null,
+    "signer": null,
+    "spokesRoot": {
+     "pem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEQjAfKAGRn0TsrzbbuDSCb11EtQox\nCJOaLSuUw/iFWQ+UkFpYLC3TghMijIDS52uph9MG3lKEwG0l6ZMX3UvK/Q==\n-----END PUBLIC KEY-----\n",
+     "id": "n_c01f74fdded17dd19924398395187920"
+    },
+    "license": {
+     "id": "l_00000000000000c3",
+     "org": "Acme Corp",
+     "edition": "enterprise",
+     "users": 50,
+     "relays": 5,
+     "exp": 1821009600,
+     "root": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+     "token": "eyJ2IjoyLCJ0eXAiOiJsdWNpZC1yZWxheS1saWNlbnNlIiwiaWQiOiJsXzAwMDAwMDAwMDAwMDAwYzMiLCJvcmciOiJBY21lIENvcnAiLCJyb290IjoibV8zZDUwY2M0ZmU0NjdjYjBhYjNlNDRkNzg0YzQzMjY3YyIsImVkaXRpb24iOiJlbnRlcnByaXNlIiwidXNlcnMiOjUwLCJyZWxheXMiOjUsImZlYXR1cmVzIjpbIm1lZXQiXSwiaWF0IjoxNzk0MjI1NjAwLCJleHAiOjE4MjEwMDk2MDB9.H0htNERIkvKe4u6lkj73P9orou3_My19XUw_47T8kxbOZL8VKQihKIV91asy6C8uGTzgbf85uw6wfAavd9u3Bg"
+    },
+    "offered": [
+     {
+      "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+      "email": "alice@acme.example",
+      "role": "admin",
+      "hint": "9c0370f292ba5efb",
+      "fingerprint": "5806eb62432bf0ca940467341d4bf9f0af3dcc7b37fe85b0b0e1f1742c4f8b1f"
+     },
+     {
+      "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+      "email": "alice@acme.example",
+      "role": "admin",
+      "hint": "78a2fe095dc1a9d6",
+      "fingerprint": "7dc59a4ca3e86b4fa87b4f18e1f96d55767e8a135401526d51245d30334b83c6"
+     }
+    ]
+   },
+   "taken": false,
+   "why": "product",
+   "words": "cli.deploy-anchor"
+  },
+  {
+   "name": "spokes in date, not console-installed",
+   "product": "spokes",
+   "consoleInstalled": false,
+   "placed": false,
+   "preview": {
+    "env": "linux",
+    "host": "relay-berlin.acme.example",
+    "turnHost": null,
+    "clients": [
+     "0.0.0.0/0",
+     "::/0"
+    ],
+    "pki": null,
+    "binarySha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+    "ca": null,
+    "signer": null,
+    "spokesRoot": {
+     "pem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEQjAfKAGRn0TsrzbbuDSCb11EtQox\nCJOaLSuUw/iFWQ+UkFpYLC3TghMijIDS52uph9MG3lKEwG0l6ZMX3UvK/Q==\n-----END PUBLIC KEY-----\n",
+     "id": "n_c01f74fdded17dd19924398395187920"
+    },
+    "license": {
+     "id": "l_00000000000000b2",
+     "org": "Acme Corp",
+     "edition": "enterprise",
+     "users": 50,
+     "relays": 5,
+     "exp": 1821009600,
+     "root": "n_c01f74fdded17dd19924398395187920",
+     "token": "eyJ2IjoyLCJ0eXAiOiJsdWNpZC1yZWxheS1saWNlbnNlIiwiaWQiOiJsXzAwMDAwMDAwMDAwMDAwYjIiLCJvcmciOiJBY21lIENvcnAiLCJyb290Ijoibl9jMDFmNzRmZGRlZDE3ZGQxOTkyNDM5ODM5NTE4NzkyMCIsImVkaXRpb24iOiJlbnRlcnByaXNlIiwidXNlcnMiOjUwLCJyZWxheXMiOjUsImZlYXR1cmVzIjpbInJlbGF5Iiwic3Bva2VzIl0sImlhdCI6MTc5NDIyNTYwMCwiZXhwIjoxODIxMDA5NjAwfQ.cOY2lEhu0QeQIdxGDf1Sq2wLLuG7IrY6xL46cJkc-b4vEe75_iUyCuHL3r53UEojHz_cPV_pXXCLm1_tqZPSCA"
+    },
+    "offered": [
+     {
+      "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+      "email": "alice@acme.example",
+      "role": "admin",
+      "hint": "9c0370f292ba5efb",
+      "fingerprint": "5806eb62432bf0ca940467341d4bf9f0af3dcc7b37fe85b0b0e1f1742c4f8b1f"
+     },
+     {
+      "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+      "email": "alice@acme.example",
+      "role": "admin",
+      "hint": "78a2fe095dc1a9d6",
+      "fingerprint": "7dc59a4ca3e86b4fa87b4f18e1f96d55767e8a135401526d51245d30334b83c6"
+     }
+    ]
+   },
+   "taken": false,
+   "why": "not-console-installed",
+   "words": "cli.deploy-anchor"
+  },
+  {
+   "name": "meet console CA, console-installed",
+   "product": "meet",
+   "consoleInstalled": true,
+   "placed": false,
+   "preview": {
+    "env": "linux",
+    "host": "meet.acme.example",
+    "turnHost": "198.51.100.7",
+    "clients": null,
+    "pki": "console",
+    "binarySha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+    "ca": {
+     "pem": "-----BEGIN CERTIFICATE-----\nMIIBnTCCAUOgAwIBAgIQaC4blDSnJLHRSsoVHb02NDAKBggqhkjOPQQDAjAtMRww\nGgYDVQQDDBNBY21lIE1lZXRpbmcgSHViIENBMQ0wCwYDVQQKDARBY21lMB4XDTI2\nMDEwMTAwMDAwMFoXDTM2MDEwMTAwMDAwMFowLTEcMBoGA1UEAwwTQWNtZSBNZWV0\naW5nIEh1YiBDQTENMAsGA1UECgwEQWNtZTBZMBMGByqGSM49AgEGCCqGSM49AwEH\nA0IABOLd5iHBbqfGIT7AUI6OxYhQKvQUDf/PCgpEPctsqN42aXa3t6knTBvbVWOE\nZphUs1TNtWdJ4nfP0SB1xV8WihijRTBDMBIGA1UdEwEB/wQIMAYBAf8CAQAwDgYD\nVR0PAQH/BAQDAgEGMB0GA1UdDgQWBBTX0KtCNNAeKUur1YoK3lLUgMoQiTAKBggq\nhkjOPQQDAgNIADBFAiAcGxebwanxUxhhEY+KC7KdroSy81CH9M6YoT7O5dpyZgIh\nALjE6WgXuSOV8LZ3qO6A5QIUeqA0H3hux9VCK1Ril+6T\n-----END CERTIFICATE-----\n",
+     "id": "m_3d50cc4fe467cb0ab3e44d784c43267c"
+    },
+    "signer": {
+     "url": "https://signer.acme.example"
+    },
+    "spokesRoot": null,
+    "license": {
+     "id": "l_00000000000000a1",
+     "org": "Acme Corp",
+     "edition": "enterprise",
+     "users": 50,
+     "relays": 5,
+     "exp": 1821009600,
+     "root": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+     "token": "eyJ2IjoyLCJ0eXAiOiJsdWNpZC1yZWxheS1saWNlbnNlIiwiaWQiOiJsXzAwMDAwMDAwMDAwMDAwYTEiLCJvcmciOiJBY21lIENvcnAiLCJyb290IjoibV8zZDUwY2M0ZmU0NjdjYjBhYjNlNDRkNzg0YzQzMjY3YyIsImVkaXRpb24iOiJlbnRlcnByaXNlIiwidXNlcnMiOjUwLCJyZWxheXMiOjUsImZlYXR1cmVzIjpbIm1lZXQiXSwiaWF0IjoxNzk0MjI1NjAwLCJleHAiOjE4MjEwMDk2MDB9.0dqiT3Uws0lqA7PuW5j9z0l9Gx72qEdRxrhYgCnFYRubnBSEAvCEMcl4_jmVcqxK7RxSLET-MgCSpSpnHi8dCQ"
+    },
+    "offered": [
+     {
+      "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+      "email": "alice@acme.example",
+      "role": "admin",
+      "hint": "9c0370f292ba5efb",
+      "fingerprint": "5806eb62432bf0ca940467341d4bf9f0af3dcc7b37fe85b0b0e1f1742c4f8b1f"
+     },
+     {
+      "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+      "email": "alice@acme.example",
+      "role": "admin",
+      "hint": "78a2fe095dc1a9d6",
+      "fingerprint": "7dc59a4ca3e86b4fa87b4f18e1f96d55767e8a135401526d51245d30334b83c6"
+     }
+    ]
+   },
+   "taken": true,
+   "why": null,
+   "words": "cli.deploy-root-id"
+  },
+  {
+   "name": "meet console CA, not console-installed",
+   "product": "meet",
+   "consoleInstalled": false,
+   "placed": false,
+   "preview": {
+    "env": "linux",
+    "host": "meet.acme.example",
+    "turnHost": "198.51.100.7",
+    "clients": null,
+    "pki": "console",
+    "binarySha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+    "ca": {
+     "pem": "-----BEGIN CERTIFICATE-----\nMIIBnTCCAUOgAwIBAgIQaC4blDSnJLHRSsoVHb02NDAKBggqhkjOPQQDAjAtMRww\nGgYDVQQDDBNBY21lIE1lZXRpbmcgSHViIENBMQ0wCwYDVQQKDARBY21lMB4XDTI2\nMDEwMTAwMDAwMFoXDTM2MDEwMTAwMDAwMFowLTEcMBoGA1UEAwwTQWNtZSBNZWV0\naW5nIEh1YiBDQTENMAsGA1UECgwEQWNtZTBZMBMGByqGSM49AgEGCCqGSM49AwEH\nA0IABOLd5iHBbqfGIT7AUI6OxYhQKvQUDf/PCgpEPctsqN42aXa3t6knTBvbVWOE\nZphUs1TNtWdJ4nfP0SB1xV8WihijRTBDMBIGA1UdEwEB/wQIMAYBAf8CAQAwDgYD\nVR0PAQH/BAQDAgEGMB0GA1UdDgQWBBTX0KtCNNAeKUur1YoK3lLUgMoQiTAKBggq\nhkjOPQQDAgNIADBFAiAcGxebwanxUxhhEY+KC7KdroSy81CH9M6YoT7O5dpyZgIh\nALjE6WgXuSOV8LZ3qO6A5QIUeqA0H3hux9VCK1Ril+6T\n-----END CERTIFICATE-----\n",
+     "id": "m_3d50cc4fe467cb0ab3e44d784c43267c"
+    },
+    "signer": {
+     "url": "https://signer.acme.example"
+    },
+    "spokesRoot": null,
+    "license": {
+     "id": "l_00000000000000a1",
+     "org": "Acme Corp",
+     "edition": "enterprise",
+     "users": 50,
+     "relays": 5,
+     "exp": 1821009600,
+     "root": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+     "token": "eyJ2IjoyLCJ0eXAiOiJsdWNpZC1yZWxheS1saWNlbnNlIiwiaWQiOiJsXzAwMDAwMDAwMDAwMDAwYTEiLCJvcmciOiJBY21lIENvcnAiLCJyb290IjoibV8zZDUwY2M0ZmU0NjdjYjBhYjNlNDRkNzg0YzQzMjY3YyIsImVkaXRpb24iOiJlbnRlcnByaXNlIiwidXNlcnMiOjUwLCJyZWxheXMiOjUsImZlYXR1cmVzIjpbIm1lZXQiXSwiaWF0IjoxNzk0MjI1NjAwLCJleHAiOjE4MjEwMDk2MDB9.0dqiT3Uws0lqA7PuW5j9z0l9Gx72qEdRxrhYgCnFYRubnBSEAvCEMcl4_jmVcqxK7RxSLET-MgCSpSpnHi8dCQ"
+    },
+    "offered": [
+     {
+      "credentialId": "WNc0eCioVxaYtG0OO2Sd0yK-YSx8OgvQgGcuIfSYtoY",
+      "email": "alice@acme.example",
+      "role": "admin",
+      "hint": "9c0370f292ba5efb",
+      "fingerprint": "5806eb62432bf0ca940467341d4bf9f0af3dcc7b37fe85b0b0e1f1742c4f8b1f"
+     },
+     {
+      "credentialId": "wQz5WKCCbt323MKcyacA01R3Kg-9p5s-4HTsuSeKp3g",
+      "email": "alice@acme.example",
+      "role": "admin",
+      "hint": "78a2fe095dc1a9d6",
+      "fingerprint": "7dc59a4ca3e86b4fa87b4f18e1f96d55767e8a135401526d51245d30334b83c6"
+     }
+    ]
+   },
+   "taken": false,
+   "why": "not-console-installed",
+   "words": "cli.deploy-anchor"
+  },
+  {
+   "name": "meet own pki",
+   "product": "meet",
+   "consoleInstalled": true,
+   "placed": false,
+   "preview": {
+    "env": "linux",
+    "host": "meet.acme.example",
+    "turnHost": "198.51.100.7",
+    "clients": null,
+    "pki": "own",
+    "binarySha256": "68d208e38333b6aba629f2bf6445d7b38fc99f51d03d466b238dace75aa9b6f9",
+    "ca": null,
+    "signer": null,
+    "spokesRoot": null,
+    "license": {
+     "id": "l_00000000000000a1",
+     "org": "Acme Corp",
+     "edition": "enterprise",
+     "users": 50,
+     "relays": 5,
+     "exp": 1821009600,
+     "root": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+     "token": "eyJ2IjoyLCJ0eXAiOiJsdWNpZC1yZWxheS1saWNlbnNlIiwiaWQiOiJsXzAwMDAwMDAwMDAwMDAwYTEiLCJvcmciOiJBY21lIENvcnAiLCJyb290IjoibV8zZDUwY2M0ZmU0NjdjYjBhYjNlNDRkNzg0YzQzMjY3YyIsImVkaXRpb24iOiJlbnRlcnByaXNlIiwidXNlcnMiOjUwLCJyZWxheXMiOjUsImZlYXR1cmVzIjpbIm1lZXQiXSwiaWF0IjoxNzk0MjI1NjAwLCJleHAiOjE4MjEwMDk2MDB9.0dqiT3Uws0lqA7PuW5j9z0l9Gx72qEdRxrhYgCnFYRubnBSEAvCEMcl4_jmVcqxK7RxSLET-MgCSpSpnHi8dCQ"
+    },
+    "offered": []
+   },
+   "taken": false,
+   "why": "pki-own",
+   "words": "cli.deploy-anchor"
+  }
+ ],
+ "spokesRoot": {
+  "pem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEQjAfKAGRn0TsrzbbuDSCb11EtQox\nCJOaLSuUw/iFWQ+UkFpYLC3TghMijIDS52uph9MG3lKEwG0l6ZMX3UvK/Q==\n-----END PUBLIC KEY-----\n",
+  "id": "n_c01f74fdded17dd19924398395187920"
+ },
+ "meetCaId": "m_3d50cc4fe467cb0ab3e44d784c43267c",
+ "coturn": {
+  "denied": [
+   "0.0.0.0-0.255.255.255",
+   "10.0.0.0-10.255.255.255",
+   "100.64.0.0-100.127.255.255",
+   "127.0.0.0-127.255.255.255",
+   "169.254.0.0-169.254.255.255",
+   "172.16.0.0-172.31.255.255",
+   "192.0.0.0-192.0.0.255",
+   "192.168.0.0-192.168.255.255",
+   "198.18.0.0-198.19.255.255",
+   "224.0.0.0-255.255.255.255",
+   "::1",
+   "::ffff:0.0.0.0-::ffff:255.255.255.255",
+   "64:ff9b::-64:ff9b::ffff:ffff",
+   "fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+   "fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff"
+  ],
+  "cases": [
+   {
+    "name": "our table",
+    "hostAddresses": [
+     "203.0.113.20",
+     "2001:db8::20"
+    ],
+    "externalIp": null,
+    "allowPeer": [],
+    "table": true,
+    "lines": [
+     "no-loopback-peers",
+     "denied-peer-ip=0.0.0.0-0.255.255.255",
+     "denied-peer-ip=10.0.0.0-10.255.255.255",
+     "denied-peer-ip=100.64.0.0-100.127.255.255",
+     "denied-peer-ip=127.0.0.0-127.255.255.255",
+     "denied-peer-ip=169.254.0.0-169.254.255.255",
+     "denied-peer-ip=172.16.0.0-172.31.255.255",
+     "denied-peer-ip=192.0.0.0-192.0.0.255",
+     "denied-peer-ip=192.168.0.0-192.168.255.255",
+     "denied-peer-ip=198.18.0.0-198.19.255.255",
+     "denied-peer-ip=224.0.0.0-255.255.255.255",
+     "denied-peer-ip=::1",
+     "denied-peer-ip=::ffff:0.0.0.0-::ffff:255.255.255.255",
+     "denied-peer-ip=64:ff9b::-64:ff9b::ffff:ffff",
+     "denied-peer-ip=fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+     "denied-peer-ip=fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+     "allowed-peer-ip=203.0.113.20",
+     "allowed-peer-ip=2001:db8::20"
+    ],
+    "words": null
+   },
+   {
+    "name": "1:1 NAT cloud VM, our table",
+    "hostAddresses": [
+     "10.0.0.5"
+    ],
+    "externalIp": "198.51.100.30/10.0.0.5",
+    "allowPeer": [
+     "10.1.0.0/16"
+    ],
+    "table": true,
+    "lines": [
+     "no-loopback-peers",
+     "denied-peer-ip=0.0.0.0-0.255.255.255",
+     "denied-peer-ip=10.0.0.0-10.255.255.255",
+     "denied-peer-ip=100.64.0.0-100.127.255.255",
+     "denied-peer-ip=127.0.0.0-127.255.255.255",
+     "denied-peer-ip=169.254.0.0-169.254.255.255",
+     "denied-peer-ip=172.16.0.0-172.31.255.255",
+     "denied-peer-ip=192.0.0.0-192.0.0.255",
+     "denied-peer-ip=192.168.0.0-192.168.255.255",
+     "denied-peer-ip=198.18.0.0-198.19.255.255",
+     "denied-peer-ip=224.0.0.0-255.255.255.255",
+     "denied-peer-ip=::1",
+     "denied-peer-ip=::ffff:0.0.0.0-::ffff:255.255.255.255",
+     "denied-peer-ip=64:ff9b::-64:ff9b::ffff:ffff",
+     "denied-peer-ip=fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+     "denied-peer-ip=fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+     "allowed-peer-ip=10.1.0.0-10.1.255.255",
+     "allowed-peer-ip=10.0.0.5",
+     "allowed-peer-ip=198.51.100.30"
+    ],
+    "words": null
+   },
+   {
+    "name": "no firewall of ours",
+    "hostAddresses": [
+     "203.0.113.20",
+     "2001:db8::20"
+    ],
+    "externalIp": null,
+    "allowPeer": [],
+    "table": false,
+    "lines": [
+     "no-loopback-peers",
+     "denied-peer-ip=0.0.0.0-0.255.255.255",
+     "denied-peer-ip=10.0.0.0-10.255.255.255",
+     "denied-peer-ip=100.64.0.0-100.127.255.255",
+     "denied-peer-ip=127.0.0.0-127.255.255.255",
+     "denied-peer-ip=169.254.0.0-169.254.255.255",
+     "denied-peer-ip=172.16.0.0-172.31.255.255",
+     "denied-peer-ip=192.0.0.0-192.0.0.255",
+     "denied-peer-ip=192.168.0.0-192.168.255.255",
+     "denied-peer-ip=198.18.0.0-198.19.255.255",
+     "denied-peer-ip=224.0.0.0-255.255.255.255",
+     "denied-peer-ip=::1",
+     "denied-peer-ip=::ffff:0.0.0.0-::ffff:255.255.255.255",
+     "denied-peer-ip=64:ff9b::-64:ff9b::ffff:ffff",
+     "denied-peer-ip=fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+     "denied-peer-ip=fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+     "denied-peer-ip=203.0.113.20",
+     "denied-peer-ip=2001:db8::20"
+    ],
+    "words": "script.turn-self"
+   },
+   {
+    "name": "docker",
+    "hostAddresses": [
+     "10.0.0.5"
+    ],
+    "externalIp": "198.51.100.30/10.0.0.5",
+    "allowPeer": [],
+    "table": false,
+    "lines": [
+     "no-loopback-peers",
+     "denied-peer-ip=0.0.0.0-0.255.255.255",
+     "denied-peer-ip=10.0.0.0-10.255.255.255",
+     "denied-peer-ip=100.64.0.0-100.127.255.255",
+     "denied-peer-ip=127.0.0.0-127.255.255.255",
+     "denied-peer-ip=169.254.0.0-169.254.255.255",
+     "denied-peer-ip=172.16.0.0-172.31.255.255",
+     "denied-peer-ip=192.0.0.0-192.0.0.255",
+     "denied-peer-ip=192.168.0.0-192.168.255.255",
+     "denied-peer-ip=198.18.0.0-198.19.255.255",
+     "denied-peer-ip=224.0.0.0-255.255.255.255",
+     "denied-peer-ip=::1",
+     "denied-peer-ip=::ffff:0.0.0.0-::ffff:255.255.255.255",
+     "denied-peer-ip=64:ff9b::-64:ff9b::ffff:ffff",
+     "denied-peer-ip=fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+     "denied-peer-ip=fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff",
+     "denied-peer-ip=10.0.0.5",
+     "denied-peer-ip=198.51.100.30"
+    ],
+    "words": "script.turn-self"
+   }
+  ]
+ }
+}

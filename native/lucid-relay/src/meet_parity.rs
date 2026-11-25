@@ -55,11 +55,43 @@ pub struct Parity {
     /// state_dir/emoji (None: the images stay in `emoji_mem`).
     emoji_dir: Option<PathBuf>,
     emoji_mem: HashMap<String, Vec<u8>>,
+    /// API-1 revision 4 7.1: `meeting.*` and `member.*` events raised under the hub's lock, appended to the relay's
+    /// event chains by its event thread (`Hub::api_take_events`, about once a second).
+    events: Vec<CallEvent>,
+    /// room -> the live call's organizer (a scheduled meeting's, else the person who opened the session) and meeting.
+    calls: HashMap<String, LiveCall>,
 }
+
+/// One call event before its org is known: `owner` is the principal whose org it belongs to (the organizer for
+/// `meeting.*` and a guest's `member.*`, the person otherwise).
+#[derive(Clone, Debug, PartialEq)]
+pub struct CallEvent {
+    pub kind: &'static str,
+    pub data: Value,
+    pub owner: String,
+}
+
+/// What the call events of a live session need to know of it.
+#[derive(Clone, Debug, Default)]
+struct LiveCall {
+    organizer: Option<String>,
+    meeting: Option<String>,
+}
+
+/// Call events kept at most while the event thread is behind (older ones go first).
+const CALL_EVENTS_MAX: usize = 10_000;
 
 impl Parity {
     pub fn new(state_dir: Option<&std::path::Path>) -> Parity {
-        Parity { attendance: true, attendance_days: 30, emoji_max: 500, emoji_dir: state_dir.map(|d| d.join("emoji")), emoji_mem: HashMap::new() }
+        Parity {
+            attendance: true,
+            attendance_days: 30,
+            emoji_max: 500,
+            emoji_dir: state_dir.map(|d| d.join("emoji")),
+            emoji_mem: HashMap::new(),
+            events: Vec::new(),
+            calls: HashMap::new(),
+        }
     }
 }
 
@@ -435,6 +467,15 @@ impl State {
         self.pa.attendance && self.pa.attendance_days > 0
     }
 
+    /// API-1 revision 4 5.1 `kept_days`: how long ended sessions are kept (0 while attendance is off).
+    pub(super) fn pa_kept_days(&self) -> i64 {
+        if self.pa_attendance_on() {
+            self.pa.attendance_days
+        } else {
+            0
+        }
+    }
+
     /// The live attendance session of `room` (end null), if any.
     fn pa_live(&mut self, room: &str) -> Option<&mut Obj> {
         self.attendance.get_mut(room)?.as_array_mut()?.last_mut()?.as_object_mut().filter(|s| s.get("end").map(Value::is_null).unwrap_or(true))
@@ -446,16 +487,38 @@ impl State {
         if !self.pa_attendance_on() {
             return;
         }
-        let Some(p) = self.peers.get(peer_id).filter(|p| !p.admission_pending && !p.who.console && !p.who.connector) else { return };
+        let Some(p) = self.peers.get(peer_id).filter(|p| !p.admission_pending && !p.who.is_console() && !p.who.connector) else { return };
         let (room, key, name, guest) = (p.room.clone(), attend_key(&p.who), p.who.name.clone(), p.who.guest);
+        let person = key.clone();
         let org = if guest { Value::Null } else { self.org(&p.who.principal) };
         let now = ms_now();
         if self.pa_live(&room).is_none() {
             let mut session = obj([("id", Value::from(pj::token_hex(8))), ("start", Value::from(now)), ("end", Value::Null)]);
+            // revision 4 7.1: who organizes the call (a scheduled meeting's organizer, else who opened it)
+            let mut call = LiveCall::default();
+            let mut title = None;
             if let Some(m) = as_obj(self.meetings.get(&room)) {
                 session.insert("meeting_id".into(), Value::from(room.clone()));
                 session.insert("title".into(), m.get("title").cloned().unwrap_or(Value::Null));
+                call.meeting = Some(room.clone());
+                call.organizer = as_obj(m.get("organizer")).map(|o| pj::text_of(o, "principal")).filter(|o| !o.is_empty());
+                title = m.get("title").and_then(Value::as_str).filter(|t| !t.is_empty()).map(str::to_owned);
             }
+            if call.organizer.is_none() && !guest {
+                call.organizer = Some(person.clone());
+            }
+            if let Some(organizer) = call.organizer.clone() {
+                let mut data = serde_json::json!({ "room": room, "organizer": organizer });
+                if let Some(m) = &call.meeting {
+                    data["meeting"] = Value::from(m.clone());
+                }
+                // free text: kept as is only; the transformed forms drop it (`api_events::derive`)
+                if let Some(t) = title {
+                    data["title"] = Value::from(t);
+                }
+                self.pa_event("meeting.started", data, organizer);
+            }
+            self.pa.calls.insert(room.clone(), call);
             session.insert("people".into(), Value::Array(Vec::new()));
             let slot = self.attendance.entry(room.clone()).or_insert_with(|| Value::Array(Vec::new()));
             if !slot.is_array() {
@@ -497,6 +560,43 @@ impl State {
         }
         self.dirty = true;
         self.pa_attend_roles(&room);
+        // revision 4 7.1: once per join interval (a second seat of the same person is no new join), with the role the
+        // stage gave
+        if !open {
+            let role = self.pa_role(&room, &person);
+            self.pa_member_event("member.joined", &room, &person, &role);
+        }
+    }
+
+    /// The role attendance records for a person of the room's live session ("" when none).
+    fn pa_role(&mut self, room: &str, key: &str) -> String {
+        let row = self.pa_live(room).and_then(|s| s.get("people")?.as_array()?.iter().find(|r| r.get("principal").and_then(Value::as_str) == Some(key)).cloned());
+        row.and_then(|r| r.get("role").and_then(Value::as_str).map(str::to_owned)).unwrap_or_default()
+    }
+
+    /// Revision 4 7.1: a call event, kept for the event thread (the oldest goes past `CALL_EVENTS_MAX`).
+    fn pa_event(&mut self, kind: &'static str, data: Value, owner: String) {
+        if self.pa.events.len() >= CALL_EVENTS_MAX {
+            self.pa.events.remove(0);
+        }
+        self.pa.events.push(CallEvent { kind, data, owner });
+    }
+
+    /// `member.joined` or `member.left` of an attendance key (a principal, or `guest:<id>`): a person's event is their
+    /// org's, a guest's (`guest` the web guest's id) the organizer's; registry fields only.
+    fn pa_member_event(&mut self, kind: &'static str, room: &str, key: &str, role: &str) {
+        let organizer = self.pa.calls.get(room).and_then(|c| c.organizer.clone());
+        let (field, value, owner) = match key.strip_prefix("guest:") {
+            Some(id) => ("guest", id.to_owned(), organizer),
+            None => ("principal", key.to_owned(), Some(key.to_owned())),
+        };
+        let Some(owner) = owner else { return };
+        let mut data = serde_json::json!({ "room": room });
+        data[field] = Value::from(value);
+        if !role.is_empty() {
+            data["role"] = Value::from(role);
+        }
+        self.pa_event(kind, data, owner);
     }
 
     /// _attend_out: a seat left: the person's open join interval closes unless another of their seats is still in.
@@ -510,20 +610,38 @@ impl State {
         }
         let now = ms_now();
         let Some(session) = self.pa_live(&peer.room) else { return };
-        let row = session.get_mut("people").and_then(Value::as_array_mut).and_then(|l| l.iter_mut().find(|r| r.get("principal").and_then(Value::as_str) == Some(key.as_str())));
-        let open = row.and_then(|r| r.get_mut("joins")).and_then(Value::as_array_mut).and_then(|j| j.last_mut()).and_then(Value::as_array_mut).and_then(|j| j.get_mut(1)).filter(|v| v.is_null());
+        let Some(row) = session.get_mut("people").and_then(Value::as_array_mut).and_then(|l| l.iter_mut().find(|r| r.get("principal").and_then(Value::as_str) == Some(key.as_str()))) else { return };
+        let role = row.get("role").and_then(Value::as_str).unwrap_or_default().to_owned();
+        let open = row.get_mut("joins").and_then(Value::as_array_mut).and_then(|j| j.last_mut()).and_then(Value::as_array_mut).and_then(|j| j.get_mut(1)).filter(|v| v.is_null());
         let closed = open.map(|slot| *slot = Value::from(now)).is_some();
         if closed {
             self.dirty = true;
+            // revision 4 7.1: once per join interval
+            self.pa_member_event("member.left", &peer.room, &key, &role);
         }
     }
 
     /// _attend_end: the room is empty: its live session ends.
     pub(super) fn pa_attend_end(&mut self, room: &str) {
         let now = ms_now();
-        let ended = self.pa_live(room).map(|session| end_session(session, now)).is_some();
-        if ended {
+        let ended = self.pa_live(room).map(|session| {
+            end_session(session, now);
+            let start = pj::as_int(session.get("start")).unwrap_or(now);
+            let rows = session.get("people").and_then(Value::as_array).cloned().unwrap_or_default();
+            let guests = rows.iter().filter(|r| r.get("role").and_then(Value::as_str) == Some("guest")).count();
+            (start, rows.len() - guests, guests)
+        });
+        if let Some((start, people, guests)) = ended {
             self.dirty = true;
+            // revision 4 7.1: counts only (who was in is in the attendance and the member events)
+            let call = self.pa.calls.remove(room).unwrap_or_default();
+            if let Some(organizer) = call.organizer {
+                let mut data = serde_json::json!({ "room": room, "duration_s": (now - start).max(0) / 1000, "people": people, "guests": guests });
+                if let Some(m) = call.meeting {
+                    data["meeting"] = Value::from(m);
+                }
+                self.pa_event("meeting.ended", data, organizer);
+            }
         }
     }
 
@@ -603,6 +721,32 @@ impl State {
 }
 
 impl Hub {
+    // ── call events (API-1 revision 4 7.1) ──
+
+    /// The call events raised since the last call, each with the org whose signed policy covers its owner (events of
+    /// owners no policy covers, a service or an unknown person, are dropped): `(org, type, data)` in order.
+    pub fn api_take_events(&self) -> Vec<(String, &'static str, Value)> {
+        let mut st = self.st.lock();
+        if st.pa.events.is_empty() {
+            return Vec::new();
+        }
+        let events = std::mem::take(&mut st.pa.events);
+        let policies = st.pc_current();
+        events
+            .into_iter()
+            .filter_map(|e| {
+                let org = pc::covering(&policies, &e.owner).and_then(|p| p.get("org")).and_then(Value::as_str)?.to_owned();
+                Some((org, e.kind, e.data))
+            })
+            .collect()
+    }
+
+    /// The call events waiting for the event thread (tests).
+    #[cfg(test)]
+    pub(crate) fn api_pending_events(&self) -> Vec<CallEvent> {
+        self.st.lock().pa.events.clone()
+    }
+
     // ── notification levels and sections (/v1/prefs) ──
 
     /// prefs_get (`GET /v1/prefs`): `{rev, notify, sections, channel_default}` of the caller.
@@ -1125,6 +1269,43 @@ mod tests {
         peer_of(&h.join("off", &ben, "", false, None).unwrap());
         assert!(!h.st.lock().attendance.contains_key("off"));
         assert_eq!(h.join("off", &cy, "", false, None).unwrap()["options"]["attendance"], json!(false));
+    }
+
+    /// API-1 revision 4 7.1: one `meeting.started` and one `meeting.ended` per call session, a `member.joined` and a
+    /// `member.left` per join interval, registry fields only, none while attendance is off; events whose owner no
+    /// signed policy covers reach no org. A person has one seat per room: joining from another device moves the seat,
+    /// which closes the join interval and opens a new one, as attendance records it.
+    #[test]
+    fn calls_raise_their_events_once_with_registry_fields_only() {
+        let h = hub();
+        let (ben, cy, cy2) = (who("ben@x", "bbbbbbbbbbbbbbbb"), who("cy@x", "cccccccccccccccc"), who("cy@x", "dddddddddddddddd"));
+        let b = peer_of(&h.join("ops", &ben, "", false, None).unwrap());
+        let c = peer_of(&h.join("ops", &cy, "", false, None).unwrap());
+        let c2 = peer_of(&h.join("ops", &cy2, "", false, None).unwrap());
+        assert!(h.leave(&c, &cy).is_err(), "the second device took the seat over");
+        h.leave(&c2, &cy2).unwrap();
+        h.leave(&b, &ben).unwrap();
+        let got = h.api_pending_events();
+        let kinds: Vec<&str> = got.iter().map(|e| e.kind).collect();
+        assert_eq!(kinds, ["meeting.started", "member.joined", "member.joined", "member.left", "member.joined", "member.left", "member.left", "meeting.ended"]);
+        assert_eq!((&got[0].data, got[0].owner.as_str()), (&json!({"room": "ops", "organizer": "ben@x"}), "ben@x"));
+        let who_of = |i: usize| got[i].data["principal"].as_str();
+        assert_eq!((who_of(1), who_of(2), who_of(3), who_of(4), who_of(5), who_of(6)), (Some("ben@x"), Some("cy@x"), Some("cy@x"), Some("cy@x"), Some("cy@x"), Some("ben@x")));
+        assert_eq!((got[2].owner.as_str(), got[7].owner.as_str()), ("cy@x", "ben@x"), "a person's own org; the organizer's for the call");
+        assert_eq!((&got[7].data["people"], &got[7].data["guests"], got[7].data["duration_s"].is_i64()), (&json!(2), &json!(0), true));
+        for e in &got {
+            let f = crate::api_events::check_emit("r_00000000000000a1", e.kind, &e.data).unwrap_or_else(|why| panic!("{}: {why}", e.kind));
+            assert!(e.data.as_object().unwrap().keys().all(|k| ["room", "meeting", "title", "organizer", "duration_s", "people", "guests", "principal", "guest", "role"].contains(&k.as_str())));
+            assert_eq!(f["data"], e.data);
+        }
+        // nothing while attendance is off
+        h.st.lock().pa.attendance = false;
+        let off = peer_of(&h.join("off", &ben, "", false, None).unwrap());
+        h.leave(&off, &ben).unwrap();
+        assert_eq!(h.api_pending_events().len(), 8);
+        // no signed policy covers these people here: taken, and no org gets them
+        assert!(h.api_take_events().is_empty());
+        assert!(h.api_pending_events().is_empty());
     }
 
     #[test]
