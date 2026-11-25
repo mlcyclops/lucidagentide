@@ -31,6 +31,13 @@ const INSTALLER_MAX: i64 = 4 << 30;
 const UPDATE_LINK_DAYS: i64 = 2;
 const UPDATE_LOG_EVERY: f64 = 600.0;
 const IOS_CHANNELS: [&str; 2] = ["TestFlight", "App Store"];
+/// The Android app's channels: Firebase App Distribution (testers) and Google Play.
+const ANDROID_CHANNELS: [&str; 2] = ["firebase", "play"];
+/// Google Play's largest version code.
+const ANDROID_BUILD_MAX: i64 = 2_100_000_000;
+const URL_MAX: usize = 2048;
+/// The phone apps whose release the manifest names (`ios`, `android`), each with its own minimum.
+const PHONE_APPS: [&str; 2] = ["ios", "android"];
 const NO_SIGNER: &str = "this relay has no certificate server (signer_url)";
 
 /// AC-2b-D 8.5: what `/v1/admin/crl` answers on a `fleet_pki` relay for a root CRL of its CA (a Meeting Hub relay
@@ -129,6 +136,35 @@ fn ios_release(entry: Option<&Value>) -> R<Obj> {
     Ok(obj([("version", Value::from(version)), ("build", Value::from(build)), ("channel", Value::from(channel))]))
 }
 
+/// The Android app's release, shaped like `ios`: `{version, build (the version code), channel, url (https, the tester
+/// page or the store listing)}`; {} when absent.
+fn android_release(entry: Option<&Value>) -> R<Obj> {
+    let o = match entry {
+        None | Some(Value::Null) => return Ok(Obj::new()),
+        Some(Value::Object(o)) if o.is_empty() => return Ok(Obj::new()),
+        Some(Value::Object(o)) => o,
+        Some(_) => return bad("android must be {version, build, channel, url}"),
+    };
+    let version = pj::s(o, "version").trim().to_string();
+    if !m::version_ok(&version) {
+        return bad("android.version must look like 0.91.15");
+    }
+    let build = match pj::as_int(o.get("build")) {
+        Some(b) if b > 0 && b <= ANDROID_BUILD_MAX => b,
+        _ => return bad("android.build must be the version code, for example 16"),
+    };
+    let channel = Some(pj::s(o, "channel")).filter(|c| !c.is_empty()).unwrap_or_else(|| "firebase".into());
+    if !ANDROID_CHANNELS.contains(&channel.as_str()) {
+        return bad("android.channel must be firebase or play");
+    }
+    let url = pj::s(o, "url").trim().to_string();
+    let host = url.strip_prefix("https://").map(|r| r.split(['/', '?', '#']).next().unwrap_or_default()).unwrap_or_default();
+    if host.is_empty() || url.len() > URL_MAX || !url.bytes().all(|c| c.is_ascii_graphic()) {
+        return bad("android.url must be an https link to the tester page");
+    }
+    Ok(obj([("version", Value::from(version)), ("build", Value::from(build)), ("channel", Value::from(channel)), ("url", Value::from(url))]))
+}
+
 /// release_manifest: the release an admin's request describes, published now.
 fn release_manifest(body: &Obj) -> R<Obj> {
     let version = pj::s(body, "version").trim().to_string();
@@ -136,9 +172,10 @@ fn release_manifest(body: &Obj) -> R<Obj> {
         return bad("version must look like 0.92.0");
     }
     let ios = ios_release(body.get("ios"))?;
+    let android = android_release(body.get("android"))?;
     let files = if pj::truthy(body.get("files")) { body.get("files").cloned().unwrap_or(Value::Null) } else { Value::Object(Obj::new()) };
     let files = match files {
-        Value::Object(o) if !o.is_empty() || !ios.is_empty() => o,
+        Value::Object(o) if !o.is_empty() || !ios.is_empty() || !android.is_empty() => o,
         _ => return bad("files must describe the windows and/or macos installer"),
     };
     let mut out = Obj::new();
@@ -170,6 +207,9 @@ fn release_manifest(body: &Obj) -> R<Obj> {
     let mut manifest = obj([("version", Value::from(version)), ("published", Value::from(published)), ("files", Value::Object(out)), ("notes", Value::from(notes))]);
     if !ios.is_empty() {
         manifest.insert("ios".into(), Value::Object(ios));
+    }
+    if !android.is_empty() {
+        manifest.insert("android".into(), Value::Object(android));
     }
     if !minimum.is_empty() {
         manifest.insert("minimum".into(), Value::Object(minimum));
@@ -763,7 +803,7 @@ impl Relay {
         }
     }
 
-    /// AC-1 4.9 history: every publication `{version, ios, minimum (in force after it), published (unix s)}`, oldest
+    /// AC-1 4.9 history: every publication `{version, ios, android, minimum (in force after it), published (unix s)}`, oldest
     /// first, at most RELEASE_HISTORY_KEEP.
     pub fn release_history(&self) -> Vec<Obj> {
         let Some(path) = m::state_file(&self.settings, RELEASE_HISTORY_FILE) else { return Vec::new() };
@@ -776,10 +816,11 @@ impl Relay {
     fn history_append(&self, manifest: &Obj, in_force: &Obj) {
         let Some(path) = m::state_file(&self.settings, RELEASE_HISTORY_FILE) else { return };
         let mut rows = self.release_history();
-        let ios = manifest.get("ios").and_then(Value::as_object).map(|i| pj::s(i, "version")).unwrap_or_default();
+        let phone = |app: &str| manifest.get(app).and_then(Value::as_object).map(|i| pj::s(i, "version")).unwrap_or_default();
         rows.push(obj([
             ("version", Value::from(pj::s(manifest, "version"))),
-            ("ios", Value::from(ios)),
+            ("ios", Value::from(phone("ios"))),
+            ("android", Value::from(phone("android"))),
             ("minimum", Value::Object(in_force.clone())),
             ("published", Value::from(pj::now().floor() as i64)),
         ]));
@@ -809,8 +850,8 @@ impl Relay {
         out
     }
 
-    /// H6: `minimum.hub` not above the release's own version nor the newest this relay published; `minimum.ios` not
-    /// above the release's iOS version nor the newest iOS version published.
+    /// H6: `minimum.hub` not above the release's own version nor the newest this relay published; `minimum.ios` and
+    /// `minimum.android` each not above the release's version of that app nor the newest one published.
     pub fn release_minimum_check(&self, manifest: &Obj) -> R<()> {
         let minimum = manifest.get("minimum").and_then(Value::as_object).cloned().unwrap_or_default();
         let history = self.release_history();
@@ -827,10 +868,11 @@ impl Relay {
                 return too_new();
             }
         }
-        if let Some(ios) = minimum.get("ios").and_then(Value::as_str) {
-            let key = m::version_key(ios);
-            let own = manifest.get("ios").and_then(Value::as_object).map(|i| pj::s(i, "version")).filter(|v| !v.is_empty()).map(|v| m::version_key(&v));
-            let published = newest(&|o: &Obj| match o.get("ios") {
+        for app in PHONE_APPS {
+            let Some(min) = minimum.get(app).and_then(Value::as_str) else { continue };
+            let key = m::version_key(min);
+            let own = manifest.get(app).and_then(Value::as_object).map(|i| pj::s(i, "version")).filter(|v| !v.is_empty()).map(|v| m::version_key(&v));
+            let published = newest(&|o: &Obj| match o.get(app) {
                 Some(Value::String(s)) => s.clone(),
                 Some(Value::Object(i)) => pj::s(i, "version"),
                 _ => String::new(),
@@ -901,11 +943,12 @@ impl Relay {
         let mut platforms: Vec<String> = manifest.get("files").and_then(Value::as_object).map(|f| f.keys().cloned().collect()).unwrap_or_default();
         platforms.sort();
         log_info(&format!(
-            "release version={} platforms={} minimum_hub={} minimum_ios={} by={}",
+            "release version={} platforms={} minimum_hub={} minimum_ios={} minimum_android={} by={}",
             pj::s(&manifest, "version"),
             platforms.join(","),
             m::kv_of(minimum.get("hub")),
             m::kv_of(minimum.get("ios")),
+            m::kv_of(minimum.get("android")),
             who.principal
         ));
         Ok(obj([("ok", Value::Bool(true)), ("release", Value::Object(manifest))]))
@@ -967,12 +1010,12 @@ impl Relay {
         if m::version_key(&current) >= m::version_key(&minimum) {
             return None;
         }
-        let ios = manifest.get("ios").filter(|v| pj::truthy(Some(*v))).and_then(Value::as_object).cloned().unwrap_or_default();
+        let phone = |app: &str| Value::Object(manifest.get(app).filter(|v| pj::truthy(Some(*v))).and_then(Value::as_object).cloned().unwrap_or_default());
         Some(obj([
             ("app", Value::from(app)),
             ("current", Value::from(current)),
             ("minimum", Value::from(minimum)),
-            ("release", Value::Object(obj([("version", Value::from(pj::s(&manifest, "version"))), ("ios", Value::Object(ios))]))),
+            ("release", Value::Object(obj([("version", Value::from(pj::s(&manifest, "version"))), ("ios", phone("ios")), ("android", phone("android"))]))),
         ]))
     }
 
@@ -1592,6 +1635,53 @@ mod tests {
         assert_eq!(release_manifest(bad.as_object().unwrap()).unwrap_err().message(), "version must look like 0.92.0");
         let none = json!({"version": "1.0"});
         assert_eq!(release_manifest(none.as_object().unwrap()).unwrap_err().message(), "files must describe the windows and/or macos installer");
+    }
+
+    /// The Android app's release, shaped like `ios` plus its link: checked, published, read back by /v1/version, its
+    /// minimum gating an older Android app.
+    #[test]
+    fn an_android_release_round_trips_with_its_minimum() {
+        let android = json!({"version": "0.99.0", "build": 12, "channel": "firebase", "url": "https://appdistribution.firebase.dev/i/abc123"});
+        let body = json!({"version": "0.99.0", "android": android, "minimum": {"android": "0.99.0"}});
+        let manifest = release_manifest(body.as_object().unwrap()).unwrap();
+        assert_eq!(manifest.keys().cloned().collect::<Vec<_>>(), vec!["version", "published", "files", "notes", "android", "minimum"]);
+        assert_eq!(manifest["android"], android);
+        let with = |entry: Value| release_manifest(json!({"version": "0.99.0", "android": entry}).as_object().unwrap());
+        let play = with(json!({"version": "1.0.0", "build": 2_100_000_000, "channel": "play", "url": "https://play.google.com/store/apps/details?id=com.lucid.meet"})).unwrap();
+        assert_eq!(play["android"]["channel"], json!("play"));
+        assert_eq!(with(json!({"version": "1.0.0", "build": 3, "url": "https://x.test/t"})).unwrap()["android"]["channel"], json!("firebase"));
+        let cases = [
+            (json!("0.99.0"), "android must be {version, build, channel, url}"),
+            (json!({"version": "x", "build": 1, "url": "https://x.test"}), "android.version must look like 0.91.15"),
+            (json!({"version": "1.0.0", "build": 0, "url": "https://x.test"}), "android.build must be the version code, for example 16"),
+            (json!({"version": "1.0.0", "build": 2_100_000_001_i64, "url": "https://x.test"}), "android.build must be the version code, for example 16"),
+            (json!({"version": "1.0.0", "build": 1, "channel": "TestFlight", "url": "https://x.test"}), "android.channel must be firebase or play"),
+            (json!({"version": "1.0.0", "build": 1}), "android.url must be an https link to the tester page"),
+            (json!({"version": "1.0.0", "build": 1, "url": "http://x.test/t"}), "android.url must be an https link to the tester page"),
+            (json!({"version": "1.0.0", "build": 1, "url": "https:///t"}), "android.url must be an https link to the tester page"),
+            (json!({"version": "1.0.0", "build": 1, "url": "https://x.test/a b"}), "android.url must be an https link to the tester page"),
+        ];
+        for (entry, why) in cases {
+            assert_eq!(with(entry).unwrap_err().message(), why);
+        }
+        // published by an admin and read back; an older Android app is told to update, with the release
+        let state = dir("android-release");
+        let relay = crate::meet::test_relay(m::Settings { state_dir: state.to_string_lossy().into_owned(), admins: vec!["ann@x".into()], ..m::Settings::default() });
+        let ann = Identity { principal: "ann@x".into(), name: "Ann".into(), device: "aaaaaaaaaaaaaaaa".into(), serial: "1A".into(), ..Default::default() };
+        let sid = relay.hub.hello(&ann, "", &Obj::new()).unwrap()["session"].as_str().unwrap().to_string();
+        let mut too_new = body.clone();
+        too_new["minimum"]["android"] = json!("1.0.0");
+        assert_eq!(relay.set_release(&sid, &ann, too_new.as_object().unwrap()).unwrap_err().message(), RELEASE_MINIMUM_TOO_NEW);
+        relay.set_release(&sid, &ann, body.as_object().unwrap()).unwrap();
+        let v = relay.version(&sid, &ann).unwrap();
+        assert_eq!((&v["android"], &v["minimum"]), (&android, &json!({"android": "0.99.0"})));
+        assert_eq!(relay.release_history().last().unwrap()["android"], json!("0.99.0"));
+        let ben = Identity { principal: "ben@x".into(), ..ann.clone() };
+        let old = json!({"app": "android", "version": "0.98.0"});
+        let info = relay.outdated(&ben, old.as_object().unwrap()).unwrap();
+        assert_eq!(Value::Object(info), json!({"app": "android", "current": "0.98.0", "minimum": "0.99.0", "release": {"version": "0.99.0", "ios": {}, "android": android}}));
+        assert!(relay.outdated(&ben, json!({"app": "android", "version": "0.99.0"}).as_object().unwrap()).is_none());
+        assert!(relay.outdated(&ben, json!({"app": "ios", "version": "0.1.0"}).as_object().unwrap()).is_none());
     }
 
     // ── AC-2b-D (16.1 d-relay) ──

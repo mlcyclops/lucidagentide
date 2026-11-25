@@ -78,7 +78,7 @@ pub static ROUTES: [RouteSpec; 47] = [
     RouteSpec { method: "POST", path: "meet/holds", role: Role::Admin, action: "meet.holds.place", target: "-", stepup: true, need: Need::Any, security: true, keys: &["on", "principals", "cids", "reason"], body_max: m::BODY_MAX },
     RouteSpec { method: "POST", path: "meet/holds/release", role: Role::Admin, action: "meet.holds.release", target: "id", stepup: true, need: Need::Product, security: false, keys: &["id", "reason"], body_max: 4096 },
     RouteSpec { method: "GET", path: "meet/release", role: Role::Viewer, action: "", target: "-", stepup: false, need: Need::Any, security: false, keys: &[], body_max: 0 },
-    RouteSpec { method: "POST", path: "meet/release", role: Role::Admin, action: "meet.release.set", target: "version", stepup: true, need: Need::Product, security: false, keys: &["version", "files", "ios", "notes", "minimum", "reason"], body_max: 32 * 1024 },
+    RouteSpec { method: "POST", path: "meet/release", role: Role::Admin, action: "meet.release.set", target: "version", stepup: true, need: Need::Product, security: false, keys: &["version", "files", "ios", "android", "notes", "minimum", "reason"], body_max: 32 * 1024 },
     RouteSpec { method: "GET", path: "meet/push", role: Role::Admin, action: "", target: "-", stepup: false, need: Need::Any, security: false, keys: &[], body_max: 0 },
     RouteSpec { method: "GET", path: "meet/identity", role: Role::Admin, action: "", target: "-", stepup: false, need: Need::Any, security: false, keys: &[], body_max: 0 },
     RouteSpec { method: "GET", path: "meet/calls", role: Role::Viewer, action: "", target: "-", stepup: false, need: Need::Any, security: false, keys: &[], body_max: 0 },
