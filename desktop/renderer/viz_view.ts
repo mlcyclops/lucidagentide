@@ -91,7 +91,6 @@ import { icon } from "./icons.ts";
 import { popover, showToast } from "./ui.ts";
 import { tipValue } from "./tip_text.ts";
 import { bridge, type LaneEvent, type LaneView, type LucidBridge } from "./bridge.ts";
-import { hubLanes } from "./orbit_layout.ts";
 import { mayStepDown, pollDelay, supportedTier, type GovernorStats, type PerfTierWatcher } from "./perf_tier.ts";
 import { vizBus, type VizBusEvent } from "./viz_bus.ts";
 import { createDemo, type VizDemo } from "./viz_demo.ts";
@@ -1483,7 +1482,10 @@ async function pollFleet(): Promise<void> {
   if (model !== m) return;
   fleetOffline = !st;
   if (st) {
-    const mine = hubLanes(st.lanes, st.hub);
+    // P-VIZ.FLEET1 (ADR-0680): every lane in the fleet, not only the spokes born under the current Main session
+    // (ADR-0410's hub scope is the orbit's). A new Main session, or an upgrade's restart, otherwise emptied Visualize
+    // while those lanes kept running, and the ledger, which counts them, disagreed with the scene.
+    const mine = st.lanes;
     applyFleet(m, mine.map((l) => ({ id: l.id, name: l.name, model: l.model, status: l.status, ...(l.usage ? { usage: l.usage } : {}), ...(l.pendingApproval ? { pendingApproval: l.pendingApproval } : {}) })), Date.now(), st.masterModel);
     // P-VIZ.6 (ADR-0635): a new hub session starts the ledger over (Main's folder is fetched again); each lane
     // brings its session, its repo (else its folder) and its measured usage.
