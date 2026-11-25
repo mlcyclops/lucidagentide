@@ -1849,6 +1849,12 @@ demo-P-WORLDS.STORE1b: ## P-WORLDS.STORE1b: LIVE store proof from the desktop or
 	node --check desktop/scripts/demo_p_worlds_checkout_1.mjs
 	@if [ "$$LUCID_DEMO_LIVE_STORE" = "1" ] && [ -n "$$LUCID_DEMO_CDP_URL" ] && [ -n "$$LUCID_DEMO_URL" ]; then $(BUN) run desktop/scripts/demo_p_worlds_checkout_1.mjs; else echo "demo-P-WORLDS.STORE1b: set LUCID_DEMO_LIVE_STORE=1, LUCID_DEMO_CDP_URL and LUCID_DEMO_URL to run the live checkout proof"; fi
 
+.PHONY: demo-P-WORLDS.2
+demo-P-WORLDS.2: ## P-WORLDS.2 (ADR-0679): eleven new world cards (Field Exercise, Flight Deck, Flight Line, Boot Camp, Sea Rescue, Orbital Ops, Cyber Ops, Special Operations, Florida, Texas, California), each with its own loop and poster, and the world package QA harness: import, draw, every throwable, the storm, a commit, every option value and the sample mini game with no page error, stills per world, and an optional filmed short for the card media. Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7821): LUCID_DEMO_BROWSER_URL=http://127.0.0.1:<cdp> LUCID_DEMO_URL=http://127.0.0.1:7821/?vizDemo=1 LUCID_DEMO_WORLDS=<zip>;<zip> [LUCID_DEMO_OUT=<dir>] [LUCID_DEMO_FILM=1] node desktop/scripts/demo_p_worlds_2.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/plugin_catalog.test.ts desktop/renderer/viz_worlds.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_worlds_2.mjs
+	@if [ -n "$$LUCID_DEMO_WORLDS" ] && { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_worlds_2.mjs; else echo "demo-P-WORLDS.2: set LUCID_DEMO_WORLDS, LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi
+
 .PHONY: demo-P-WORLDS.HEAL1
 demo-P-WORLDS.HEAL1: ## P-WORLDS.HEAL1 (ADR-0662): purchased worlds and store plugins survive upgrades and glitches: an install ledger outside plugins/ plus a signed backup per package; at engine start (and GET /api/plugins/health, POST /api/plugins/restore) a missing or damaged install is moved to plugins-quarantine and reinstalled from its backup through every install gate (a tampered backup is refused); what is still missing reinstalls from the store when the account owns it, else the user is told how to restore it
 	$(BUN) test $(TEST_IGNORES) desktop/plugins/restore.test.ts desktop/plugins/install.test.ts desktop/plugins/runtime.test.ts desktop/renderer/plugin_restore.test.ts desktop/renderer/plugins_flyout.test.ts desktop/renderer/viz_worlds.test.ts

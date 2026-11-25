@@ -223,7 +223,8 @@ describe("Lucid Agent World Packs on the drawer (P-WORLDS.STORE1)", () => {
   test("the picker lists every world as a toggle, owned ones disabled as Owned, and Continue starts disabled", () => {
     const owned = new Set([worlds[1]!.id]);
     const sheet = sponsorPickerSheetHtml(worlds, owned);
-    expect(sheet.split("data-plg-pick=").length - 1).toBe(29);
+    expect(sheet.split("data-plg-pick=").length - 1).toBe(worlds.length);
+    expect(worlds.length).toBe(40);
     for (const w of worlds) expect(sheet).toContain(`src="assets/plugins/${w.id}-poster.webp"`);
     expect(sheet).toMatch(new RegExp(`data-plg-pick="${worlds[1]!.id}" aria-pressed="false" disabled`));
     expect(sheet).toContain('<span class="plg-pick-tag">Owned</span>');

@@ -143,6 +143,21 @@ Plugins drawer, Premium tab, Lucid Agent Worlds, **Import world file**: pick the
 may use it is checked there against the store entitlement (cached for 30 days, so offline machines keep working; with
 no store configured it is allowed).
 
+Before a release, run the package through the real-UI QA harness against an isolated QA engine (P-WORLDS.2):
+
+```sh
+bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7821        # isolated engine, temp home and data root
+# Chrome or Edge with --remote-debugging-port=9333 and a fresh --user-data-dir, opened on the URL below
+LUCID_DEMO_BROWSER_URL=http://127.0.0.1:9333 LUCID_DEMO_URL="http://127.0.0.1:7821/?vizDemo=1" \
+LUCID_DEMO_WORLDS="dist/world-<key>-1.0.0.lplugin.zip;..." LUCID_DEMO_OUT=<dir> node desktop/scripts/demo_p_worlds_2.mjs
+```
+
+Per package it imports, draws, throws all three throwables, fires the storm, waits for a commit set piece, sets every
+option value and plays the sample mini game, failing on any page error, and saves stills to `<dir>/<key>/`. It
+uninstalls every world on the engine first, so never point it at your own instance. Without the two attach variables
+it boots its own engine and browser. `LUCID_DEMO_FILM=1` also records the 106 s short the card media is cut from
+(section 5, step 4).
+
 ## 5. Upload and price (private repo)
 
 In `lucidagentIDEaddon/entitlements` (see its README, "Lucid Agent Worlds"):
