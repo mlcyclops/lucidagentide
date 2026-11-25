@@ -189,6 +189,7 @@
   "attention.audit-not-exported": "The audit log has not been exported for 30 days.",
   "attention.quota-hits": "<n> requests were refused for limits in the last hour.",
   "attention.blocks-active": "<n> blocks are active on this relay.",
+  "attention.support-waiting": "<n> support tickets from Meeting Hub wait for an answer.",
   "attention.admins-unproven": "<n> admins have not signed in since the upgrade. Ask them to try now.",
   "attention.license-upgrade-period": "Install a Meeting Hub license by <date and time>, or this relay stops serving people.",
   "attention.seats-unseated": "<n> people have no Meeting Hub seat.",
@@ -363,6 +364,8 @@
   "empty.enrollments": "No devices are waiting for approval.",
   "empty.organizations": "No organizations yet. People are put into one from People and devices.",
   "empty.holds": "No legal holds.",
+  "empty.support": "No support tickets.",
+  "help.support": "Every Meeting Hub has a built-in support engineer. When it cannot solve a problem, the person can send the case here as a ticket: their words and the redacted checks, never meeting content. Answer it, and the person sees the answer in their Meeting Hub.",
   "empty.bridges": "No bridges are on.",
   "empty.approvals": "Nothing is waiting for approval.",
   "empty.requests": "No requests.",
@@ -859,6 +862,26 @@
    ],
    "second": true,
    "button_single": "Release hold"
+  },
+  "support-answer": {
+   "title": "Answer \"<title>\"",
+   "body": [
+    "The person sees your answer in their Meeting Hub."
+   ],
+   "button": [
+    "Send answer"
+   ],
+   "second": false
+  },
+  "support-close": {
+   "title": "Close \"<title>\"?",
+   "body": [
+    "The person sees it closed. A new question starts a new ticket."
+   ],
+   "button": [
+    "Close ticket"
+   ],
+   "second": false
   },
   "release": {
    "title": "Publish Lucid Meeting Hub <version>?",

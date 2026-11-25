@@ -1088,6 +1088,48 @@
    "scopes": [
     "people"
    ]
+  },
+  {
+   "route": "GET meet/support",
+   "method": "GET",
+   "path": "meet/support",
+   "product": "meet",
+   "write": false,
+   "stepup": false,
+   "action": null,
+   "target": null,
+   "read_health": "refused",
+   "scopes": [
+    "people"
+   ]
+  },
+  {
+   "route": "POST meet/support/answer",
+   "method": "POST",
+   "path": "meet/support/answer",
+   "product": "meet",
+   "write": true,
+   "stepup": true,
+   "action": "meet.support.answer",
+   "target": "id",
+   "read_health": "write",
+   "scopes": [
+    "people"
+   ]
+  },
+  {
+   "route": "POST meet/support/close",
+   "method": "POST",
+   "path": "meet/support/close",
+   "product": "meet",
+   "write": true,
+   "stepup": true,
+   "action": "meet.support.close",
+   "target": "id",
+   "read_health": "write",
+   "scopes": [
+    "people"
+   ]
   }
  ]
 }

@@ -78,7 +78,7 @@ const SECURITY_HEADERS: [(&str, &str); 9] = [
 ];
 
 /// The 8.1 `attention.<kind>` words the relay itself mails (3.11 `mail.attention`); the page holds the same words.
-pub const ATTENTION_WORDS: [(&str, &str); 47] = [
+pub const ATTENTION_WORDS: [(&str, &str); 48] = [
     ("license-none", "No license is installed for <product>."),
     ("license-grace", "The license ended. Service stops on <date and time> unless a new license is installed."),
     ("license-expired", "The license and its grace days are over."),
@@ -106,6 +106,7 @@ pub const ATTENTION_WORDS: [(&str, &str); 47] = [
     ("audit-not-exported", "The audit log has not been exported for 30 days."),
     ("quota-hits", "<n> requests were refused for limits in the last hour."),
     ("blocks-active", "<n> blocks are active on this relay."),
+    ("support-waiting", "<n> support tickets from Meeting Hub wait for an answer."),
     ("admins-unproven", "<n> admins have not signed in since the upgrade. Ask them to try now."),
     ("license-stopped", "This relay has stopped serving people: the <product> license is not active. Install a license."),
     ("license-upgrade-period", "Install a Meeting Hub license by <date and time>, or this relay stops serving people."),

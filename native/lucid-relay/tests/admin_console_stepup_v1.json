@@ -2591,6 +2591,89 @@
    }
   },
   {
+   "route": "POST /console/api/meet/support/answer",
+   "product": "meet",
+   "action": "meet.support.answer",
+   "target": "id",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "id",
+     "text",
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "id": "q_0123456789abcdef",
+     "text": "Restart the Hub, then join again.",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "q_0123456789abcdef",
+    "params": {
+     "id": "q_0123456789abcdef",
+     "text": "Restart the Hub, then join again."
+    },
+    "params_canonical": "{\"id\":\"q_0123456789abcdef\",\"text\":\"Restart the Hub, then join again.\"}",
+    "challenge_hex": "d5f313238e9ce89857b3e6071c145d23acb1b0f23749de88abfeef38593600ec"
+   }
+  },
+  {
+   "route": "POST /console/api/meet/support/close",
+   "product": "meet",
+   "action": "meet.support.close",
+   "target": "id",
+   "params": "body",
+   "stepup": "always",
+   "enrollment": false,
+   "body_keys": [
+    [
+     "id",
+     "stepup"
+    ]
+   ],
+   "example": {
+    "body": {
+     "id": "q_0123456789abcdef",
+     "stepup": {
+      "ceremony": "ce_0123456789abcdef",
+      "credential": {
+       "id": "AAEC",
+       "rawId": "AAEC",
+       "type": "public-key",
+       "response": {
+        "authenticatorData": "AA",
+        "clientDataJSON": "AA",
+        "signature": "AA",
+        "userHandle": "AA"
+       }
+      }
+     }
+    },
+    "target": "q_0123456789abcdef",
+    "params": {
+     "id": "q_0123456789abcdef"
+    },
+    "params_canonical": "{\"id\":\"q_0123456789abcdef\"}",
+    "challenge_hex": "60688733dc7a0cb4f826611368e6fa41e03cf895ab05954b07315e310fa2b291"
+   }
+  },
+  {
    "route": "POST /console/api/meet/release",
    "product": "meet",
    "action": "meet.release.set",
