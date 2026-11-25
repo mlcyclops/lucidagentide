@@ -6581,3 +6581,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-25):** `viz_view.pollFleet` takes every lane of fleet/status instead of `hubLanes` (ADR-0410's hub scope stays the orbit's), so lanes born under an earlier Main session (New session, Activate, an upgrade's restart) are drawn and counted again; `demo_p_viz_fleet_1.mjs` failed on the old bundle (0 agents) and passes on the rebuilt one; demo-P-VIZ.FLEET1.
 - **stubbed:** none.
 - **next:** ship it in the next release (installed v2.7.1 keeps the old filter until then).
+## P-VIZ.FLASH1 (ADR-0687): no black flash in 3D Visualize while agents work
+- **shipped (2026-11-25):** an HDR sanitize ShaderPass after the RenderPass (NaN/Inf to 0, clamp to 256) so stacked additive glows can no longer overflow half-float into a NaN frame through bloom and ACES; `demo_p_viz_flash_1.mjs` failed on the old bundle (4 empty frames on ultra) and passes on the rebuilt one; demo-P-VIZ.FLASH1.
+- **stubbed:** none.
+- **next:** ship it in the next release.
