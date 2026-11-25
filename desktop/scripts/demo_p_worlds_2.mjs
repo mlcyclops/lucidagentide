@@ -34,7 +34,7 @@
 //
 // Env:
 //   LUCID_DEMO_WORLDS        package paths, ';'-separated (required; LUCID_DEMO_WORLD is accepted for one)
-//   LUCID_DEMO_OUT           stills and result.json root (default <tmp>/lucid-demo-worlds-2)
+//   LUCID_DEMO_OUT           stills and result.json root (default: a fresh <tmp>/lucid-demo-worlds-2-XXXXXX)
 //   LUCID_DEMO_PORT          boot mode engine port (default 7821); LUCID_DEMO_CDP_PORT browser port (default 9333)
 //   LUCID_DEMO_CHROME        browser executable (default: Chrome, else Edge, at their usual install paths)
 //   LUCID_DEMO_HEADLESS=1    headless browser (WebGL may fall back to software: the tier drops, films look poorer)
@@ -50,7 +50,7 @@
 // Run (attach): LUCID_DEMO_CDP_URL=ws://... LUCID_DEMO_URL=http://127.0.0.1:<port>/?vizDemo=1 LUCID_DEMO_WORLDS=... node desktop/scripts/demo_p_worlds_2.mjs
 
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -139,8 +139,7 @@ function browserPath() {
 }
 
 function startBrowser(cdpPort, url, size) {
-  const profile = join(tmpdir(), `lucid-qa-worlds-browser-${cdpPort}`);
-  rmSync(profile, { recursive: true, force: true });
+  const profile = mkdtempSync(join(tmpdir(), `lucid-qa-worlds-browser-${cdpPort}-`));
   const args = [
     `--remote-debugging-port=${cdpPort}`, `--user-data-dir=${profile}`, "--no-first-run", "--no-default-browser-check",
     "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows",
@@ -574,9 +573,7 @@ async function film(page, key, tray, options, ctx) {
   const dest = join(ctx.filmDir, `Lucid-Agent-Worlds-${sourceName(key)}-v2.mp4`);
   assert(!existsSync(dest) || process.env.LUCID_DEMO_FILM_OVERWRITE === "1", `${dest} exists (a shipped source?); set LUCID_DEMO_FILM_OVERWRITE=1 to replace it`);
   mkdirSync(ctx.filmDir, { recursive: true });
-  const frames = join(tmpdir(), `lucid-worlds-film-${key}-${process.pid}`);
-  rmSync(frames, { recursive: true, force: true });
-  mkdirSync(frames, { recursive: true });
+  const frames = mkdtempSync(join(tmpdir(), `lucid-worlds-film-${key}-`)); // a fresh, private dir: never a guessable path
 
   // the world alone: no menus, auto camera on, tray down
   await closeOverlays(page);
@@ -712,7 +709,7 @@ if (import.meta.main || (typeof process !== "undefined" && process.argv[1]?.ends
   for (const p of packages) assert(existsSync(p), `no package at ${p}`);
   const [w, h] = (process.env.LUCID_DEMO_SIZE ?? "1600x938").split("x").map(Number);
   const size = { w: w || 1600, h: h || 938 };
-  const out = resolve(process.env.LUCID_DEMO_OUT ?? join(tmpdir(), "lucid-demo-worlds-2"));
+  const out = resolve(process.env.LUCID_DEMO_OUT ?? mkdtempSync(join(tmpdir(), "lucid-demo-worlds-2-")));
   const filmOn = process.env.LUCID_DEMO_FILM === "1";
   if (filmOn) {
     const ff = spawnSync(tool("ffmpeg"), ["-version"], { stdio: "ignore" });
