@@ -3438,7 +3438,7 @@ impl Fleet {
         let lics: Vec<(String, String, Value)> = self.registry.lock().relays.values().filter(|r| r.state.live()).map(|r| (r.id.clone(), r.name.clone(), r.report.get("license").cloned().unwrap_or(Value::Null))).collect();
         for (id, name, lic) in lics {
             let Some(s) = pushed_service(&lic, t) else { continue };
-            let go = format!("#/licenses?relay={id}");
+            let go = format!("#/license?relay={id}");
             match s.state {
                 crate::console::ServiceState::Stopped => out.push(item("relay-license-stopped", "bad", json!({ "relay": clean(&name), "why": s.why }), go)),
                 crate::console::ServiceState::Grace | crate::console::ServiceState::UpgradePeriod => out.push(item("relay-license-grace", "bad", json!({ "relay": clean(&name), "date and time": s.stops_at }), go)),

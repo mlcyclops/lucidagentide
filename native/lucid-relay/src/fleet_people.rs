@@ -847,7 +847,8 @@ impl People {
         let _permit = self.permits.clone().acquire_owned().await.map_err(|_| "error".to_owned())?;
         let read = |path: &'static str, query: String| {
             let (view, asker) = (&view, &asker);
-            async move { self.call(&view.id, asker, "GET", path, &query, Value::Null, Value::Null).await.map_err(|e| e.code.to_owned()) }
+            // relays refuse a call frame whose body is not an object (`fleet-op`), reads included
+            async move { self.call(&view.id, asker, "GET", path, &query, json!({}), Value::Null).await.map_err(|e| e.code.to_owned()) }
         };
         let work = async {
             let limit = format!("limit={RELAY_READ_LIMIT}");
@@ -1032,7 +1033,7 @@ impl People {
         if let Some(last) = self.reminded.lock().get(&key).copied().filter(|l| now - l < REMIND_MS) {
             return Err(ApiError::rate((REMIND_MS - (now - last) + 999) / 1000));
         }
-        let list = self.call(&view.id, asker, "GET", "requests", "state=waiting&kind=meet.invite", Value::Null, Value::Null).await?;
+        let list = self.call(&view.id, asker, "GET", "requests", "state=waiting&kind=meet.invite", json!({}), Value::Null).await?;
         let item = rows_of(&list, "requests").find(|r| s(r, "id") == request).ok_or_else(|| ApiError::of("gone"))?;
         let email = item.get("target").map(|t| s(t, "email")).unwrap_or_default().to_lowercase();
         let requester = s(item, "requested_by").to_lowercase();
@@ -1384,6 +1385,10 @@ mod tests {
                     tokio::time::sleep(Duration::from_millis(delay)).await;
                 }
                 self.calls.lock().push((relay.to_owned(), body.clone()));
+                // like a real relay (fleet_exec): a call whose body is not an object is refused whole
+                if !body.get("body").is_some_and(Value::is_object) {
+                    return Err(ApiError::of("fleet-op"));
+                }
                 let path = s(&body, "path");
                 if s(&body, "method") == "GET" {
                     self.reads.fetch_add(1, Ordering::SeqCst);
