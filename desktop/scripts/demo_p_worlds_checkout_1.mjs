@@ -8,7 +8,8 @@
 // refused the desktop origin http://127.0.0.1) would have passed it. This script signs a throwaway account into a
 // QA renderer served from http://127.0.0.1:<port> (the desktop app's origin), presses the real controls with real
 // mouse input, and asserts a Stripe Checkout page opens with the right item and price:
-//   1. a world (Christmas, $9.99): Buy, license sheet, accept, Continue to checkout;
+//   1. each world in LUCID_DEMO_CHECKOUT_WORLDS (comma-separated ids, default world-christmas), $9.99 and its card
+//      name on the Stripe page: Buy, license sheet, accept, Continue to checkout;
 //   2. Patron Class ($99.99): the same;
 //   3. Sponsor ($49.99): Buy opens the picker, 6 picks, Continue, license sheet lists the picks, checkout.
 // Each Stripe page is screenshotted into LUCID_DEMO_SHOTS (default: the OS temp dir). Nothing is paid: the live
@@ -20,6 +21,7 @@
 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PREMIUM_PLUGINS } from "../renderer/plugin_catalog.ts";
 
 const FUNCTIONS = "https://us-central1-lucid-agent.cloudfunctions.net";
 const SIGNIN = "https://lucid-agent.web.app/signin";
@@ -27,6 +29,9 @@ const SIGNIN = "https://lucid-agent.web.app/signin";
 const API_KEY = "AIzaSyC0YWHhH0BXGQawz7kZxLqUdBbfvGwubYE";
 const IDT = "https://identitytoolkit.googleapis.com/v1/accounts";
 const SPONSOR_PICKS = ["world-christmas", "world-soccer", "world-circus", "world-farm", "world-esports", "world-wave-riders"];
+// The worlds whose Buy is pressed through to Stripe (LUCID_DEMO_CHECKOUT_WORLDS, comma-separated ids): each Stripe page
+// must show $9.99 and the world's card name. Default Christmas; list new worlds here when they go on sale.
+const CHECKOUT_WORLDS = (process.env.LUCID_DEMO_CHECKOUT_WORLDS || "world-christmas").split(",").map((s) => s.trim()).filter(Boolean);
 
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));
 const assert = (c, m) => { if (!c) throw new Error(m); };
@@ -117,7 +122,11 @@ export async function verifyCheckout(browser, page, url, shots) {
     await pause(500);
   };
 
-  await viaStripe("world-christmas", "Christmas", ["9.99"]);
+  for (const id of CHECKOUT_WORLDS) {
+    const name = PREMIUM_PLUGINS.find((p) => p.id === id)?.name;
+    assert(name, `${id} is not a card in the catalog`);
+    await viaStripe(id, name, ["9.99", name]);
+  }
   await viaStripe("bundle-patron", "Patron Class", ["99.99"]);
   await viaStripe("bundle-sponsor", "Sponsor", ["49.99"], async () => {
     await page.waitForSelector("[data-plg-pick]", { visible: true, timeout: 8000 });
