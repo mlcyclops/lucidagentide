@@ -1855,6 +1855,12 @@ demo-P-VIZ.FLEET1: ## P-VIZ.FLEET1 (ADR-0680): Visualize draws every running fle
 	node --check desktop/scripts/demo_p_viz_fleet_1.mjs
 	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_viz_fleet_1.mjs; else echo "demo-P-VIZ.FLEET1: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi
 
+.PHONY: demo-P-WORLDS.UPDATE1
+demo-P-WORLDS.UPDATE1: ## P-WORLDS.UPDATE1 (ADR-0685): a purchased world with a newer store version gets one "World updates available" notice (remembered engine-side, so a port-rolled launch never repeats it), a dot on the Worlds and Visualize buttons, and a one-line Update beside Export... in the Worlds menu that installs through the store card's verified path. Real-UI proof (QA engine: [QA_PLUGIN_DEV_LOOPBACK=1] bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7821): LUCID_DEMO_BROWSER_URL=http://127.0.0.1:<cdp> LUCID_DEMO_URL=http://127.0.0.1:7821/ [LUCID_DEMO_WORLD=<zip>] [LUCID_DEMO_WORLD_NEWER=<zip>] node desktop/scripts/demo_p_worlds_update_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/world_updates.test.ts desktop/renderer/plugin_catalog.test.ts desktop/renderer/plugins_flyout.test.ts desktop/renderer/viz_worlds.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_worlds_update_1.mjs
+	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_worlds_update_1.mjs; else echo "demo-P-WORLDS.UPDATE1: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi
+
 .PHONY: demo-P-WHATSNEW.1
 demo-P-WHATSNEW.1: ## P-WHATSNEW.1 (ADR-0686): a one-time What's new popup after an upgrade (bundled manifest with pictures, seen version kept engine-side, never over onboarding or the suggestion toast), Dismiss points at About > What's new, About replays it read-only. Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7821, fresh browser profile): LUCID_DEMO_BROWSER_URL=http://127.0.0.1:<cdp> LUCID_DEMO_URL=http://127.0.0.1:7821/ node desktop/scripts/demo_p_whatsnew_1.mjs
 	$(BUN) test $(TEST_IGNORES) desktop/renderer/release_notes.test.ts desktop/renderer/whats_new.test.ts desktop/about.test.ts harness/adr_numbering.test.ts

@@ -96,6 +96,9 @@ Object.assign(env, {
   FAKE_ACP_MODE: "script", FAKE_ACP_SCRIPT_DIR: SCRIPT_DIR,
   // P-SPINUP.1: QA_AGENT_START_MS=<ms> slows every fake agent's handshake like a real one (spin-up UI demos).
   ...(process.env.QA_AGENT_START_MS ? { FAKE_ACP_INIT_MS: process.env.QA_AGENT_START_MS } : {}),
+  // P-WORLDS.UPDATE1: QA_PLUGIN_DEV_LOOPBACK=1 lets this QA engine download a plugin package over plain http from
+  // 127.0.0.1 (the install smoke switch), so demo_p_worlds_update_1.mjs can serve a newer signed world from a fake store.
+  ...(process.env.QA_PLUGIN_DEV_LOOPBACK === "1" ? { LUCID_PLUGIN_DEV_LOOPBACK: "1" } : {}),
 });
 
 const OUT_LOG = join(ROOT, "engine.out.log");

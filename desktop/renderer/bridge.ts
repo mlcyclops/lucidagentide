@@ -1394,6 +1394,11 @@ export interface LucidBridge {
    *  as `?t=` (like previewServeUrl), because a download link cannot set a header. */
   worldExportUrl(id: string): string;
   worldUninstall(id: string): Promise<boolean>;
+  /** P-WORLDS.UPDATE1 (ADR-0685): the world updates already announced ("<id>@<version>", engine settings); null when
+   *  the engine did not answer. */
+  worldUpdateNotices(): Promise<string[] | null>;
+  /** Replace the announced keys (the engine sanitizes and bounds them). */
+  setWorldUpdateNotices(keys: string[]): Promise<string[] | null>;
   /** ADR-0542: the last dev-to-release cleanup the user has not seen yet (null when none), and marking it seen. */
   releaseCleanup(): Promise<ReleaseCleanupView | null>;
   releaseCleanupAck(): Promise<boolean | null>;
@@ -1854,6 +1859,11 @@ async function getData(path: string): Promise<any> {
 }
 async function post(path: string, body: unknown): Promise<any> {
   try { return (await (await fetch(path, { method: "POST", headers: authHeaders({ "content-type": "application/json" }), body: JSON.stringify(body) })).json())?.data ?? null; } catch { return null; }
+}
+/** P-WORLDS.UPDATE1: `{ announced: string[] }` from /api/worlds/update-notices, or null when the engine did not answer. */
+function announcedOf(d: unknown): string[] | null {
+  const a = d && typeof d === "object" && "announced" in d ? d.announced : null;
+  return Array.isArray(a) ? a.filter((k): k is string => typeof k === "string") : null;
 }
 /** P-ASKLUCID.SPEED1: one Ask Lucid question as NDJSON: `phase` lines go to `onPhase`, the `reply` line is the
  *  answer. A refusal before the stream (a bad question, a refused file) arrives as plain JSON and is returned as
@@ -2409,6 +2419,8 @@ export const bridge: LucidBridge = {
   },
   worldExportUrl: (id) => `/api/worlds/export?id=${encodeURIComponent(id)}${TOKEN ? `&t=${encodeURIComponent(TOKEN)}` : ""}`,
   worldUninstall: async (id) => ((await post("/api/worlds/uninstall", { id })) as { ok?: unknown } | null)?.ok === true,
+  worldUpdateNotices: async () => announcedOf(await getData("/api/worlds/update-notices")),
+  setWorldUpdateNotices: async (keys) => announcedOf(await post("/api/worlds/update-notices", { announced: keys })),
   releaseCleanup: () => getData("/api/release-cleanup"),
   releaseCleanupAck: () => post("/api/release-cleanup/ack", {}),
   setActiveSkill: (name, prompt) => post("/api/skill", { name, prompt }),

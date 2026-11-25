@@ -9258,7 +9258,17 @@ html[data-pchip-motion="still"] .pchip,html[data-pchip-motion="still"] .pchip .p
 .viz-cast-note{align-self:stretch;margin:2px 0 0;font-size:11.5px;line-height:1.5;color:var(--txt-2)}
 .viz-look{min-width:260px}
 .viz-worlds{display:flex;flex-direction:column;gap:6px;min-width:260px}
-.viz-world-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:2px 10px;padding:4px 8px;border-radius:8px}
+.viz-world-row{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;gap:2px 10px;padding:4px 8px;border-radius:8px}
+.viz-world-row>.viz-world-pick{grid-column:1}
+.viz-world-row>.viz-world-export{grid-column:3}
+/* P-WORLDS.UPDATE1 (ADR-0685): a purchased world's Update, beside Export..., one line, within the row's height */
+.btn-mini.viz-world-upd{grid-column:2;padding:2px 8px;white-space:nowrap;color:var(--accent-2);border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
+.btn-mini.viz-world-upd:hover{border-color:var(--accent);color:var(--accent-2);background:color-mix(in srgb,var(--accent) 12%,var(--bg-2))}
+.btn-mini.viz-world-upd:disabled{cursor:progress;color:var(--txt-3);border-color:var(--line);background:var(--bg-2)}
+.btn-mini.viz-world-upd:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+/* the dot on the Worlds button (and the Visualize toolbar button) while a purchased world has an update */
+.has-upd{position:relative}
+.has-upd::after{content:"";position:absolute;top:2px;right:2px;width:7px;height:7px;border-radius:50%;background:var(--accent-2);box-shadow:0 0 0 2px var(--bg-1);pointer-events:none}
 .viz-world-row.on{background:rgb(var(--accent-rgb) / .14)}
 .viz-world-pick{display:flex;align-items:center;gap:8px;min-width:0;min-height:28px;font:inherit;font-size:12.5px;padding:3px 2px;border:0;background:transparent;color:var(--txt);text-align:left;cursor:pointer}
 .viz-world-pick b{min-width:0;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
