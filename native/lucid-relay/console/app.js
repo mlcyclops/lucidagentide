@@ -7646,19 +7646,13 @@
     });
   }
   // A Seats strip per Meeting Hub relay (11.4): seated of the license's users (no total without a license), the clock
-  // while over, and, while the relay is stopped for its license, seats.stopped with the invite disabled.
+  // while over, and, while the relay is stopped for its license, seats.stopped with the invite disabled. The numbers
+  // are each relay's own `meet/seats` (`people` scope): the read-health counts carry no licensed user count.
   async function seatStrips(mrel, stopped) {
     if (!mrel.length) return null;
-    let lic = null;
-    try {
-      lic = await api("GET", "fleet/licenses", null, { direct: true, activity: false });
-    } catch (e) {
-      lic = null;
-    }
-    const byRelay = new Map(((lic && lic.relays) || []).map((x) => [x.relay, x]));
-    return panel(W["nav.meet.pages"][1], el("ul", { class: "checklist" }, mrel.map((x) => {
-      const l = byRelay.get(x.id) || {};
-      const s = l.seats || {};
+    const views = await Promise.all(mrel.map((x) => api("GET", "meet/seats", null, { relay: x.id, activity: false }).catch(() => null)));
+    return panel(W["nav.meet.pages"][1], el("ul", { class: "checklist" }, mrel.map((x, i) => {
+      const s = views[i] || {};
       const users = s.users;
       const line = stopped(x.id) ? W["seats.stopped"] : s.seated != null && users != null ? fillText(W["seats.summary"], { seated: s.seated, users }) : MSG.unknown;
       const clock = s.clock ? fillText(W["attention.seats-over"], { used: s.seated, users, day: s.clock.day, n: s.overage || Math.max(0, (s.seated || 0) - (users || 0)), date: dayAny(s.clock.unseatAt) }) : "";
