@@ -1,6 +1,6 @@
 // MR-1 phase 1 section 2.5 (docs/multi-relay/contract-mr1-phase1.md): the witness that decides which node of a
 // two-node cluster may be active. The nodes cannot tell "my peer is down" from "we cannot see each other", so a third
-// party holds the answer: one Azure Blob with a 60 s lease (the active renews it) and the cluster's epoch in its
+// party holds the answer: one Azure Blob with a `2 x lease_s` lease (the active renews it) and the cluster's epoch in its
 // metadata. `witness_file` holds one HTTPS URL with a SAS token for that single blob (read and write only). The SAS
 // URL is a secret: it is never logged.
 
@@ -8,8 +8,11 @@ use crate::http_client::{HttpClient, HttpResponse};
 use std::path::Path;
 use std::time::Duration;
 
-/// The blob lease the active holds and renews (Azure allows 15 to 60 s).
-pub const LEASE_S: u64 = 60;
+/// The blob lease the active holds and renews: `2 x lease_s`, clamped to what Azure allows (15 to 60 s). The active
+/// fences itself `lease_s` after its last renewal, before this lease can expire.
+pub fn blob_lease_s(lease_s: u64) -> u64 {
+    (2 * lease_s).clamp(15, 60)
+}
 const API_VERSION: &str = "2023-11-03";
 const TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -98,11 +101,13 @@ fn epoch_of(r: &HttpResponse) -> u64 {
 /// The witness over the Azure Blob REST API.
 pub struct AzureWitness {
     url: String,
+    /// `x-ms-lease-duration` of an acquire, from `blob_lease_s`.
+    duration: String,
 }
 
 impl AzureWitness {
-    pub fn new(url: String) -> AzureWitness {
-        AzureWitness { url }
+    pub fn new(url: String, lease_s: u64) -> AzureWitness {
+        AzureWitness { url, duration: blob_lease_s(lease_s).to_string() }
     }
 
     /// One request on a fresh runtime and client: a call every few seconds at most, from plain threads.
@@ -130,10 +135,9 @@ impl AzureWitness {
     }
 
     fn lease(&self, action: &str, id_header: &str, lease_id: &str) -> Result<u16, String> {
-        let duration = LEASE_S.to_string();
         let mut h = vec![("x-ms-lease-action", action), (id_header, lease_id)];
         if action == "acquire" {
-            h.push(("x-ms-lease-duration", duration.as_str()));
+            h.push(("x-ms-lease-duration", self.duration.as_str()));
         }
         Ok(self.call("PUT", "comp=lease", &h)?.status)
     }
@@ -203,6 +207,19 @@ mod tests {
         assert_eq!(a, lease_id("emertins-meet", "lab"));
         assert_ne!(a, lease_id("emertins-meet", "azure"));
         assert_ne!(a, lease_id("other", "lab"));
+    }
+
+    #[test]
+    fn the_blob_lease_is_twice_lease_s_within_azure_bounds() {
+        assert_eq!(blob_lease_s(10), 20);
+        assert_eq!(blob_lease_s(25), 50);
+        assert_eq!(blob_lease_s(30), 60);
+        assert_eq!(blob_lease_s(50), 60);
+        assert_eq!(blob_lease_s(5), 15);
+        for lease_s in 10..=50 {
+            assert!(lease_s < blob_lease_s(lease_s), "the active fences before the lease can expire");
+        }
+        assert_eq!(AzureWitness::new("https://h/b?sig=1".into(), 10).duration, "20");
     }
 
     #[test]
