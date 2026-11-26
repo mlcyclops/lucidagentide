@@ -33,7 +33,8 @@ pub const COMMAND_FILE: &str = "cluster-command.json";
 pub const RESULT_FILE: &str = "cluster-command-result.json";
 pub const LOCK_FILE: &str = "cluster.lock";
 /// 2.2: the replica set, the top-level files and every file of these folders. Nothing else is copied.
-pub const TOP_FILES: [&str; 5] = ["state.json", "meet-seats.json", "push.secret", "guest.secret", "relays.json"];
+/// The release manifest and its history ride along, so a promoted standby offers the same Hub update.
+pub const TOP_FILES: [&str; 7] = ["state.json", "meet-seats.json", "push.secret", "guest.secret", "relays.json", "releases.json", "release-history.json"];
 pub const SET_DIRS: [&str; 2] = ["files", "emoji"];
 const RELAYS_FILE: &str = "relays.json";
 /// 2.3: the longest replica long-poll; a quiet relay answers this often.
@@ -2253,6 +2254,8 @@ mod tests {
         put(a, "files/fedcba9876543210fedcba9876543210", "file two");
         put(a, "files/fedcba9876543210fedcba9876543211.part", "uploading");
         put(a, "emoji/abc", "emoji");
+        put(a, "releases.json", "{\"version\": \"0.99.0\"}");
+        put(a, "release-history.json", "[]");
         put(a, "license.lic", "lab license");
         put(b, "meet-time.json", "azure time");
         put(b, "relays.json", "azure directory");
@@ -2262,8 +2265,8 @@ mod tests {
         assert_eq!(p.lab.scan(), g0, "nothing changed");
         let peer = local(&p);
         let out = p.azure.pull_once(&peer, 0).unwrap();
-        assert_eq!(out, PullOutcome::Applied { generation: g0, fetched: 5, deleted: 1 });
-        for f in ["state.json", "push.secret", "files/0123456789abcdef0123456789abcdef", "files/fedcba9876543210fedcba9876543210", "emoji/abc"] {
+        assert_eq!(out, PullOutcome::Applied { generation: g0, fetched: 7, deleted: 1 });
+        for f in ["state.json", "push.secret", "files/0123456789abcdef0123456789abcdef", "files/fedcba9876543210fedcba9876543210", "emoji/abc", "releases.json", "release-history.json"] {
             assert_eq!(read(b, f), read(a, f), "{f}");
         }
         // per node: never copied, never deleted; no temporary file stays
