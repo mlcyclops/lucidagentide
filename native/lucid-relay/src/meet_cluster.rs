@@ -54,8 +54,6 @@ const HEAD_MAX: usize = 16 << 10;
 const RACY: Duration = Duration::from_secs(3);
 const ASIDE_PREFIX: &str = "state.before-epoch-";
 const ASIDE_KEEP_S: u64 = 30 * 86_400;
-/// 2.5: the active renews the lease (and every node checks the witness and its peer) this often.
-const TICK_EVERY: f64 = 10.0;
 const HANDOVER_WAIT: Duration = Duration::from_secs(60);
 /// The standby counts as copying while its last replica request is at most this old.
 const HEARD_FRESH: i64 = 60;
@@ -212,9 +210,10 @@ pub fn parse(v: &Value) -> Result<ClusterSettings, String> {
         return Err("relay settings: cluster.client_cert and cluster.client_key are required".into());
     }
     let witness_file = text(o, "witness_file", "cluster.witness_file")?;
-    // the active must fence itself before its 60 s lease can pass to the standby
-    let lease_s = whole(o, "lease_s", 30, 10, 50)?;
-    let promote_after_s = whole(o, "promote_after_s", 90, 30, 3600)?;
+    // the active fences itself `lease_s` after its last renewal, before its blob lease (2 x lease_s, at most 60 s)
+    // can pass to the standby
+    let lease_s = whole(o, "lease_s", 10, 10, 50)?;
+    let promote_after_s = whole(o, "promote_after_s", 20, 15, 3600)?;
     let auto_promote = match o.get("auto_promote") {
         None => false,
         Some(Value::Bool(b)) => *b,
@@ -1001,6 +1000,12 @@ impl Cluster {
         self.node.lock().role
     }
 
+    /// 2.5: the active renews the lease (and every node checks the witness and its peer) every `lease_s / 3` seconds,
+    /// at least 2 s.
+    fn tick_s(&self) -> f64 {
+        (self.cfg.lease_s / 3).max(2) as f64
+    }
+
     pub fn epoch(&self) -> u64 {
         self.node.lock().epoch
     }
@@ -1057,7 +1062,7 @@ impl Cluster {
         let (code, words) = self.not_serving();
         // a fenced node names the peer only once it has seen it active
         let active = match self.role() {
-            Role::Fenced if self.now() - self.peer_seen.lock().0 > 3.0 * TICK_EVERY => Value::Null,
+            Role::Fenced if self.now() - self.peer_seen.lock().0 > 3.0 * self.tick_s() => Value::Null,
             _ => Value::from(self.cfg.peer.node.clone()),
         };
         obj([("ok", Value::Bool(false)), ("code", Value::from(code)), ("error", Value::from(words)), ("active", active)])
@@ -1506,6 +1511,35 @@ impl Cluster {
         }
     }
 
+    /// The fence deadline on its own thread, every second: a witness call stuck on the `relay-cluster` thread (its
+    /// HTTP timeout is longer than a tick) never delays the fence past the blob lease.
+    fn spawn_fence_timer(self: &Arc<Self>) -> Result<(), String> {
+        let c = self.clone();
+        std::thread::Builder::new()
+            .name("relay-cluster-fence".into())
+            .spawn(move || loop {
+                std::thread::sleep(Duration::from_secs(1));
+                c.fence_if_lapsed();
+            })
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    /// An active node whose last renewal is `lease_s` old fences itself at once, so it stops serving well before its
+    /// blob lease (`2 x lease_s`) can expire and pass to the standby.
+    fn fence_if_lapsed(&self) {
+        if self.witness.get().is_none() || self.role() != Role::Active {
+            return;
+        }
+        let last = {
+            let l = self.lease.lock();
+            l.last_renew.unwrap_or(l.started)
+        };
+        if self.now() - last >= self.cfg.lease_s as f64 {
+            self.fence(self.epoch());
+        }
+    }
+
     fn unfence(&self, own: u64) {
         let _held = self.transition.lock();
         if self.role() == Role::Fenced && !self.in_transit() && self.epoch() == own {
@@ -1819,7 +1853,7 @@ impl Cluster {
             std::thread::sleep(Duration::from_secs(1));
             self.take_command();
             let now = self.now();
-            if now - last < TICK_EVERY {
+            if now - last < self.tick_s() {
                 continue;
             }
             last = now;
@@ -1880,7 +1914,7 @@ pub fn start(c: &Arc<Cluster>, s: &Settings, hub: &Arc<crate::meet_hub::Hub>) ->
     c.set_client_ca(&s.client_ca);
     c.set_peer(Arc::new(HttpsPeer::new(s, &c.cfg)));
     if !c.cfg.witness_file.is_empty() {
-        c.set_witness(Arc::new(AzureWitness::new(crate::meet_witness::read_url(Path::new(&c.cfg.witness_file))?)));
+        c.set_witness(Arc::new(AzureWitness::new(crate::meet_witness::read_url(Path::new(&c.cfg.witness_file))?, c.cfg.lease_s)));
     }
     let (a, b) = (Arc::downgrade(hub), Arc::downgrade(hub));
     c.set_hooks(Hooks {
@@ -1913,6 +1947,7 @@ pub fn start(c: &Arc<Cluster>, s: &Settings, hub: &Arc<crate::meet_hub::Hub>) ->
     c.write_status();
     let r = c.clone();
     std::thread::Builder::new().name("relay-cluster".into()).spawn(move || r.run()).map_err(|e| e.to_string())?;
+    c.spawn_fence_timer()?;
     let p = c.clone();
     std::thread::Builder::new().name("relay-cluster-pull".into()).spawn(move || p.pull_loop()).map_err(|e| e.to_string())?;
     Ok(())
@@ -2001,7 +2036,7 @@ fn run_cli(s: &Settings, cfg: &ClusterSettings, dir: &Path, cmd: &str, force: bo
             c.set_client_ca(&s.client_ca);
             c.set_peer(Arc::new(HttpsPeer::new(s, cfg)));
             if !cfg.witness_file.is_empty() {
-                c.set_witness(Arc::new(AzureWitness::new(crate::meet_witness::read_url(Path::new(&cfg.witness_file))?)));
+                c.set_witness(Arc::new(AzureWitness::new(crate::meet_witness::read_url(Path::new(&cfg.witness_file))?, cfg.lease_s)));
             }
             c.command(cmd, force)
         })();
@@ -2059,12 +2094,17 @@ mod tests {
     }
 
     fn pair() -> Pair {
+        pair_timed(30, 90)
+    }
+
+    fn pair_timed(lease_s: u64, promote_after_s: u64) -> Pair {
+        let timed = |c: ClusterSettings| ClusterSettings { lease_s, promote_after_s, ..c };
         let ca = Ca::new("Lucid Meet CA");
         let lab_der = ca.leaf(&[0x51], "Lucid Meet Relay", None, &[crate::meet::RELAY_URI], &Key::new(), true);
         let azure_der = ca.leaf(&[0x52], "Lucid Meet Relay", None, &[crate::meet::RELAY_URI], &Key::new(), true);
         let other_der = ca.leaf(&[0x53], "Ann", Some("ann@x.org"), &["urn:lucid-meet:device:0123456789abcdef"], &Key::new(), true);
-        let lab = Cluster::open(&settings("lab", "azure", Role::Active, &pin(&azure_der)), &dir("cluster-lab")).unwrap();
-        let azure = Cluster::open(&settings("azure", "lab", Role::Standby, &pin(&lab_der)), &dir("cluster-azure")).unwrap();
+        let lab = Cluster::open(&timed(settings("lab", "azure", Role::Active, &pin(&azure_der))), &dir("cluster-lab")).unwrap();
+        let azure = Cluster::open(&timed(settings("azure", "lab", Role::Standby, &pin(&lab_der))), &dir("cluster-azure")).unwrap();
         Pair { lab, azure, azure_der, other_der }
     }
 
@@ -2126,7 +2166,7 @@ mod tests {
             minimal.as_object_mut().unwrap().remove(k);
         }
         let m = parse(&minimal).unwrap();
-        assert_eq!((m.witness_file.as_str(), m.lease_s, m.promote_after_s, m.auto_promote), ("", 30, 90, false));
+        assert_eq!((m.witness_file.as_str(), m.lease_s, m.promote_after_s, m.auto_promote), ("", 10, 20, false));
         let refused = |f: &dyn Fn(&mut Value)| {
             let mut v = good.clone();
             f(&mut v);
@@ -2143,6 +2183,17 @@ mod tests {
         assert!(refused(&|v| v["peer"]["spki_sha256"] = json!("abc")).contains("spki_sha256"));
         assert!(refused(&|v| v["client_key"] = json!("")).contains("client_key"));
         assert!(refused(&|v| v["lease_s"] = json!(60)).contains("lease_s"));
+        assert!(refused(&|v| v["lease_s"] = json!(51)).contains("lease_s"));
+        assert!(refused(&|v| v["lease_s"] = json!(9)).contains("lease_s"));
+        assert!(refused(&|v| v["promote_after_s"] = json!(14)).contains("promote_after_s"));
+        assert!(refused(&|v| v["promote_after_s"] = json!(3601)).contains("promote_after_s"));
+        for (lease_s, promote_after_s) in [(10, 15), (50, 3600)] {
+            let mut v = good.clone();
+            v["lease_s"] = json!(lease_s);
+            v["promote_after_s"] = json!(promote_after_s);
+            let c = parse(&v).unwrap();
+            assert_eq!((c.lease_s, c.promote_after_s), (lease_s, promote_after_s));
+        }
         assert!(refused(&|v| v["promote_after_s"] = json!(1.5)).contains("promote_after_s"));
         assert!(refused(&|v| v["auto_promote"] = json!("yes")).contains("auto_promote"));
         assert_eq!(parse(&json!([])).unwrap_err(), "relay settings: cluster must be an object");
@@ -2301,6 +2352,10 @@ mod tests {
         epoch: Mutex<u64>,
         delay: Mutex<f64>,
         set_epoch_fails: AtomicBool,
+        /// The lease an acquire or renewal grants, as the real witness asks for it.
+        lease_len: f64,
+        /// Every call hangs (in real time) while set: a witness stuck past its tick.
+        stall: AtomicBool,
     }
 
     /// One node's way to the blob; `down` cuts it off.
@@ -2311,6 +2366,9 @@ mod tests {
 
     impl FakeWitness {
         fn reach(&self) -> Result<f64, String> {
+            while self.blob.stall.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_millis(20));
+            }
             let mut c = self.blob.clock.lock();
             *c += *self.blob.delay.lock();
             if self.down.load(Ordering::SeqCst) {
@@ -2327,7 +2385,7 @@ mod tests {
             if l.as_ref().is_some_and(|(h, exp)| *exp > now && h != id) {
                 return Ok(false);
             }
-            *l = Some((id.to_string(), now + crate::meet_witness::LEASE_S as f64));
+            *l = Some((id.to_string(), now + self.blob.lease_len));
             Ok(true)
         }
         fn renew(&self, id: &str) -> Result<bool, String> {
@@ -2335,7 +2393,7 @@ mod tests {
             let mut l = self.blob.lease.lock();
             match l.as_mut() {
                 Some((h, exp)) if h == id && *exp > now => {
-                    *exp = now + crate::meet_witness::LEASE_S as f64;
+                    *exp = now + self.blob.lease_len;
                     Ok(true)
                 }
                 _ => Ok(false),
@@ -2365,7 +2423,7 @@ mod tests {
 
     /// Both nodes on one fake blob, each reading the blob's clock.
     fn witnessed(p: &Pair) -> (Arc<Blob>, Arc<FakeWitness>, Arc<FakeWitness>) {
-        let blob = Arc::new(Blob { clock: Mutex::new(1000.0), lease: Mutex::new(None), epoch: Mutex::new(0), delay: Mutex::new(0.0), set_epoch_fails: AtomicBool::new(false) });
+        let blob = Arc::new(Blob { clock: Mutex::new(1000.0), lease: Mutex::new(None), epoch: Mutex::new(0), delay: Mutex::new(0.0), set_epoch_fails: AtomicBool::new(false), lease_len: crate::meet_witness::blob_lease_s(p.lab.cfg.lease_s) as f64, stall: AtomicBool::new(false) });
         let (wl, wa) = (Arc::new(FakeWitness { blob: blob.clone(), down: AtomicBool::new(false) }), Arc::new(FakeWitness { blob: blob.clone(), down: AtomicBool::new(false) }));
         for (c, w) in [(&p.lab, wl.clone()), (&p.azure, wa.clone())] {
             c.set_witness(w);
@@ -2443,6 +2501,123 @@ mod tests {
         assert_eq!(q.azure.witness_tick(None), Step::Stay);
         assert_eq!(q.lab.witness_tick(None), Step::Stay);
         assert_eq!((q.lab.role(), q.azure.role()), (Role::Active, Role::Standby));
+    }
+
+    /// Revision 2 timing: renewals every max(lease_s / 3, 2) s; with lease_s 10 and promote_after_s 20 a dead active
+    /// is replaced within max(promote_after_s, 2 x lease_s) plus one tick (other pairs too), never before
+    /// promote_after_s.
+    #[test]
+    fn a_dead_active_is_replaced_within_the_window() {
+        for (lease_s, promote_after_s) in [(10u64, 20u64), (10, 15), (30, 15), (50, 60)] {
+            let p = pair_timed(lease_s, promote_after_s);
+            let tick = (lease_s / 3).max(2) as f64;
+            assert_eq!(p.lab.tick_s(), tick);
+            let (blob, _, _) = witnessed(&p);
+            p.azure.pull_once(&local(&p), 0).unwrap();
+            let t0 = 1000.0;
+            let died = t0 + 100.0;
+            let window = (promote_after_s as f64).max(2.0 * lease_s as f64) + tick;
+            let (mut lab_last, mut azure_last) = (f64::MIN, f64::MIN);
+            let mut promoted = None;
+            // the run loop of each node, one second at a time
+            for s in 0..400 {
+                let t = t0 + s as f64;
+                at(&blob, t);
+                if t < died {
+                    p.lab.fence_if_lapsed();
+                    if t - lab_last >= tick {
+                        lab_last = t;
+                        assert_eq!(p.lab.witness_tick(None), Step::Stay);
+                        assert!(p.lab.serving(), "a renewing active serves");
+                    }
+                }
+                if t - azure_last >= tick {
+                    azure_last = t;
+                    let health = (t < died).then(|| Value::Object(obj([("ok", Value::Bool(true)), ("role", Value::from("active")), ("epoch", Value::from(p.lab.epoch()))])));
+                    if p.azure.witness_tick(health.as_ref()) == Step::Exit {
+                        promoted = Some(t);
+                        break;
+                    }
+                }
+            }
+            let at_s = promoted.expect("the standby took over") - died;
+            assert!(at_s >= promote_after_s as f64, "lease_s {lease_s}: not before promote_after_s ({at_s} s)");
+            assert!(at_s <= window, "lease_s {lease_s}: replaced {at_s} s after the active died, window {window} s");
+            assert_eq!(read_state(&p.azure.dir).unwrap().unwrap().role, Role::Active);
+        }
+    }
+
+    /// Revision 2 timing: an active cut off from the witness fences itself (between rounds, every second) strictly
+    /// before its blob lease can expire, and the standby acquires only after it expired.
+    #[test]
+    fn a_cut_off_active_fences_before_its_lease_can_pass() {
+        for lease_s in [10u64, 20, 30, 45, 50] {
+            let p = pair_timed(lease_s, 15);
+            let tick = p.lab.tick_s();
+            let (blob, wl, _) = witnessed(&p);
+            p.azure.pull_once(&local(&p), 0).unwrap();
+            let t0 = 1000.0;
+            at(&blob, t0);
+            assert_eq!(p.lab.witness_tick(None), Step::Stay);
+            let expiry = blob.lease.lock().as_ref().unwrap().1;
+            assert_eq!(expiry, t0 + crate::meet_witness::blob_lease_s(lease_s) as f64);
+            wl.down.store(true, Ordering::SeqCst);
+            p.azure.peer_seen.lock().0 = t0;
+            let (mut lab_last, mut azure_last) = (t0, f64::MIN);
+            let (mut fenced, mut promoted) = (None, None);
+            for s in 1..200 {
+                let t = t0 + s as f64;
+                at(&blob, t);
+                p.lab.fence_if_lapsed();
+                if t - lab_last >= tick {
+                    lab_last = t;
+                    p.lab.witness_tick(None);
+                }
+                if fenced.is_none() && p.lab.role() == Role::Fenced {
+                    fenced = Some(t);
+                }
+                if t - azure_last >= tick {
+                    azure_last = t;
+                    if p.azure.witness_tick(None) == Step::Exit {
+                        promoted = Some(t);
+                        break;
+                    }
+                }
+            }
+            let (fenced, promoted) = (fenced.unwrap(), promoted.unwrap());
+            assert!(fenced < expiry, "lease_s {lease_s}: fenced at {fenced}, lease expires at {expiry}");
+            assert_eq!(fenced, t0 + lease_s as f64, "lease_s {lease_s}: fenced as soon as lease_s passed");
+            assert!(promoted >= expiry, "lease_s {lease_s}: acquired at {promoted}, before expiry {expiry}");
+        }
+    }
+
+    /// A witness call stuck far past the tick: the fence timer, on its own thread, still fences at lease_s, before the
+    /// blob lease can expire.
+    #[test]
+    fn a_stuck_witness_call_does_not_delay_the_fence() {
+        let p = pair_timed(10, 20);
+        let (blob, _, _) = witnessed(&p);
+        let t0 = 1000.0;
+        assert_eq!(p.lab.witness_tick(None), Step::Stay);
+        let expiry = blob.lease.lock().as_ref().unwrap().1;
+        p.lab.spawn_fence_timer().unwrap();
+        blob.stall.store(true, Ordering::SeqCst);
+        let lab = p.lab.clone();
+        let stuck = std::thread::spawn(move || lab.witness_tick(None));
+        // the round hangs over several ticks (3 s each) of the node's clock; the node serves until lease_s
+        at(&blob, t0 + 9.0);
+        std::thread::sleep(Duration::from_millis(1500));
+        assert_eq!(p.lab.role(), Role::Active);
+        at(&blob, t0 + 10.0);
+        let waited = Instant::now();
+        while p.lab.role() != Role::Fenced && waited.elapsed() < Duration::from_secs(5) {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(p.lab.role(), Role::Fenced, "fenced at lease_s while the witness call is still stuck");
+        assert!(t0 + 10.0 < expiry && !p.lab.serving());
+        assert!(!stuck.is_finished(), "the witness round was still blocked");
+        blob.stall.store(false, Ordering::SeqCst);
+        stuck.join().unwrap();
     }
 
     /// Review 1: a restarting active serves nobody until it renews with its own lease id and the blob holds its epoch.
