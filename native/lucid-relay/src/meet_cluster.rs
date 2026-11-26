@@ -1487,6 +1487,12 @@ impl Cluster {
             };
             moved.map_err(failed)?;
         }
+        // The seat file stays in place as a copy: the license gate refuses to start without it next to the other Admin
+        // Console state, and a standby that cannot start never pulls the active's copy over it.
+        let seats = crate::meet_seats::SEATS_FILE;
+        if target.path().join(seats).is_file() {
+            std::fs::copy(target.path().join(seats), self.dir.join(seats)).map_err(failed)?;
+        }
         self.hashes.lock().clear();
         Ok(target.path().to_path_buf())
     }
@@ -2446,6 +2452,7 @@ mod tests {
         let (blob, wl, _wa) = witnessed(&p);
         let t0 = 1000.0;
         put(&p.lab.dir, "state.json", "{\"lab\": 1}");
+        put(&p.lab.dir, "meet-seats.json", "{\"seats\": 1}");
         put(&p.lab.dir, "files/0123456789abcdef0123456789abcdef", "lab file");
         // the standby holds a complete copy before anything else
         p.azure.pull_once(&local(&p), 0).unwrap();
@@ -2496,6 +2503,9 @@ mod tests {
         assert_eq!(read(&aside, "state.json").as_deref(), Some("{\"lab\": 1}"));
         assert_eq!(read(&aside, "files/0123456789abcdef0123456789abcdef").as_deref(), Some("lab file"));
         assert_eq!(read(&p.lab.dir, "state.json"), None);
+        // the seat file stays as a copy, or the relay would refuse to start as standby (live failover 2026-11-26)
+        assert_eq!(read(&aside, "meet-seats.json").as_deref(), Some("{\"seats\": 1}"));
+        assert_eq!(read(&p.lab.dir, "meet-seats.json").as_deref(), Some("{\"seats\": 1}"));
         assert_eq!(read(&p.lab.dir, REPLICA_FILE), None);
         assert!(!p.lab.serving());
         // without a witness nothing changes by itself
