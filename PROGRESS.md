@@ -6624,3 +6624,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-25):** an HDR sanitize ShaderPass after the RenderPass (NaN/Inf to 0, clamp to 256) so stacked additive glows can no longer overflow half-float into a NaN frame through bloom and ACES; `demo_p_viz_flash_1.mjs` failed on the old bundle (4 empty frames on ultra) and passes on the rebuilt one; demo-P-VIZ.FLASH1.
 - **stubbed:** none.
 - **next:** ship it in the next release.
+## Release cut: v2.7.2-beta.1 (prerelease): eleven new worlds, Agent Worlds keeps up with the fleet
+- **shipped (2026-11-25):** v2.7.2-beta.1 = 2.7.1 plus #676..#691: the eleven P-WORLDS.2 worlds (in the app catalog and on the live store), Visualize draws every fleet lane, the lane-style Agent Worlds panel, session history export/import, docs links, durable Patron sign-in and world Update buttons, the What's new popup (this release's entry: nine cards with bundled screenshots and world posters), no 3D black flash, built-in world options, tray reactions and richer mini games; published as a GitHub prerelease by the beta_release dispatch.
+- **stubbed:** stable installs do not auto-update to a beta (electron-updater reads /releases/latest); install the beta build once to follow the beta channel. World options and built-in options still live in renderer localStorage (ADR-0688 follow-up).
+- **next:** promote to v2.7.2 stable after beta feedback; World Forge Phase 0 (ADR-0689).

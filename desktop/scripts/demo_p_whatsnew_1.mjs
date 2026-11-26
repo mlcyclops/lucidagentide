@@ -117,7 +117,10 @@ export async function verifyWhatsNew(page, base) {
   await onTop(page, "#whatsNewModal .wn-more");
   const more = await page.$eval("#whatsNewModal .wn-more", (a) => ({ href: a.href, target: a.target, rel: a.rel }));
   assert(/^https:\/\/(docs\.)?lucid-agents\.com\//.test(more.href) && more.target === "_blank" && more.rel === "noopener noreferrer", `Learn more is not a safe external link: ${JSON.stringify(more)}`);
-  await page.$eval("#whatsNewModal .about-modal", (m) => { m.scrollTop = 0; });
+  // The Dismiss row is sticky: cards scroll beneath it by design. Audit at the end of the list, where the row sits in
+  // its own place below the last card, so only real layout faults count.
+  await page.$eval("#whatsNewModal .about-modal", (m) => { m.scrollTop = m.scrollHeight; });
+  await pause(200);
   await audit(page, "#whatsNewModal .about-modal");
   const suggestion = await page.evaluate(() => [...document.querySelectorAll("#toasts .toast")].map((t) => t.textContent ?? "").filter((t) => /Tell me more|Wear it/.test(t)));
   assert(suggestion.length === 0, "Lucid's suggestion toast stacked on the popup");
