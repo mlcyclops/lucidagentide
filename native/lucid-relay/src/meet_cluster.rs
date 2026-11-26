@@ -49,6 +49,9 @@ const FILE_MAX: u64 = 5 << 30;
 /// A replicated relay directory is at most 64 KiB serialized (1.2); the file may carry a newline.
 const RELAYS_MAX: u64 = 64 * 1024 + 16;
 const HEAD_MAX: usize = 16 << 10;
+/// A file changed this recently may change again keeping its size and time: Linux stamps files from a clock that
+/// moves in ticks (milliseconds apart), some file systems in whole seconds. Its hash is never cached.
+const RACY: Duration = Duration::from_secs(3);
 const ASIDE_PREFIX: &str = "state.before-epoch-";
 const ASIDE_KEEP_S: u64 = 30 * 86_400;
 /// 2.5: the active renews the lease (and every node checks the witness and its peer) this often.
@@ -513,11 +516,10 @@ mod tree {
 
 // ── the replica set (2.2) ────────────────────────────────────────────────────────────────────────────────────
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 struct Entry {
     path: String,
     size: u64,
-    mtime: i128,
 }
 
 /// A file name the relay writes under `files/` or `emoji/` (never a temporary or partial one).
@@ -549,7 +551,7 @@ fn listing(dir: &Path) -> Vec<Entry> {
     let Ok(base) = tree::Dir::open(dir, None, false) else { return out };
     let mut add = |d: &tree::Dir, prefix: &str, name: &str| {
         if let Some(m) = d.meta(name).ok().filter(|m| m.file_type().is_file()) {
-            out.push(Entry { path: format!("{prefix}{name}"), size: m.len(), mtime: mtime_of(&m) });
+            out.push(Entry { path: format!("{prefix}{name}"), size: m.len() });
         }
     };
     for name in TOP_FILES {
@@ -804,7 +806,9 @@ enum Handover {
 
 struct Repl {
     generation: u64,
-    seen: Vec<Entry>,
+    /// The set at the last scan, path and hash: a generation is a change of content (two writes within one clock
+    /// tick leave size and time as they were).
+    seen: Vec<(String, String)>,
     handover: Handover,
     /// The standby's last replica request: when (unix seconds) and the generation it had.
     heard: Option<(i64, u64)>,
@@ -931,7 +935,7 @@ impl Cluster {
         let st = open_state(dir, &cfg)?;
         let lease_id = crate::meet_witness::lease_id(&cfg.id, &cfg.node);
         // generations start at the clock, so a restarted active never repeats one the standby already has
-        let repl = Repl { generation: crate::codec::now_ms() as u64, seen: listing(dir), handover: Handover::Idle, heard: None, writers: 0 };
+        let repl = Repl { generation: crate::codec::now_ms() as u64, seen: Vec::new(), handover: Handover::Idle, heard: None, writers: 0 };
         let now = pj::mono();
         Ok(Cluster {
             cfg,
@@ -1093,9 +1097,10 @@ impl Cluster {
 
     // ── the active: generation and the replica routes (2.3) ──
 
-    /// List the set again; a change since the last listing is a new generation (and wakes the long-polls).
+    /// List and hash the set again; a change of content since the last scan is a new generation (and wakes the
+    /// long-polls).
     pub fn scan(&self) -> u64 {
-        let now = listing(&self.dir);
+        let now: Vec<(String, String)> = listing(&self.dir).into_iter().filter_map(|e| self.hash_entry(&e.path).map(|h| (e.path, h))).collect();
         let mut r = self.repl.lock();
         if now != r.seen {
             r.seen = now;
@@ -1114,12 +1119,21 @@ impl Cluster {
 
     fn hash_entry(&self, path: &str) -> Option<String> {
         let (mut f, meta) = open_entry(&self.dir, path)?;
-        let key = (meta.len(), mtime_of(&meta));
+        self.hash_of(path, &mut f, &meta)
+    }
+
+    /// An open set file's hash, from the cache while its size and time are the hashed ones. The hash of a file
+    /// changed within `RACY` of the read is not kept: a later write could leave size and time as they were.
+    fn hash_of(&self, path: &str, f: &mut std::fs::File, meta: &std::fs::Metadata) -> Option<String> {
+        let key = (meta.len(), mtime_of(meta));
         if let Some((_, _, h)) = self.hashes.lock().get(path).filter(|(s, m, _)| (*s, *m) == key) {
             return Some(h.clone());
         }
-        let h = hash_reader(&mut f).ok()?;
-        self.hashes.lock().insert(path.to_string(), (key.0, key.1, h.clone()));
+        let settled = meta.modified().ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age > RACY);
+        let h = hash_reader(f).ok()?;
+        if settled {
+            self.hashes.lock().insert(path.to_string(), (key.0, key.1, h.clone()));
+        }
         Some(h)
     }
 
@@ -1162,17 +1176,8 @@ impl Cluster {
     /// `GET /v1/cluster/file`: the open file at that hash and its length; None when it changed (409).
     fn open_file(&self, path: &str, sha256: &str) -> Option<(std::fs::File, u64)> {
         let (mut f, meta) = open_entry(&self.dir, path)?;
-        let key = (meta.len(), mtime_of(&meta));
-        let cached = self.hashes.lock().get(path).filter(|(s, m, _)| (*s, *m) == key).map(|(_, _, h)| h.clone());
-        let h = match cached {
-            Some(h) => h,
-            None => {
-                let h = hash_reader(&mut f).ok()?;
-                f.seek(SeekFrom::Start(0)).ok()?;
-                self.hashes.lock().insert(path.to_string(), (key.0, key.1, h.clone()));
-                h
-            }
-        };
+        let h = self.hash_of(path, &mut f, &meta)?;
+        f.seek(SeekFrom::Start(0)).ok()?;
         (h == sha256).then_some((f, meta.len()))
     }
 
@@ -2753,8 +2758,13 @@ mod tests {
         let outside = dir("cluster-outside");
         std::fs::write(outside.join("secret"), "outside").unwrap();
         put(&p.lab.dir, "files/0123456789abcdef0123456789abcdef", "real");
+        // Unix always lets the test make links: it never skips there
         #[cfg(unix)]
-        let linked = std::os::unix::fs::symlink(outside.join("secret"), p.lab.dir.join("files/evil")).is_ok() && std::os::unix::fs::symlink(&outside, p.lab.dir.join("emoji")).is_ok();
+        let linked = {
+            std::os::unix::fs::symlink(outside.join("secret"), p.lab.dir.join("files/evil")).unwrap();
+            std::os::unix::fs::symlink(&outside, p.lab.dir.join("emoji")).unwrap();
+            true
+        };
         #[cfg(windows)]
         let linked = std::os::windows::fs::symlink_file(outside.join("secret"), p.lab.dir.join("files/evil")).is_ok() && std::os::windows::fs::symlink_dir(&outside, p.lab.dir.join("emoji")).is_ok();
         if !linked {
