@@ -830,4 +830,14 @@
 //            lifted so many agents keep the window answering, and a live rail (ADR-0674, ADR-0675); malformed plugin
 //            installs file no Live block, owners hold every store item (ADR-0673). 2.7.0 skipped. STABLE: marked Latest;
 //            moves the cask.
-export const APP_VERSION = "2.7.1";
+// v2.7.2-beta.1 = 2.7.1 plus (#676..#691): eleven new Lucid Agent Worlds on the store (P-WORLDS.2, ADR-0679) and
+//            Visualize drawing every running fleet lane (ADR-0680); docs.lucid-agents.com from About, onboarding and the
+//            palette (ADR-0681); session history export/import as a CDS-friendly lucid-history/1 file (ADR-0682); the
+//            Agent Worlds panel as a Fleet lane, resizable, with image chips and staged prompts (ADR-0683); Patron
+//            sign-in and world entitlements kept engine-side and renewed silently (ADR-0684); world Update buttons and
+//            notices (ADR-0685); a one-time What's new popup, replayable from About (ADR-0686); no 3D black flash (HDR
+//            sanitize pass, ADR-0687); World Forge planned (ADR-0689, Proposed); Anime and Professional options with
+//            backgrounds (ADR-0688); four tray reactions (ADR-0690); richer built-in mini games and Agent runner
+//            (ADR-0691); a preview chip's red x (P-PREVIEW.CHIPX1). PRERELEASE: never marked Latest; the Homebrew
+//            cask and stable installs stay on 2.7.1.
+export const APP_VERSION = "2.7.2-beta.1";
