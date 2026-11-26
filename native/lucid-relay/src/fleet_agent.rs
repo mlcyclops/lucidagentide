@@ -2638,6 +2638,10 @@ pub trait MeetHooks: Send + Sync {
     fn ca_held(&self) -> bool;
     /// A renewal switched `pki/current`: reload the TLS configuration and the signer client (8.4).
     fn pki_switched(&self);
+    /// MR-1 2.4: `hello` and `state` `cluster` (role, epoch, generation, lag); null for a single relay (not sent).
+    fn cluster(&self) -> Value {
+        Value::Null
+    }
 }
 
 static MEET_HOOKS: LazyLock<Mutex<HashMap<PathBuf, Arc<dyn MeetHooks>>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
@@ -3263,6 +3267,11 @@ impl Agent {
             m.insert("meetRoots".into(), json!(h.meet_roots()));
             m.insert("meetCrl".into(), h.meet_crl());
             m.insert("meetPki".into(), h.meet_pki());
+            // MR-1 2.4: only a cluster node names its cluster (older consoles refuse unknown keys)
+            let cluster = h.cluster();
+            if !cluster.is_null() {
+                m.insert("cluster".into(), cluster);
+            }
         }
         let (keys, opt) = w::op_spec("hello").map(|s| (s.keys, s.opt)).unwrap_or_default();
         m.retain(|k, _| keys.contains(&k.as_str()) || opt.contains(&k.as_str()));
@@ -3422,7 +3431,7 @@ impl Agent {
         // facts it carried (a change is sent again with the last body)
         let mut meet_renewing: Option<(u32, MeetRequests)> = None;
         let mut last_state: Option<Map<String, Value>> = None;
-        let mut meet_sent: Option<(Value, Value)> = self.meet().map(|h| (h.meet_crl(), h.meet_pki()));
+        let mut meet_sent: Option<(Value, Value, Value)> = self.meet().map(|h| (h.meet_crl(), h.meet_pki(), h.cluster()));
         let mut end = End::Closed(Duration::ZERO);
         let _ = leaf;
         loop {
@@ -3451,13 +3460,16 @@ impl Agent {
                 _ = minute.tick() => {
                     self.check_clock();
                     self.persist_clock(link.relay_id());
-                    // 9.3: `state` carries `meetCrl` and `meetPki` on change
+                    // 9.3: `state` carries `meetCrl` and `meetPki` on change (MR-1 2.4: and a cluster node's `cluster`)
                     if let (Some(h), Some(body)) = (self.meet(), last_state.as_ref()) {
-                        let now = (h.meet_crl(), h.meet_pki());
+                        let now = (h.meet_crl(), h.meet_pki(), h.cluster());
                         if meet_sent.as_ref() != Some(&now) {
                             let mut b = body.clone();
                             b.insert("meetCrl".into(), now.0.clone());
                             b.insert("meetPki".into(), now.1.clone());
+                            if !now.2.is_null() {
+                                b.insert("cluster".into(), now.2.clone());
+                            }
                             meet_sent = Some(now);
                             let text = w::evt_text("state", Value::Object(b));
                             if text.len() <= w::TO_CONSOLE_MAX && !tx.text(text).await {
@@ -3492,9 +3504,12 @@ impl Agent {
                     if op == "state" {
                         if let (Some(h), Some(o)) = (self.meet(), body.as_object_mut()) {
                             last_state = Some(o.clone());
-                            let now = (h.meet_crl(), h.meet_pki());
+                            let now = (h.meet_crl(), h.meet_pki(), h.cluster());
                             o.insert("meetCrl".into(), now.0.clone());
                             o.insert("meetPki".into(), now.1.clone());
+                            if !now.2.is_null() {
+                                o.insert("cluster".into(), now.2.clone());
+                            }
                             meet_sent = Some(now);
                         }
                     }

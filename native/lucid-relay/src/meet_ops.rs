@@ -1166,7 +1166,11 @@ fn pc_own_cert(who: &Identity, body: &Obj) -> R<()> {
 impl Relay {
     /// pc_upkeep: every upkeep tick, the signer's org policies; hourly, its CRL's age.
     pub fn pc_upkeep(&self) {
-        self.pc_pull_policies();
+        // MR-1 2.4: the org policies land in state.json, so only a node that serves people takes them (a standby's come
+        // from the active); the CRL check below is per node
+        if self.hub.cluster_writes().is_ok() {
+            self.pc_pull_policies();
+        }
         if pj::mono() - *self.pc_last_crl_check.lock() >= pc::CRL_CHECK_EVERY {
             self.pc_check_signer_crl();
         }

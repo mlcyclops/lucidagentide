@@ -149,7 +149,14 @@ fn get_route(path: &str) -> Option<Route> {
             let who = c.who(false)?;
             c.relay.version(&c.q("session", ""), &who)
         },
-        "/healthz" => |_: &mut Ctx| Ok(obj([("ok", Value::Bool(true))])),
+        "/healthz" => |c: &mut Ctx| Ok(c.relay.hub.health()),
+        // MR-1 1.4: the held root-signed relay directory (a client certificate, any license state)
+        "/v1/relays" => |c: &mut Ctx| {
+            c.who(false)?;
+            let dir = &c.relay.settings.state_dir;
+            let answer = if dir.is_empty() { serde_json::json!({"ok": true, "directory": null}) } else { crate::meet_relays::get(std::path::Path::new(dir)) };
+            Ok(answer.as_object().cloned().unwrap_or_default())
+        },
         // wave3:files
         "/v1/files/get" => files_get,
         "/v1/files/list" => |c: &mut Ctx| {
@@ -326,6 +333,7 @@ fn post_route(path: &str) -> Option<Route> {
             let (who, b) = (c.who(false)?, c.body()?);
             c.relay.hub.admin_set_organization(&pj::s(&b, "session"), &who, b.get("principal"), b.get("id"), b.get("label"), b.get("remove"))
         },
+        "/v1/relays" => relays_post,
         "/v1/caption" => caption,
         "/v1/captions" => captions,
         "/v1/room/options" => room_options,
@@ -845,6 +853,11 @@ pub fn has_route(method: &str, path: &str) -> bool {
 /// do_GET / do_POST: 404 `unknown path`, else the route's answer through Handler._run. None when the client went
 /// away.
 pub fn dispatch(ctx: &mut Ctx, method: &str) -> Option<(u16, Obj)> {
+    // MR-1 2.3: the cluster routes exist for the pinned peer certificate only (a relay certificate, so before the
+    // refusal of relay certificates below)
+    if let Some(answer) = cluster_route(ctx, method) {
+        return answer;
+    }
     // the web port's own allow-list ran first (it has no client certificate)
     if let Some(refused) = ctx.web.is_none().then(|| confined(ctx, method)).flatten() {
         return run(ctx, Ok(Err(refused)));
@@ -852,6 +865,13 @@ pub fn dispatch(ctx: &mut Ctx, method: &str) -> Option<(u16, Obj)> {
     let route = if method == "GET" { get_route(&ctx.path) } else { post_route(&ctx.path) };
     let Some(route) = route else {
         return Some((404, obj([("error", Value::from("unknown path"))])));
+    };
+    // MR-1 2.4: a standby or fenced node answers 503 on every route but /healthz, GET /v1/relays and GET /v1/crl; on
+    // the active a write is counted until it is answered, so a handover can wait for it
+    let _admitted = match ctx.relay.hub.cluster().cloned().map(|c| c.admit(method, &ctx.path)) {
+        Some(Err(refused)) => return Some(refused),
+        Some(Ok(admitted)) => admitted,
+        None => None,
     };
     // AC-1 2.4 and 4.10 (R42-1): the service gate and the seat refusal, before the route reads anything
     if let Some(gate) = ctx.relay.hub.gate() {
@@ -862,6 +882,26 @@ pub fn dispatch(ctx: &mut Ctx, method: &str) -> Option<(u16, Obj)> {
     }
     let result = std::panic::catch_unwind(AssertUnwindSafe(|| route(ctx)));
     run(ctx, result)
+}
+
+/// MR-1 2.3: `/v1/cluster/*` and the peer's `/healthz` answered by the cluster node (Some), or None to go on.
+fn cluster_route(ctx: &mut Ctx, method: &str) -> Option<Option<(u16, Obj)>> {
+    if ctx.web.is_some() {
+        return None;
+    }
+    let cluster = ctx.relay.hub.cluster()?.clone();
+    Some(match cluster.route(method, &ctx.path, &ctx.query, ctx.der)? {
+        crate::meet_cluster::Answer::Json(status, body) => {
+            ctx.close |= status == 409;
+            Some((status, body))
+        }
+        crate::meet_cluster::Answer::File(file, count) => {
+            let id = ctx.q("path", "");
+            let headers = vec![("Content-Type", "application/octet-stream".to_string()), ("Content-Length", count.to_string()), ("Cache-Control", "no-store".to_string())];
+            ctx.raw = Some(m::Raw::File(m::RawFile { headers, file, offset: 0, count, id, principal: format!("cluster-peer:{}", cluster.cfg.peer.node) }));
+            Some((200, Obj::new()))
+        }
+    })
 }
 
 /// _pcr_confined (PC-1, before any route lookup; the connection closes with the body left unread): a service
@@ -1359,7 +1399,52 @@ fn hello(c: &mut Ctx) -> R<Obj> {
         c.relay.note_outdated(&who, &info);
         reply.insert("update_required".into(), Value::Object(info));
     }
+    // MR-1 2.6: the node that answered and the relay directory it holds (clients fetch a newer one at once)
+    let s = &c.relay.settings;
+    reply.insert("node".into(), s.cluster.as_ref().map_or(Value::Null, |k| Value::from(k.node.clone())));
+    let version = (!s.state_dir.is_empty()).then(|| crate::meet_relays::version(std::path::Path::new(&s.state_dir))).flatten();
+    reply.insert("directory_version".into(), version.map_or(Value::Null, Value::from));
     Ok(reply)
+}
+
+/// MR-1 1.4: `POST /v1/relays` from an admin device: the wire `{directory, sig}` (plus the admin's `session`, when it
+/// names one), checked against the org root and the held directory, then kept as `relays.json`.
+fn relays_post(c: &mut Ctx) -> R<Obj> {
+    let (who, mut b) = (c.who(false)?, c.body_max(m::BODY_MAX + 1024)?);
+    match b.remove("session") {
+        Some(Value::String(session)) if !session.is_empty() => c.relay.hub.check_admin(&session, &who)?,
+        _ if c.relay.hub.is_admin(&who.principal) && !who.device.is_empty() => {}
+        _ => return m::forbidden("only the person who issues certificates can do that"),
+    }
+    let s = &c.relay.settings;
+    if s.state_dir.is_empty() {
+        return Err(m::E::Unavailable("this relay has no state folder".into()));
+    }
+    let dir = std::path::Path::new(&s.state_dir);
+    let own = s.cluster.as_ref().map(|k| k.node.as_str());
+    let wire = Value::Object(b);
+    let now = pj::now() as i64;
+    // the directory is signed by the org root: one of the self-signed certificates in client_ca
+    let roots = crate::meet_cluster::org_roots(&s.client_ca);
+    let mut refused = (403, "sig", "the relay directory is not signed by the organization root".to_string());
+    for root in &roots {
+        match crate::meet_relays::post(dir, root, own, &wire, now) {
+            Ok(answer) => {
+                if let Some(k) = c.relay.hub.cluster() {
+                    k.note_saved();
+                }
+                m::log_info(&format!("relays.directory principal={} version={}", who.principal, answer.get("version").map(Value::to_string).unwrap_or_default()));
+                return Ok(answer.as_object().cloned().unwrap_or_default());
+            }
+            Err(e) if e.1 == "sig" => refused = e,
+            Err(e) => {
+                refused = e;
+                break;
+            }
+        }
+    }
+    m::log_warn(&format!("relays.refused principal={} code={} why={}", who.principal, refused.1, m::kv(&refused.2)));
+    Err(m::E::Coded(refused.0, refused.1, refused.2))
 }
 
 fn bye(c: &mut Ctx) -> R<Obj> {
@@ -1450,5 +1535,37 @@ mod tests {
         for p in ["/v1/admin/approve", "/v1/admin/revoke", "/v1/admin/invite"] {
             assert!(post_route(p).is_some(), "{p}");
         }
+    }
+
+
+    /// MR-1 2.6: the hello answer names the node that answered and the version of the relay directory it holds (null
+    /// for a single relay and for no directory).
+    #[test]
+    fn mr1_hello_names_the_node_and_the_directory_version() {
+        use std::io::BufReader;
+        use std::net::{TcpListener, TcpStream};
+        let hello_of = |relay: &std::sync::Arc<m::Relay>| -> Obj {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let tcp = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+            let conn = rustls::ServerConnection::new(relay.tls.read().clone()).unwrap();
+            let mut reader = BufReader::new(m::Tls::new(conn, tcp));
+            let head = m::Head { requestline: "POST /v1/hello HTTP/1.1".into(), method: "POST".into(), target: "/v1/hello".into(), close: false, headers: Vec::new() };
+            let who = m::Identity { principal: "ann@x.org".into(), device: "0123456789abcdef".into(), kind: "person".into(), ..Default::default() };
+            let mut c = Ctx::web(relay, &mut reader, &head, "198.51.100.1", "/v1/hello".into(), "", who, Some(Obj::new()));
+            hello(&mut c).unwrap()
+        };
+        let single = hello_of(&m::test_relay(m::Settings { state_dir: String::new(), ..m::Settings::default() }));
+        assert!(single.contains_key("session"));
+        assert_eq!((single.get("node"), single.get("directory_version")), (Some(&Value::Null), Some(&Value::Null)));
+        let state = crate::meet_tls::testpki::dir("hello-mr1");
+        let cluster = crate::meet_cluster::parse(&serde_json::json!({"id": "emertins-meet", "node": "lab", "role": "active",
+            "peer": {"node": "azure", "url": "https://meet-azure.emertins.com", "spki_sha256": crate::codec::b64u(&[3u8; 32])},
+            "client_cert": "/c.crt", "client_key": "/c.key"}))
+        .unwrap();
+        let relay = m::test_relay(m::Settings { state_dir: state.display().to_string(), cluster: Some(cluster), ..m::Settings::default() });
+        let answer = hello_of(&relay);
+        assert_eq!((answer.get("node"), answer.get("directory_version")), (Some(&Value::from("lab")), Some(&Value::Null)));
+        std::fs::write(state.join("relays.json"), r#"{"directory": {"version": 3}, "sig": "AA=="}"#).unwrap();
+        assert_eq!(hello_of(&relay).get("directory_version"), Some(&Value::from(3)));
     }
 }

@@ -166,6 +166,8 @@ pub enum E {
     Held(String, Obj),
     /// _GuestsBusy: 429 on the guest port, with Retry-After seconds.
     Busy(String, u64),
+    /// A refusal with a status and a contract `code` (MR-1 `/v1/relays`): `{"ok": false, "code", "error"}`.
+    Coded(u16, &'static str, String),
     /// The client went away while its body was read: nobody to answer.
     ClientGone,
     /// Anything else: 500 (logged).
@@ -175,7 +177,7 @@ pub enum E {
 impl E {
     pub fn message(&self) -> String {
         match self {
-            E::Forbidden(m) | E::Conflict(m) | E::NotFound(m) | E::Unavailable(m) | E::Gone(m) | E::Bad(m) | E::Internal(m) | E::Status(_, m, _) | E::Held(m, _) | E::ConflictInfo(m, _) | E::Busy(m, _) => m.clone(),
+            E::Forbidden(m) | E::Conflict(m) | E::NotFound(m) | E::Unavailable(m) | E::Gone(m) | E::Bad(m) | E::Internal(m) | E::Status(_, m, _) | E::Held(m, _) | E::ConflictInfo(m, _) | E::Busy(m, _) | E::Coded(_, _, m) => m.clone(),
             E::Update(info) => update_message(info),
             E::ClientGone => String::new(),
         }
@@ -311,6 +313,8 @@ pub struct Settings {
     pub web_key: String,
     pub web_sso_url: Value,
     pub web_orgs: Value,
+    /// MR-1 2.1: this relay as one node of a two-node cluster (None = a single relay as before).
+    pub cluster: Option<crate::meet_cluster::ClusterSettings>,
 }
 
 /// relay.json `push`: `{enabled, team_id, key_id, key_file (the .p8, never logged), topic (the app's bundle id),
@@ -349,14 +353,14 @@ pub struct FcmSettings {
     pub credentials_file: String,
 }
 
-const SETTINGS_FIELDS: [&str; 72] = [
+const SETTINGS_FIELDS: [&str; 73] = [
     "guest_verify_url", "guest_rules", "gov_baseline", "gov_domains", "captioner_principal", "web_port", "web_public", "web_cert", "web_key", "web_sso_url", "web_orgs",
     "host", "port", "cert", "key", "client_ca", "crl", "turn_secret_file", "turn_host", "turn_host_public", "turn_ttl", "stun_urls", "state_dir", "admins", "history_hours", "mail_days", "channel_days", "signer_url", "signer_cert",
     "signer_key", "signer_ca", "files_secret_file", "files_base", "console_sources", "files_power", "min_client", "version_exempt", "recording_enabled", "organizations", "file_max_mb", "files_quota_gb", "guest_port",
     "guest_public", "guest_cert", "guest_key", "sfu_url", "sfu_api_key", "sfu_secret_file", "sfu_threshold", "sfu_max",
     "bridge_policies", "chat_e2ee", "chat_history_share", "attendance", "attendance_days", "emoji_max", "push", "enclave", "enclave_networks", "legal_holds", "notify_previews",
     "console_port", "console_public", "console_cert", "console_key", "console_first_admin", "console_profile", "license",
-    "with_console", "fleet_proxy", "fleet_pki", "license_edition",
+    "with_console", "fleet_proxy", "fleet_pki", "license_edition", "cluster",
 ];
 
 /// ORG_FIELD_MAX: characters of an organization id or label.
@@ -449,6 +453,7 @@ impl Default for Settings {
             web_key: String::new(),
             web_sso_url: Value::from(""),
             web_orgs: Value::Array(Vec::new()),
+            cluster: None,
         }
     }
 }
@@ -734,6 +739,13 @@ impl Settings {
         ] {
             if let Some(v) = raw.get(k) {
                 *slot = v.clone();
+            }
+        }
+        if let Some(v) = raw.get("cluster") {
+            s.cluster = Some(crate::meet_cluster::parse(v)?);
+            // the role, the replica and the moved-aside state all live in the state folder
+            if s.state_dir.trim().is_empty() {
+                return Err("relay settings: cluster needs state_dir".into());
             }
         }
         Ok(s)
@@ -1262,6 +1274,10 @@ pub fn main(argv: &[String]) -> ! {
     if matches!(argv.first().map(String::as_str), Some("enroll" | "fleet")) {
         fleet_cli(argv);
     }
+    // MR-1 2.5: `meet cluster status|promote|demote|handover --config <relay.json>`
+    if argv.first().map(String::as_str) == Some("cluster") {
+        crate::meet_cluster::cli(&argv[1..]);
+    }
     let (mut config, mut verbose) = (None, false);
     let mut i = 0;
     while i < argv.len() {
@@ -1288,7 +1304,7 @@ pub fn main(argv: &[String]) -> ! {
 }
 
 /// `--config <relay.json>` (or `--config=`) out of `args`, and the rest in order.
-fn split_config(args: &[String]) -> (Option<String>, Vec<String>) {
+pub(crate) fn split_config(args: &[String]) -> (Option<String>, Vec<String>) {
     let (mut config, mut rest, mut i) = (None, Vec::new(), 0);
     while i < args.len() {
         if let Some(v) = args[i].strip_prefix("--config=") {
@@ -1515,6 +1531,10 @@ impl crate::fleet_agent::MeetHooks for MeetFleet {
             r.pki_switched();
         }
     }
+
+    fn cluster(&self) -> Value {
+        self.relay.upgrade().and_then(|r| r.hub.cluster().map(|c| c.status())).unwrap_or(Value::Null)
+    }
 }
 
 impl Relay {
@@ -1598,6 +1618,11 @@ fn serve(settings: Settings) -> ! {
     let links = Arc::new(LinkStats::new());
     let state_dir = (!settings.state_dir.is_empty()).then(|| PathBuf::from(&settings.state_dir));
     let hub = Arc::new(Hub::new(state_dir.clone(), &settings.admins, settings.history_hours, settings.mail_days, settings.channel_days, signer.clone(), links.clone()));
+    // MR-1 2.1: the node's role before anything can save or answer
+    let cluster = settings.cluster.as_ref().map(|c| crate::meet_cluster::Cluster::open(c, Path::new(&settings.state_dir)).unwrap_or_else(|e| die(&e)));
+    if let Some(c) = &cluster {
+        hub.set_cluster(c.clone());
+    }
     {
         let mut st = hub.st.lock();
         st.recording_enabled = settings.recording_enabled;
@@ -1655,16 +1680,24 @@ fn serve(settings: Settings) -> ! {
     let gate_cfg = crate::meet_license::GateConfig { state_dir: state_dir.clone(), license_file, client_ca: PathBuf::from(&settings.client_ca), audit_by_deploy };
     let gate = crate::meet_license::MeetGate::open(gate_cfg, &hub, crate::meet_time::clock()).unwrap_or_else(|e| die(&e));
     hub.set_gate(gate.clone());
+    let gate_hub = hub.clone();
     std::thread::Builder::new()
         .name("meet-gate".into())
         .spawn(move || loop {
             std::thread::sleep(std::time::Duration::from_secs(30));
-            gate.check(true);
+            // MR-1 2.4: seats change only on the node that serves people (a standby's come from the active)
+            if gate_hub.serving() {
+                gate.check(true);
+            }
             if let Err(e) = gate.time.save() {
                 log_error(&e);
             }
         })
         .unwrap_or_else(|e| die(&e.to_string()));
+    // MR-1 2.3, 2.5: the peer, the witness (checked once now) and the pull and witness loops
+    if let Some(c) = &cluster {
+        crate::meet_cluster::start(c, &settings, &hub).unwrap_or_else(|e| die(&e));
+    }
     hub.start();
     // AC-1 3.1: the Admin Console on its own port and host name (nothing when console_port is 0)
     crate::console_meet::start(&relay).unwrap_or_else(|e| die(&e));
@@ -1786,6 +1819,7 @@ pub(crate) fn reason_phrase(status: u16) -> &'static str {
         431 => "Request Header Fields Too Large",
         500 => "Internal Server Error",
         501 => "Not Implemented",
+        503 => "Service Unavailable",
         505 => "HTTP Version Not Supported",
         507 => "Insufficient Storage",
         _ => "",
@@ -2348,6 +2382,7 @@ pub fn run(ctx: &mut Ctx, result: std::thread::Result<R<Obj>>) -> Option<(u16, O
             (429, err(m))
         }
         Err(E::NotFound(m)) => (404, err(m)),
+        Err(E::Coded(status, code, m)) => (status, obj([("ok", Value::Bool(false)), ("code", Value::from(code)), ("error", Value::from(m))])),
         Err(E::Unavailable(m)) => (501, err(m)),
         Err(E::Gone(m)) => (410, err(m)),
         Err(E::Bad(m)) => (400, err(m)),
@@ -2561,6 +2596,27 @@ mod tests {
         assert!(!Settings::default().fleet_pki);
         std::fs::write(&file, r#"{"fleet_pki": "yes"}"#).unwrap();
         assert_eq!(Settings::load(&path(&file)).unwrap_err(), "relay settings: fleet_pki must be true or false");
+    }
+
+    /// MR-1 2.1: `cluster` is optional, checked key by key; unknown keys refuse the start, and it needs a state folder.
+    #[test]
+    fn mr1_cluster_setting() {
+        let d = dir("settings-cluster");
+        let file = d.join("relay.json");
+        assert!(Settings::load(&path(&file).replace("relay.json", "absent.json")).is_err());
+        std::fs::write(&file, "{}").unwrap();
+        assert!(Settings::load(&path(&file)).unwrap().cluster.is_none());
+        let pin = crate::codec::b64u(&[9u8; 32]);
+        let cluster = json!({"id": "emertins-meet", "node": "lab", "role": "active", "peer": {"node": "azure", "url": "https://meet-azure.emertins.com", "spki_sha256": pin}, "client_cert": "/c.crt", "client_key": "/c.key"});
+        std::fs::write(&file, json!({"cluster": cluster}).to_string()).unwrap();
+        let c = Settings::load(&path(&file)).unwrap().cluster.unwrap();
+        assert_eq!((c.node.as_str(), c.peer.node.as_str(), c.lease_s), ("lab", "azure", 30));
+        let mut extra = cluster.clone();
+        extra["peers"] = json!([]);
+        std::fs::write(&file, json!({"cluster": extra}).to_string()).unwrap();
+        assert_eq!(Settings::load(&path(&file)).unwrap_err(), "unknown relay settings: cluster.peers");
+        std::fs::write(&file, json!({"cluster": cluster, "state_dir": ""}).to_string()).unwrap();
+        assert_eq!(Settings::load(&path(&file)).unwrap_err(), "relay settings: cluster needs state_dir");
     }
 
     /// R2-L10, D16: a relay or signer client certificate is never a person, even one that also names a person.

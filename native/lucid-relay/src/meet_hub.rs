@@ -1899,6 +1899,8 @@ pub struct Hub {
     denied_until: Mutex<HashMap<String, f64>>,
     /// AC-1 2.4 (R4-1, R4-2): the Meeting Hub service gate and seats, installed at start before the ports listen.
     gate: Mutex<Option<Arc<crate::meet_license::MeetGate>>>,
+    /// MR-1 2.4: this relay's node of a cluster (set once at start; none for a single relay).
+    cluster: std::sync::OnceLock<Arc<crate::meet_cluster::Cluster>>,
 }
 
 /// What the Admin Console wants to hear from the hub (contract 3.2 latching, 3.8 observation).
@@ -1998,7 +2000,7 @@ impl Hub {
             pc_docs: pc_docs::DocsRate::default(),
             wa: wa::Wa::new(),
         };
-        let hub = Hub { st: Mutex::new(st), cond: Condvar::new(), signer, links, state_dir, save_lock: Mutex::new(()), stop: AtomicBool::new(false), console_hooks: Mutex::new(None), denied_until: Mutex::new(HashMap::new()), gate: Mutex::new(None) };
+        let hub = Hub { st: Mutex::new(st), cond: Condvar::new(), signer, links, state_dir, save_lock: Mutex::new(()), stop: AtomicBool::new(false), console_hooks: Mutex::new(None), denied_until: Mutex::new(HashMap::new()), gate: Mutex::new(None), cluster: std::sync::OnceLock::new() };
         if hub.state_dir.is_some() {
             hub.load();
         }
@@ -2131,6 +2133,10 @@ impl Hub {
     pub fn save(&self) {
         let Some(path) = self.path() else { return };
         let _g = self.save_lock.lock();
+        // MR-1 2.3: a standby's state.json is the active's copy; its own Hub never writes over it
+        if self.cluster().is_some_and(|c| !c.saves_allowed()) {
+            return;
+        }
         let data = {
             let mut st = self.st.lock();
             st.dirty = false;
@@ -2160,11 +2166,55 @@ impl Hub {
         if let Err(e) = result {
             log_warn(&format!("cannot write {}: {e}", path.display()));
             self.st.lock().dirty = true;
+            return;
+        }
+        // MR-1 2.3: a new replica generation for the standby
+        if let Some(c) = self.cluster() {
+            c.note_saved();
+        }
+    }
+
+    /// MR-1 2.4: wait for a save in progress (a node turning standby stops saving first).
+    pub fn save_barrier(&self) {
+        drop(self.save_lock.lock());
+    }
+
+    pub fn set_cluster(&self, c: Arc<crate::meet_cluster::Cluster>) {
+        let _ = self.cluster.set(c);
+    }
+
+    pub fn cluster(&self) -> Option<&Arc<crate::meet_cluster::Cluster>> {
+        self.cluster.get()
+    }
+
+    /// MR-1 2.4: whether this relay serves people now (always without a cluster; else the active node, not handing
+    /// over). The loops that change state run only then.
+    pub fn serving(&self) -> bool {
+        self.cluster().is_none_or(|c| c.serving())
+    }
+
+    /// MR-1 2.4: the one check before a change that does not come through a client route (the console, the fleet
+    /// link, an upkeep): Err the refusal's code and words while this node does not serve people, so a standby or
+    /// fenced node never takes state it would diverge on.
+    pub fn cluster_writes(&self) -> Result<(), (&'static str, &'static str)> {
+        match self.cluster() {
+            Some(c) if !c.serving() => Err(c.not_serving()),
+            _ => Ok(()),
+        }
+    }
+
+    /// MR-1 2.4: `/healthz`, with the node's role, epoch and id when it is in a cluster.
+    pub fn health(&self) -> Obj {
+        match self.cluster() {
+            Some(c) => c.health(),
+            None => obj([("ok", Value::Bool(true))]),
         }
     }
 
     /// Background upkeep: the NT-1 ring timer and delayed pushes every NT_TICK s (at most 1 s late), reap every
-    /// REAP_EVERY s, save at most every SAVE_EVERY s when something changed.
+    /// REAP_EVERY s, save at most every SAVE_EVERY s when something changed. MR-1 2.4: on a node that does not serve
+    /// people only the save runs (a fenced node keeps what it has; a standby saves nothing); the active lists its
+    /// replica set at the same pace, so writers other than the save are seen too.
     pub fn start(self: &Arc<Self>) {
         let hub = self.clone();
         let _ = std::thread::Builder::new().name("relay-upkeep".into()).spawn(move || {
@@ -2176,8 +2226,11 @@ impl Hub {
                     return;
                 }
                 let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    hub.push_tick();
-                    if pj::mono() - last_reap >= REAP_EVERY {
+                    let serving = hub.serving();
+                    if serving {
+                        hub.push_tick();
+                    }
+                    if serving && pj::mono() - last_reap >= REAP_EVERY {
                         last_reap = pj::mono();
                         hub.reap();
                         hub.wave3_tick();
@@ -2186,6 +2239,9 @@ impl Hub {
                         last_save = pj::mono();
                         if hub.st.lock().dirty {
                             hub.save();
+                        }
+                        if let Some(c) = hub.cluster() {
+                            c.note_saved();
                         }
                     }
                 }));

@@ -1571,6 +1571,7 @@ impl Fleet {
             "health": self.health(rec, connected, t), "scopes": rec.scopes, "pendingScopes": rec.pending_scopes,
             "readOnly": rec.report_bool("readOnly"), "confirm": strings(rec.report.get("confirm")), "certNotAfter": cert,
             "nodes": nodes, "services": services, "attention": rec.attention.len() + usize::from(!rec.unknown.is_empty()),
+            "cluster": cluster_view(rec.report.get("cluster")),
         })
     }
 
@@ -3000,8 +3001,9 @@ impl Fleet {
     /// Take a relay's report fields into its record (untrusted, kept as reported; shown cleaned). A frame whose
     /// `license` is not the exact 5.6 shape (3.4.1) is refused whole with `fleet-op`: nothing of it is taken.
     fn take_report(rec: &mut RelayRecord, body: &Value) -> Result<(), ApiError> {
-        // AC-2b-D 9.3: `meetRoots`, `meetCrl` and `meetPki` (Meeting Hub relays).
-        const KEYS: [&str; 25] = ["version", "fips", "profile", "os", "localConsole", "scopes", "scopeGeneration", "scopeRequest", "readOnly", "confirm", "bootstrap", "policySeq", "rosterSeq", "trustSeq", "pins", "certNotAfter", "held", "unattested", "license", "waiting", "anchors", "trustTimeAhead", "meetRoots", "meetCrl", "meetPki"];
+        // AC-2b-D 9.3: `meetRoots`, `meetCrl` and `meetPki` (Meeting Hub relays). MR-1 4: `cluster` (object, or null
+        // outside a cluster).
+        const KEYS: [&str; 26] = ["version", "fips", "profile", "os", "localConsole", "scopes", "scopeGeneration", "scopeRequest", "readOnly", "confirm", "bootstrap", "policySeq", "rosterSeq", "trustSeq", "pins", "certNotAfter", "held", "unattested", "license", "waiting", "anchors", "trustTimeAhead", "meetRoots", "meetCrl", "meetPki", "cluster"];
         let Some(o) = body.as_object() else { return Err(ApiError::of("fleet-op")) };
         let license = match o.get("license") {
             Some(v) => Some(license_report(v).ok_or_else(|| ApiError::of("fleet-op"))?),
@@ -3410,6 +3412,7 @@ impl Fleet {
             out.push(item("fips-needed", "bad", json!({}), "#/security/settings".into()));
         }
         out.extend(self.meet_attention(t));
+        out.extend(self.directory_attention(t));
         let book_seq = self.book.lock().roster_seq;
         let _ = book_seq;
         let eligible = self.eligible_entries(c);
@@ -3648,6 +3651,8 @@ const DAY_MS: i64 = 86_400_000;
 const MEET_CERT_WARN_DAYS: i64 = 14;
 const SIGNER_CERT_WARN_DAYS: i64 = 3;
 const MEET_CA_EXPIRING_DAYS: i64 = 365;
+/// MR-1 4: `relay-directory-expiring` 30 days before a cluster's signed relay directory ends.
+const DIRECTORY_WARN_DAYS: i64 = 30;
 /// AC-2b-D 8.4: the old server serial is revoked 7 days after the relay reports the new one in `hello`.
 const SERVER_GRACE_MS: i64 = 7 * DAY_MS;
 /// AC-2b-D 8.5 `signer-crl-stale`: the certificate server's held list older than the console's for 6 hours.
@@ -3809,6 +3814,26 @@ fn signer_users(reg: &Registry) -> impl Iterator<Item = &RelayRecord> {
 /// What a relay last reported of its certificate server's enforcement (`meetPki.signerCrlEnforced`).
 fn signer_enforced_report(r: &RelayRecord) -> Option<bool> {
     r.report.get("meetPki").and_then(|p| p.get("signerCrlEnforced")).and_then(Value::as_bool)
+}
+
+/// MR-1 4: a relay's reported `cluster`, cleaned for the Relays list and the Summary (null outside a cluster).
+fn cluster_view(report: Option<&Value>) -> Value {
+    let Some(c) = report.and_then(Value::as_object) else { return Value::Null };
+    let text = |v: Option<&Value>| str_of(v).map(|s| clean(s).chars().take(64).collect::<String>());
+    let peer = c.get("peer").and_then(|p| if p.is_object() { p.get("node") } else { Some(p) });
+    json!({
+        "cluster": text(c.get("cluster")), "node": text(c.get("node")),
+        "role": str_of(c.get("role")).filter(|r| matches!(*r, "active" | "standby" | "fenced")),
+        "epoch": c.get("epoch").and_then(Value::as_u64), "generation": c.get("generation").and_then(Value::as_u64),
+        "lagS": c.get("lagS").and_then(Value::as_f64).filter(|l| l.is_finite() && *l >= 0.0), "peer": text(peer),
+        "witness": c.get("witness").and_then(Value::as_bool), "autoPromote": c.get("autoPromote").and_then(Value::as_bool),
+        "directoryVersion": c.get("directoryVersion").and_then(Value::as_u64), "directoryExpires": directory_expires(c.get("directoryExpires")),
+    })
+}
+
+/// A reported `directoryExpires` (RFC 3339) in ms, as the console's other times are.
+fn directory_expires(v: Option<&Value>) -> Option<i64> {
+    str_of(v).and_then(crate::meet_json::from_iso).map(|s| (s * 1000.0) as i64)
 }
 
 /// AC-2b-D 8.4 Lifetime (R4-M1): every relay of the certificate server, `relay` among them, reports enforcement.
@@ -4486,6 +4511,28 @@ impl Fleet {
             out.push(item("signer-crl-stale", "warn", json!({ "url": s.get("url"), "number": s.get("number") }), page()));
         }
         out
+    }
+
+    /// MR-1 4: a cluster's signed relay directory 30 days before it ends, and once ended (one item per cluster: its
+    /// nodes hold copies of the same directory). From what each live relay last reported.
+    fn directory_attention(&self, t: i64) -> Vec<Value> {
+        let mut ends: Vec<(String, i64)> = Vec::new();
+        for r in self.registry.lock().relays.values().filter(|r| r.state.live() && r.product == Product::Meet) {
+            let view = cluster_view(r.report.get("cluster"));
+            let (Some(cluster), Some(at)) = (str_of(view.get("cluster")), view.get("directoryExpires").and_then(Value::as_i64)) else { continue };
+            match ends.iter_mut().find(|(c, _)| c == cluster) {
+                Some(e) => e.1 = e.1.max(at),
+                None => ends.push((cluster.to_owned(), at)),
+            }
+        }
+        ends.sort();
+        ends.into_iter()
+            .filter_map(|(cluster, at)| {
+                let days = (at - t).div_euclid(DAY_MS);
+                let (kind, severity) = if at <= t { ("relay-directory-expired", "bad") } else if days <= DIRECTORY_WARN_DAYS { ("relay-directory-expiring", "warn") } else { return None };
+                Some(json!({ "kind": kind, "severity": severity, "args": { "cluster": cluster, "days": days }, "go": "#/meet/relays" }))
+            })
+            .collect()
     }
 
     /// A relay's certificates from the CA for its detail page (admins).
@@ -6890,6 +6937,42 @@ mod tests {
         // A relay's own `profile-lock-refused` reaches Overview (6.4).
         h.f.on_event(&relay, "attention", &json!({ "items": [{ "kind": "profile-lock-refused", "severity": "bad", "args": { "date": t, "configured": "standard" } }] }), t);
         assert!(h.f.attention_items(&h.c, t).iter().any(|a| a["kind"] == "profile-lock-refused" && a["relay"] == "Relay A"));
+    }
+
+    #[test]
+    fn cluster_report_shows_cleaned_and_the_directory_raises_attention() {
+        let h = boot("cluster-report");
+        let lab = h.seed(Product::Meet);
+        let azure = h.seed(Product::Meet);
+        let t = crate::codec::now_ms();
+        let iso = |ms: i64| crate::meet_json::iso_utc(ms.div_euclid(1000)).replace("+00:00", "Z");
+        let report = |role: &str, expires: i64| json!({ "ok": true, "cluster": "emertins-meet", "node": "lab\u{7}", "role": role, "epoch": 3, "generation": 120, "lagS": 2.5,
+            "peer": { "node": "azure" }, "witness": true, "autoPromote": true, "directoryVersion": 4, "directoryExpires": iso(expires) });
+        // `cluster` is taken from a hello or state frame like the other report keys
+        Fleet::take_report(h.f.registry().relays.get_mut(&lab).unwrap(), &json!({ "cluster": report("active", t + 60 * DAY_MS) })).unwrap();
+        let row_of = |id: &str| {
+            let rec = h.f.registry().relays[id].clone();
+            h.f.row(&rec, t)
+        };
+        let row = row_of(&lab);
+        assert_eq!((row["cluster"]["node"].as_str(), row["cluster"]["role"].as_str(), row["cluster"]["peer"].as_str()), (Some("lab"), Some("active"), Some("azure")));
+        assert_eq!((row["cluster"]["epoch"].as_u64(), row["cluster"]["generation"].as_u64(), row["cluster"]["lagS"].as_f64()), (Some(3), Some(120), Some(2.5)));
+        assert_eq!(row["cluster"]["directoryExpires"].as_i64(), Some((t + 60 * DAY_MS).div_euclid(1000) * 1000));
+        h.report(&azure, "cluster", json!({ "role": "leader", "epoch": -1 }));
+        let other = row_of(&azure);
+        assert!(other["cluster"]["role"].is_null() && other["cluster"]["epoch"].is_null(), "unknown roles and bad numbers are not shown");
+        h.report(&azure, "cluster", Value::Null);
+        assert!(row_of(&azure)["cluster"].is_null());
+        // one item per cluster, 30 days before its directory ends, then bad once ended
+        let items = |at: i64| h.f.directory_attention(at);
+        assert!(items(t).is_empty());
+        h.report(&azure, "cluster", report("standby", t + 60 * DAY_MS));
+        let soon = items(t + 31 * DAY_MS);
+        assert_eq!(soon.len(), 1);
+        assert_eq!((soon[0]["kind"].as_str(), soon[0]["severity"].as_str(), soon[0]["args"]["cluster"].as_str()), (Some("relay-directory-expiring"), Some("warn"), Some("emertins-meet")));
+        assert_eq!(soon[0]["args"]["days"], 28);
+        assert_eq!(items(t + 61 * DAY_MS)[0]["kind"], "relay-directory-expired");
+        assert!(h.f.attention_items(&h.c, t + 31 * DAY_MS).iter().any(|a| a["kind"] == "relay-directory-expiring"));
     }
 
     #[test]
