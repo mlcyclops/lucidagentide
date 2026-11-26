@@ -56,7 +56,14 @@ const PEOPLE_STATES: [&str; 6] = ["online", "joined", "waiting", "approved", "in
 /// The 4.9 routes, each with its role (L1). GETs check the license themselves: the section reads in every state but
 /// none; CRL uploads, blocks, unblocks and hold placement are security actions that work in every state (2.4); bridge
 /// changes check the product themselves (turning a bridge off works in every state).
-pub static ROUTES: [RouteSpec; 50] = [
+pub static ROUTES: [RouteSpec; 55] = [
+    // MR-1 2.5, 4: this relay's cluster node (role, epoch, generation, lag), the directory it holds, and the operator's
+    // role changes (each restarts the relay in its new role once answered)
+    RouteSpec { method: "GET", path: "meet/cluster/status", role: Role::Admin, action: "", target: "-", stepup: false, need: Need::Any, security: false, keys: &[], body_max: 0 },
+    RouteSpec { method: "GET", path: "meet/cluster/directory", role: Role::Admin, action: "", target: "-", stepup: false, need: Need::Any, security: false, keys: &[], body_max: 0 },
+    RouteSpec { method: "POST", path: "meet/cluster/promote", role: Role::Admin, action: "meet.cluster.promote", target: "-", stepup: true, need: Need::Any, security: false, keys: &["force", "reason"], body_max: 1024 },
+    RouteSpec { method: "POST", path: "meet/cluster/demote", role: Role::Admin, action: "meet.cluster.demote", target: "-", stepup: true, need: Need::Any, security: false, keys: &["reason"], body_max: 1024 },
+    RouteSpec { method: "POST", path: "meet/cluster/handover", role: Role::Admin, action: "meet.cluster.handover", target: "-", stepup: true, need: Need::Any, security: false, keys: &["reason"], body_max: 1024 },
     RouteSpec { method: "GET", path: "meet/people", role: Role::Manager, action: "", target: "-", stepup: false, need: Need::Any, security: false, keys: &[], body_max: 0 },
     // SE-1 (meet_support.rs): the support tickets people's Meeting Hubs filed; reads and answers in every license
     // state, since a support question is most needed when something is wrong
@@ -177,6 +184,17 @@ fn from_hub(e: E) -> ApiError {
             ApiError::of("write-failed")
         }
     }
+}
+
+/// MR-1 2.4: on a standby or fenced node the console (local, or through the fleet link, or an approved action) changes
+/// nothing but the cluster role and the node's own CRL and clock; everything else would be state the active never
+/// sees. `what` is a route path or an action.
+fn cluster_write_guard(relay: &Relay, what: &str) -> Result<(), ApiError> {
+    const PER_NODE: [&str; 4] = ["meet/crl", "meet.crl", "meet/clock/confirm", "meet.clock.confirm"];
+    if what.starts_with("meet/cluster/") || PER_NODE.contains(&what) {
+        return Ok(());
+    }
+    relay.hub.cluster_writes().map_err(|(_, words)| stale(words))
 }
 
 fn license_state_of(s: Option<LicenseStateName>) -> LicenseState {
@@ -1255,8 +1273,11 @@ impl ProductSection for MeetSection {
     fn route(&self, call: &SectionCall) -> Result<SectionAnswer, ApiError> {
         let relay = self.relay()?;
         let read = |v: Result<Value, ApiError>| v.map(SectionAnswer::Read);
+        if call.spec.method == "POST" {
+            cluster_write_guard(&relay, call.spec.path)?;
+        }
         // Seats and the relay's time are always allowed (2.4)
-        let always = matches!(call.spec.path, "meet/identity" | "meet/seats" | "meet/clock" | "meet/counts" | "meet/support");
+        let always = matches!(call.spec.path, "meet/identity" | "meet/seats" | "meet/clock" | "meet/counts" | "meet/support" | "meet/cluster/status" | "meet/cluster/directory");
         if call.spec.method == "GET" && call.license == LicenseState::None && !always {
             return Err(license_needed());
         }
@@ -1287,6 +1308,27 @@ impl ProductSection for MeetSection {
                 Ok(SectionAnswer::Done { answer: json!({"ok": true}), target: principal, detail: json!({"pick": pick}) })
             }
             ("POST", "meet/seats/request") => self.seats_request(&relay, call),
+            ("GET", "meet/cluster/status") => {
+                filters(call.query, &[])?;
+                read(Ok(relay.hub.cluster().map_or_else(|| json!({"ok": true, "cluster": null}), |c| c.status())))
+            }
+            ("GET", "meet/cluster/directory") => {
+                filters(call.query, &[])?;
+                let dir = &relay.settings.state_dir;
+                read(Ok(if dir.is_empty() { json!({"ok": true, "directory": null}) } else { crate::meet_relays::get(Path::new(dir)) }))
+            }
+            ("POST", "meet/cluster/promote" | "meet/cluster/demote" | "meet/cluster/handover") => {
+                let c = relay.hub.cluster().cloned().ok_or_else(|| invalid("This relay is not in a cluster."))?;
+                let force = match call.body.get("force") {
+                    None | Some(Value::Null) => false,
+                    Some(Value::Bool(b)) => *b,
+                    Some(_) => return Err(invalid("force is true or false.")),
+                };
+                let cmd = call.spec.path.trim_start_matches("meet/cluster/");
+                let answer = c.command_and_restart(cmd, force).map_err(|w| stale(&w))?;
+                let detail = json!({"force": force, "role": answer.get("role"), "epoch": answer.get("epoch")});
+                Ok(SectionAnswer::Done { answer: Value::Object(answer), target: "-".into(), detail })
+            }
             ("POST", "meet/clock/confirm") => {
                 let browser = call.body.get("browserTime").and_then(Value::as_i64).ok_or_else(|| invalid("browserTime is a time in milliseconds."))?;
                 let gate = Self::gate(&relay)?;
@@ -1380,6 +1422,7 @@ impl ProductSection for MeetSection {
     }
 
     fn execute(&self, run: &Approved) -> Result<Value, ApiError> {
+        cluster_write_guard(&*self.relay()?, run.action)?;
         // the sole-admin path is still one admin's word (it counts toward the 24 hours of blocks and the holds rule)
         let single = run.approved_by.is_none();
         // r6 8.1, 13: a save carrying a new MCP attestation runs only as the two admins it names
@@ -2706,6 +2749,33 @@ mod tests {
     }
 
     const T0: i64 = 1_763_300_000_000;
+
+    /// MR-1 2.4 (review 7): a standby takes no change from the console, an approved action or the fleet link's api ops,
+    /// but the cluster role commands and its own CRL and clock.
+    #[test]
+    fn mr1_a_standby_takes_no_console_or_fleet_writes() {
+        use crate::fleet_agent::ApiHooks;
+        let state = temp_dir();
+        let cfg = crate::meet_cluster::parse(&json!({"id": "emertins-meet", "node": "azure", "role": "standby",
+            "peer": {"node": "lab", "url": "https://meet.emertins.com", "spki_sha256": crate::codec::b64u(&[4u8; 32])},
+            "client_cert": "/c.crt", "client_key": "/c.key"}))
+        .unwrap();
+        let relay = m::test_relay(m::Settings { state_dir: state.display().to_string(), ..m::Settings::default() });
+        assert!(cluster_write_guard(&relay, "meet/seats/pick").is_ok(), "a single relay takes everything");
+        relay.hub.set_cluster(crate::meet_cluster::Cluster::open(&cfg, &state).unwrap());
+        assert_eq!(relay.hub.cluster_writes(), Err(("standby", crate::meet_cluster::STANDBY_WORDS)));
+        for refused in ["meet/seats/pick", "meet/organizations", "meet/block", "meet.release.set", "meet.holds.place"] {
+            assert_eq!(cluster_write_guard(&relay, refused).unwrap_err().code, "stale", "{refused}");
+        }
+        for allowed in ["meet/cluster/promote", "meet/cluster/handover", "meet/crl", "meet.crl", "meet/clock/confirm"] {
+            assert!(cluster_write_guard(&relay, allowed).is_ok(), "{allowed}");
+        }
+        let fleet = m::MeetFleet::new(&relay);
+        for op in ["api-map", "api-tighten", "api-hold"] {
+            let refused = fleet.api_request(op, &json!({"org": "acme"})).unwrap().unwrap_err();
+            assert_eq!((refused.status, refused.code.as_str()), (503, "standby"), "{op}");
+        }
+    }
 
     #[test]
     fn routes_declare_roles_and_security_actions() {

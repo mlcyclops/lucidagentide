@@ -1130,6 +1130,76 @@
    "scopes": [
     "people"
    ]
+  },
+  {
+   "route": "GET meet/cluster/status",
+   "method": "GET",
+   "path": "meet/cluster/status",
+   "product": "meet",
+   "write": false,
+   "stepup": false,
+   "action": null,
+   "target": null,
+   "read_health": "refused",
+   "scopes": [
+    "read-health"
+   ]
+  },
+  {
+   "route": "GET meet/cluster/directory",
+   "method": "GET",
+   "path": "meet/cluster/directory",
+   "product": "meet",
+   "write": false,
+   "stepup": false,
+   "action": null,
+   "target": null,
+   "read_health": "refused",
+   "scopes": [
+    "read-health"
+   ]
+  },
+  {
+   "route": "POST meet/cluster/promote",
+   "method": "POST",
+   "path": "meet/cluster/promote",
+   "product": "meet",
+   "write": true,
+   "stepup": true,
+   "action": "meet.cluster.promote",
+   "target": "-",
+   "read_health": "write",
+   "scopes": [
+    "config"
+   ]
+  },
+  {
+   "route": "POST meet/cluster/demote",
+   "method": "POST",
+   "path": "meet/cluster/demote",
+   "product": "meet",
+   "write": true,
+   "stepup": true,
+   "action": "meet.cluster.demote",
+   "target": "-",
+   "read_health": "write",
+   "scopes": [
+    "config"
+   ]
+  },
+  {
+   "route": "POST meet/cluster/handover",
+   "method": "POST",
+   "path": "meet/cluster/handover",
+   "product": "meet",
+   "write": true,
+   "stepup": true,
+   "action": "meet.cluster.handover",
+   "target": "-",
+   "read_health": "write",
+   "scopes": [
+    "config"
+   ]
   }
  ]
 }

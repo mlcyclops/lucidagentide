@@ -540,6 +540,10 @@ EOF
 	else
 		read_env "$ETC/deploy.env" || true
 	fi
+	# MR-1 2.5: the cluster witness URL and the cluster client key are the relay's alone (it refuses a link or wider modes)
+	for f in "$ETC/cluster-witness.url" "$ETC/relay-client.key"; do
+		if [ -f "$P$f" ] && [ ! -L "$P$f" ]; then chown "$U:$U" "$P$f" && chmod 0600 "$P$f"; fi
+	done
 	[ -n "$d_host" ] || d_host=$host
 	[ -n "$d_turn" ] || d_turn=${turn_host:-$d_host}
 
@@ -596,6 +600,8 @@ ExecStart=/opt/lucid-meet/lucid-relay meet --config /etc/lucid-meet/relay.json
 Restart=on-failure
 RestartSec=2
 RestartPreventExitStatus=78
+# MR-1 2.5: a cluster node exits 0 after a promotion or demotion to start again in its new role
+RestartForceExitStatus=0
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 NoNewPrivileges=yes

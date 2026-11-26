@@ -521,7 +521,7 @@ pub struct OpSpec {
 const MANIFEST_KEYS: &[&str] = &["v", "consoleId", "caGeneration", "seq", "issuedAt", "expiresAt", "leaves", "revoked", "nextCa", "sig"];
 
 pub const OPS: &[OpSpec] = &[
-    OpSpec { op: "hello", kind: Kind::Evt, to: Some(Side::Console), keys: &["relayId", "version", "fips", "profile", "os", "localConsole", "scopes", "scopeGeneration", "readOnly", "confirm", "bootstrap", "policySeq", "rosterSeq", "trustSeq", "pins", "certNotAfter"], opt: &["meetRoots", "meetCrl", "meetPki"] },
+    OpSpec { op: "hello", kind: Kind::Evt, to: Some(Side::Console), keys: &["relayId", "version", "fips", "profile", "os", "localConsole", "scopes", "scopeGeneration", "readOnly", "confirm", "bootstrap", "policySeq", "rosterSeq", "trustSeq", "pins", "certNotAfter"], opt: &["meetRoots", "meetCrl", "meetPki", "cluster"] },
     OpSpec { op: "welcome", kind: Kind::Evt, to: Some(Side::Relay), keys: &["consoleId", "time", "policySeq", "rosterSeq", "trustSeq"], opt: &["meetCaId"] },
     OpSpec { op: "trust", kind: Kind::Evt, to: Some(Side::Relay), keys: MANIFEST_KEYS, opt: &[] },
     OpSpec { op: "ca-distrust", kind: Kind::Evt, to: Some(Side::Relay), keys: &["generation", "sig"], opt: &[] },
@@ -537,7 +537,7 @@ pub const OPS: &[OpSpec] = &[
     OpSpec { op: "metrics", kind: Kind::Evt, to: Some(Side::Console), keys: &["v", "seq", "ts", "interval", "m"], opt: &[] },
     OpSpec { op: "attention", kind: Kind::Evt, to: Some(Side::Console), keys: &["items"], opt: &[] },
     OpSpec { op: "audit", kind: Kind::Evt, to: Some(Side::Console), keys: &["entries"], opt: &[] },
-    OpSpec { op: "state", kind: Kind::Evt, to: Some(Side::Console), keys: &["readOnly", "confirm", "scopes", "scopeGeneration", "scopeRequest", "profile", "bootstrap", "held", "unattested", "pins", "trustSeq", "version", "license"], opt: &["meetCrl", "meetPki"] },
+    OpSpec { op: "state", kind: Kind::Evt, to: Some(Side::Console), keys: &["readOnly", "confirm", "scopes", "scopeGeneration", "scopeRequest", "profile", "bootstrap", "held", "unattested", "pins", "trustSeq", "version", "license"], opt: &["meetCrl", "meetPki", "cluster"] },
     OpSpec { op: "confirm-done", kind: Kind::Evt, to: Some(Side::Console), keys: &["id", "result", "answer"], opt: &[] },
     // AC-2b-D 9.3: Meeting Hub relay certificates and the organization CA's revocation list.
     OpSpec { op: "meet-cert", kind: Kind::Req, to: Some(Side::Console), keys: &["csr", "signerCsr"], opt: &[] },
@@ -1481,6 +1481,9 @@ mod tests {
         meet["meetRoots"] = json!(["m_0123456789abcdef0123456789abcdef"]);
         meet["meetCrl"] = json!({"source": "none", "thisUpdate": null, "number": null, "issuer": null, "sha256": null, "pending": null});
         meet["meetPki"] = Value::Null;
+        assert!(parse_frame(&evt_text("hello", meet.clone()), Side::Console).is_ok());
+        // MR-1 2.4: a cluster node also names its cluster
+        meet["cluster"] = json!({"ok": true, "cluster": "emertins-meet", "node": "lab", "role": "active", "epoch": 1});
         assert!(parse_frame(&evt_text("hello", meet.clone()), Side::Console).is_ok());
         meet["meetSomething"] = json!(1);
         assert_eq!(parse_frame(&evt_text("hello", meet), Side::Console).err().unwrap().why, "body");

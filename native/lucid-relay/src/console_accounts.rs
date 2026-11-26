@@ -1227,6 +1227,20 @@ impl Accounts {
         relay.admin(method, path, body, &|| self.warn_not_admin())
     }
 
+    /// The relay's signed relay directory for an invite (MR-1 1.4), verified against the Meet root the invite names.
+    /// None when the relay holds none, cannot be asked or holds one that does not verify: an invite never waits on it.
+    fn relay_directory(&self, root_der: &[u8], now: i64) -> Option<Value> {
+        let (status, answer) = self.relay.as_ref()?.transport.call("GET", "/v1/relays", None).ok()?;
+        let wire = answer.get("directory").filter(|w| status == 200 && w.is_object())?;
+        match crate::meet_relays::verify(wire, root_der, None, now) {
+            Ok(_) => Some(wire.clone()),
+            Err(code) => {
+                self.host.log("meet.accounts.directory-refused", &format!("the relay's directory is not put in invites ({code})"));
+                None
+            }
+        }
+    }
+
     fn device_key(&self) -> Result<&Key, Refusal> {
         self.device_key.as_ref().ok_or_else(|| refuse(502, "The console's device key cannot be read."))
     }
@@ -1286,6 +1300,9 @@ impl Accounts {
         });
         if !chain.is_empty() {
             doc["chain"] = Value::Array(chain.iter().map(|c| Value::from(b64(&c.der))).collect());
+        }
+        if let Some(wire) = self.relay_directory(&ca.der, now as i64) {
+            doc["directory"] = wire;
         }
         Ok(Seed { code: encode_code(&doc), expires, serial: str_or(answer.get("serial")) })
     }
@@ -2285,6 +2302,8 @@ mod tests {
         approved: Mutex<Vec<Value>>,
         calls: Mutex<Vec<String>>,
         down: Mutex<bool>,
+        /// What `GET /v1/relays` answers: (status, directory wire or null).
+        relays: Mutex<(u16, Value)>,
     }
 
     struct Shared(Arc<FakeRelay>);
@@ -2298,6 +2317,10 @@ mod tests {
             }
             let b = body.cloned().unwrap_or(Value::Null);
             let route = path.split('?').next().unwrap_or("");
+            if route == "/v1/relays" {
+                let (status, wire) = f.relays.lock().clone();
+                return Ok((status, json!({ "ok": status == 200, "directory": wire })));
+            }
             if route != "/v1/hello" {
                 let session = if method == "GET" { path.split("session=").nth(1).map(str::to_owned) } else { b.get("session").and_then(Value::as_str).map(str::to_owned) };
                 assert_eq!(session.as_deref(), Some("s1"), "every admin call carries the session");
@@ -2365,7 +2388,7 @@ mod tests {
         let now_ms = crate::codec::now_ms();
         let ca_der = meet_test_ca(&ca_key, "Lucid Meet CA", None, now_ms - 86_400_000, now_ms + 1825 * 86_400_000);
         let device = Key::generate(Curve::P256).unwrap();
-        let relay = Arc::new(FakeRelay { ca_key, ca_der: ca_der.clone(), device_spki: device.spki(), pending: Mutex::default(), devices: Mutex::default(), approved: Mutex::default(), calls: Mutex::default(), down: Mutex::new(false) });
+        let relay = Arc::new(FakeRelay { ca_key, ca_der: ca_der.clone(), device_spki: device.spki(), pending: Mutex::default(), devices: Mutex::default(), approved: Mutex::default(), calls: Mutex::default(), down: Mutex::new(false), relays: Mutex::new((200, Value::Null)) });
         let host = Arc::new(Recorder { mail_on, ..Recorder::default() });
         let clock = Arc::new(Mutex::new(crate::meet_json::now()));
         let c2 = clock.clone();
@@ -2644,6 +2667,35 @@ https://lucidhubmeeting.emertins.com:8443/meet/signin\n";
         let e = signin(&w, "john", "a long sentence I remember").unwrap_err();
         assert_eq!((e.status, e.message.as_str()), (502, "Your password is right, but Lucid Meet cannot set up a device right now. Try again in a few minutes."));
         assert_eq!(w.a.signin(&obj(json!({ "username": "john", "password": "x", "platform": "android" })), "203.0.113.2").unwrap_err().message, "Choose Computer or iPhone.");
+    }
+
+    #[test]
+    fn signin_invite_carries_the_relays_verified_directory() {
+        let w = with_account("acct-directory");
+        let code_doc = |w: &World| -> Value {
+            let out = signin(w, "john", "a long sentence I remember").unwrap();
+            let code = out["code"].as_str().unwrap();
+            serde_json::from_slice(&inflate_stored(&unb64u(code.strip_prefix("LMJ1:").unwrap()).unwrap())).unwrap()
+        };
+        let t = crate::meet_json::now() as i64;
+        let z = |s: i64| iso_utc(s).replace("+00:00", "Z");
+        let directory = json!({
+            "v": 1, "typ": "lucid-meet-relay-directory", "cluster": "emertins-meet", "version": 3,
+            "issued": z(t - 60), "expires": z(t + 365 * 86_400),
+            "nodes": [{"id": "lab", "server": "meet.emertins.com", "port": 443, "region": "home", "priority": 10}]
+        });
+        let sig = w.relay.ca_key.sign(&crate::meet_relays::signed_bytes(&directory).unwrap()).unwrap();
+        let wire = json!({ "directory": directory, "sig": crate::meet_json::b64(&sig) });
+        *w.relay.relays.lock() = (200, wire.clone());
+        let doc = code_doc(&w);
+        assert_eq!((doc["v"].clone(), doc["directory"].clone()), (json!(3), wire.clone()));
+        // a directory that does not verify, a relay without the route: the invite goes out without one
+        let mut forged = wire;
+        forged["directory"]["version"] = json!(4);
+        *w.relay.relays.lock() = (200, forged);
+        assert!(code_doc(&w).get("directory").is_none());
+        *w.relay.relays.lock() = (404, Value::Null);
+        assert!(code_doc(&w).get("directory").is_none());
     }
 
     #[test]
