@@ -530,6 +530,19 @@ pub fn guest_tls_config(s: &Settings) -> Result<Arc<ServerConfig>, String> {
     Ok(Arc::new(cfg))
 }
 
+/// PH-1 section 4: the phone webhook listener's server TLS: the relay's own certificate, TLS 1.2 or later, and NO
+/// client certificate asked for (LiveKit signs each webhook instead).
+pub fn webhook_tls_config(s: &Settings) -> Result<Arc<ServerConfig>, String> {
+    let provider = Arc::new(crate::server::provider());
+    let cfg = ServerConfig::builder_with_provider(provider)
+        .with_protocol_versions(&[&rustls::version::TLS13, &rustls::version::TLS12])
+        .map_err(|e| e.to_string())?
+        .with_no_client_auth()
+        .with_single_cert(load_certs(&s.cert, "certificate")?, load_key(&s.key)?)
+        .map_err(|e| format!("the relay certificate and key do not fit: {e}"))?;
+    Ok(Arc::new(cfg))
+}
+
 /// The SAN DNS names of the first certificate in a PEM file, lower case (none when it does not read).
 pub fn cert_dns_names(path: &str) -> Vec<String> {
     Cert::from_pem(&String::from_utf8_lossy(&read_bytes(Path::new(path)))).map(|c| c.names.dns.iter().map(|d| d.trim().to_lowercase()).collect()).unwrap_or_default()

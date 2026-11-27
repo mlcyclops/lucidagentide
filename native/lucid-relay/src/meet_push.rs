@@ -73,6 +73,7 @@ const BAD_PLATFORM: &str = "platform must be ios or android";
 const BAD_FCM_TOKEN: &str = "an android token must be 100 to 4096 letters, digits, colons, underscores or hyphens";
 const ANDROID_NO_VOIP: &str = "an android registration takes no voip_token, and callkit must be false";
 const PLATFORM_OFF: &str = "push notifications for this platform are off on this relay";
+const BAD_PHONE: &str = "phone must be true or false";
 pub const SETTLE_HOW: &str = "how must be declined";
 pub const SETTLE_NONE: &str = "no such invitation";
 pub const INBOX_WAIT_ERROR: &str = "wait must be 1 to 25 seconds";
@@ -370,7 +371,10 @@ fn stored_entry(o: &Obj) -> bool {
         Some(Value::Bool(c)) => !(android && *c),
         _ => false,
     };
-    o.len() == 10 + usize::from(o.contains_key("platform"))
+    // PH-1 section 5.4: `phone` is kept only as true
+    let phone_ok = matches!(o.get("phone"), None | Some(Value::Bool(true)));
+    o.len() == 10 + usize::from(o.contains_key("platform")) + usize::from(o.contains_key("phone"))
+        && phone_ok
         && token_ok
         && env_ok
         && pj::as_int(o.get("ts")).is_some()
@@ -732,7 +736,7 @@ impl State {
     }
 
     /// The person is on Do not disturb.
-    fn pu_dnd(&self, principal: &str) -> bool {
+    pub(super) fn pu_dnd(&self, principal: &str) -> bool {
         self.status_of(principal).get("state").and_then(Value::as_str) == Some("dnd")
     }
 
@@ -1003,7 +1007,7 @@ impl State {
     }
 
     /// A call's level (section 2 gate 2): the lowest of the room's conversation and `dm:<caller>`.
-    fn nt_call_level(&self, from: &str, to: &str, room: &str) -> String {
+    pub(super) fn nt_call_level(&self, from: &str, to: &str, room: &str) -> String {
         let room_level = self.pu_level(to, &self.nt_call_key(from, to, room));
         let caller = self.pu_level(to, &format!("dm:{from}"));
         if rank(&room_level) <= rank(&caller) {
@@ -1084,8 +1088,16 @@ impl State {
         if kind == "live" {
             inner.insert("others".into(), Value::from(others));
         }
+        // PH-1 section 5.4: a phone call carries its `phone` and rings only the devices registered with `phone: true`
+        let caller = inv.get("phone").cloned();
+        if let Some(p) = &caller {
+            inner.insert("phone".into(), p.clone());
+        }
         let mono = self.pu.mono();
         for (device, row) in self.nt_offline(&to) {
+            if caller.is_some() && !phone::row_rings(&row) {
+                continue;
+            }
             let once = (to.clone(), device.clone(), format!("invite:{id}"), kind.clone());
             if self.pu.once.contains_key(&once) {
                 continue;
@@ -1109,7 +1121,7 @@ impl State {
         if !self.pu_on() || !self.push_tokens.contains_key(&to) || self.pu_dnd(&to) || self.nt_call_level(&from, &to, &room) == "off" {
             return;
         }
-        let inner = obj([
+        let mut inner = obj([
             ("v", Value::from(1)),
             ("k", Value::from("missed")),
             ("ts", Value::from((self.pu.now() * 1000.0) as i64)),
@@ -1119,8 +1131,16 @@ impl State {
             ("room", Value::from(room)),
             ("why", Value::from(why)),
         ]);
+        // PH-1 section 5.1: a missed phone call names its caller (`phone`), to the devices it rang
+        let caller = inv.get("phone").cloned();
+        if let Some(p) = &caller {
+            inner.insert("phone".into(), p.clone());
+        }
         let mono = self.pu.mono();
         for (device, row) in self.nt_offline(&to) {
+            if caller.is_some() && !phone::row_rings(&row) {
+                continue;
+            }
             let once = (to.clone(), device.clone(), format!("invite:{id}"), "missed".to_string());
             if self.pu.once.contains_key(&once) {
                 continue;
@@ -1134,11 +1154,15 @@ impl State {
     /// Settle invite `id` of `to` (`how`: answered, declined, missed or cancelled; `device`: the session's for answered
     /// and declined, "" when the relay settled it): every session of `to` hears `invite_settled`. An answered ring is
     /// refunded; missed and cancelled queue the `missed` push after the answer grace.
-    fn nt_settle(&mut self, to: &str, id: &str, how: &str, device: &str, now: f64) {
+    pub(super) fn nt_settle(&mut self, to: &str, id: &str, how: &str, device: &str, now: f64) {
         let Some(inv) = self.invites.get_mut(to).and_then(|l| l.iter_mut().find(|i| pj::text_of(i, "id") == id)) else { return };
         inv.insert("settled".into(), Value::from(how));
         inv.insert("settled_ts".into(), f(now));
         let (from, room) = (pj::text_of(inv, "from"), pj::text_of(inv, "room"));
+        // PH-1 section 5.1: a phone call's ring settled: declined and missed end the caller's call
+        if inv.contains_key("phone") {
+            self.phone_settled(&room, id, how);
+        }
         self.dirty = true;
         let event = obj([("type", Value::from("invite_settled")), ("id", Value::from(id)), ("room", Value::from(room)), ("how", Value::from(how)), ("device", Value::from(device))]);
         self.tell(&[to.to_string()], &event, None);
@@ -1539,6 +1563,12 @@ impl Hub {
                 (pj::b64(&seal), sk, voip_token, *callkit)
             }
         };
+        // PH-1 section 5.4: the device takes phone calls (kept on its row only when true)
+        let phone = match body.get("phone") {
+            None | Some(Value::Null) => false,
+            Some(Value::Bool(b)) => *b,
+            Some(_) => return bad(BAD_PHONE),
+        };
         // PR-1 1.4: whoever loses this token to the new registration, and the caller, may change presence
         let holds = |d: &Value| as_obj(Some(d)).map(|d| d.values().any(|e| e.get("token").and_then(Value::as_str) == Some(token.as_str()))).unwrap_or(false);
         let mut holders: Vec<String> = st.push_tokens.iter().filter(|(p, d)| **p != who.principal && holds(d)).map(|(p, _)| p.clone()).collect();
@@ -1558,7 +1588,7 @@ impl Hub {
         let voip = if callkit { voip_token } else { String::new() };
         let rings = android || (st.pu.voip && !voip.is_empty());
         let platform = if android { ANDROID } else { IOS };
-        let entry = obj([
+        let mut entry = obj([
             ("token", Value::from(token)),
             ("env", Value::from(env.clone())),
             ("ts", Value::from((pj::now() * 1000.0) as i64)),
@@ -1571,6 +1601,9 @@ impl Hub {
             ("callkit", Value::Bool(callkit)),
             ("platform", Value::from(platform)),
         ]);
+        if phone {
+            entry.insert("phone".into(), Value::Bool(true));
+        }
         let devices = st.push_tokens.entry(who.principal.clone()).or_insert_with(|| Value::Object(Obj::new()));
         if !devices.is_object() {
             *devices = Value::Object(Obj::new());
@@ -3244,7 +3277,7 @@ mod tests {
         let person = pj::b64_strict(answer["key"].as_str().unwrap()).unwrap();
         let soon = pj::now() + 1800.0;
         let create = |title: &str, start: f64| {
-            h.meeting_create(&sa, &ann, Some(&json!(title)), Some(&json!(start)), Some(&json!(start + 1800.0)), Some(&json!(["ben@x"])), None, None, None, None).unwrap()["id"].as_str().unwrap().to_string()
+            h.meeting_create(&sa, &ann, Some(&json!(title)), Some(&json!(start)), Some(&json!(start + 1800.0)), Some(&json!(["ben@x"])), None, None, None, None, None).unwrap()["id"].as_str().unwrap().to_string()
         };
         // a stranger's invite within the hour is active, not Time Sensitive
         let m1 = create("One", soon);

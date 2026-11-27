@@ -269,6 +269,9 @@ pub struct Settings {
     pub sfu_secret_file: String,
     pub sfu_threshold: Value,
     pub sfu_max: Value,
+    /// PH-1 (docs/phone/contract.md section 2): phone numbers through LiveKit SIP, `{webhook_listen, webhook_from,
+    /// lines, outbound_trunk, conference}` (null = off). Kept as relay.json holds it; meet_phone checks it at start.
+    pub phone: Value,
     /// Bridges (contract BR-1): each organization's bridge policy {org id: policy} ("_none" for people with no
     /// organization). A missing org is off. Checked at start (meet_bridge); admins change it at runtime
     /// (/v1/admin/bridge, kept in state.json over this).
@@ -353,11 +356,11 @@ pub struct FcmSettings {
     pub credentials_file: String,
 }
 
-const SETTINGS_FIELDS: [&str; 73] = [
+const SETTINGS_FIELDS: [&str; 74] = [
     "guest_verify_url", "guest_rules", "gov_baseline", "gov_domains", "captioner_principal", "web_port", "web_public", "web_cert", "web_key", "web_sso_url", "web_orgs",
     "host", "port", "cert", "key", "client_ca", "crl", "turn_secret_file", "turn_host", "turn_host_public", "turn_ttl", "stun_urls", "state_dir", "admins", "history_hours", "mail_days", "channel_days", "signer_url", "signer_cert",
     "signer_key", "signer_ca", "files_secret_file", "files_base", "console_sources", "files_power", "min_client", "version_exempt", "recording_enabled", "organizations", "file_max_mb", "files_quota_gb", "guest_port",
-    "guest_public", "guest_cert", "guest_key", "sfu_url", "sfu_api_key", "sfu_secret_file", "sfu_threshold", "sfu_max",
+    "guest_public", "guest_cert", "guest_key", "sfu_url", "sfu_api_key", "sfu_secret_file", "sfu_threshold", "sfu_max", "phone",
     "bridge_policies", "chat_e2ee", "chat_history_share", "attendance", "attendance_days", "emoji_max", "push", "enclave", "enclave_networks", "legal_holds", "notify_previews",
     "console_port", "console_public", "console_cert", "console_key", "console_first_admin", "console_profile", "license",
     "with_console", "fleet_proxy", "fleet_pki", "license_edition", "cluster",
@@ -430,6 +433,7 @@ impl Default for Settings {
             sfu_secret_file: String::new(),
             sfu_threshold: Value::from(9),
             sfu_max: Value::from(100),
+            phone: Value::Null,
             bridge_policies: Obj::new(),
             chat_e2ee: Value::from("default"),
             chat_history_share: Value::Bool(true),
@@ -698,7 +702,7 @@ impl Settings {
         text("sfu_url", &mut s.sfu_url)?;
         text("sfu_api_key", &mut s.sfu_api_key)?;
         text("sfu_secret_file", &mut s.sfu_secret_file)?;
-        for (k, slot) in [("guest_port", &mut s.guest_port), ("sfu_threshold", &mut s.sfu_threshold), ("sfu_max", &mut s.sfu_max), ("chat_e2ee", &mut s.chat_e2ee), ("chat_history_share", &mut s.chat_history_share)] {
+        for (k, slot) in [("guest_port", &mut s.guest_port), ("sfu_threshold", &mut s.sfu_threshold), ("sfu_max", &mut s.sfu_max), ("phone", &mut s.phone), ("chat_e2ee", &mut s.chat_e2ee), ("chat_history_share", &mut s.chat_history_share)] {
             if let Some(v) = raw.get(k) {
                 *slot = v.clone();
             }
@@ -1705,6 +1709,8 @@ fn serve(settings: Settings) -> ! {
     let _fleet = fleet_start(&relay).unwrap_or_else(|e| die(&e));
     crate::meet_guest_port::start(&settings, hub.clone(), relay.turn_secret.clone()).unwrap_or_else(|e| die(&e));
     crate::meet_web_port::start(&settings, relay.clone()).unwrap_or_else(|e| die(&e));
+    // PH-1 section 4: the media server's webhooks on their own TLS listener (nothing without `phone`)
+    crate::meet_hub::phone::start(&settings, hub.clone()).unwrap_or_else(|e| die(&e));
     relay.start_upkeep();
     log_info(&format!(
         "listening on {}:{} (certificate server: {})",
@@ -1806,6 +1812,7 @@ pub(crate) fn reason_phrase(status: u16) -> &'static str {
         200 => "OK",
         301 => "Moved Permanently",
         400 => "Bad Request",
+        401 => "Unauthorized",
         403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
@@ -1819,6 +1826,7 @@ pub(crate) fn reason_phrase(status: u16) -> &'static str {
         431 => "Request Header Fields Too Large",
         500 => "Internal Server Error",
         501 => "Not Implemented",
+        502 => "Bad Gateway",
         503 => "Service Unavailable",
         505 => "HTTP Version Not Supported",
         507 => "Insufficient Storage",
