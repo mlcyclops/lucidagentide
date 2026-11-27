@@ -2961,7 +2961,8 @@ mod tests {
         let cluster = json!({"id": "emertins-meet", "node": "lab", "role": "active", "peer": {"node": "azure", "url": "https://meet-azure.emertins.com", "spki_sha256": pin}, "client_cert": "/c.crt", "client_key": "/c.key"});
         std::fs::write(&file, json!({"cluster": cluster}).to_string()).unwrap();
         let c = Settings::load(&path(&file)).unwrap().cluster.unwrap();
-        assert_eq!((c.node.as_str(), c.peer.node.as_str(), c.lease_s), ("lab", "azure", 30));
+        // MR-1 contract revision 2: lease_s defaults to 10 (meet_cluster.rs `whole(o, "lease_s", 10, 10, 50)`).
+        assert_eq!((c.node.as_str(), c.peer.node.as_str(), c.lease_s), ("lab", "azure", 10));
         let mut extra = cluster.clone();
         extra["peers"] = json!([]);
         std::fs::write(&file, json!({"cluster": extra}).to_string()).unwrap();
