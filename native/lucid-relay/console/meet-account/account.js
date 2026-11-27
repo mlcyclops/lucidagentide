@@ -12,7 +12,7 @@
   const $ = (id) => document.getElementById(id);
   const SECTIONS = ["join", "join-done", "signin", "signin-done"];
   const USERNAME = /^[a-z0-9][a-z0-9._-]{2,31}$/;
-  const DEVICES = { computer: "your computer", iphone: "your iPhone" };
+  const DEVICES = { computer: "your computer", iphone: "your iPhone", android: "your Android phone" };
 
   function show(id, title) {
     $("loading").hidden = true;

@@ -39,7 +39,6 @@ pub const SECRET_DEVICE_KEY: &str = "meet.accounts.relay-key";
 pub const SECRET_ASC_KEY: &str = "meet.accounts.asc-key";
 pub const SECRET_FILES: &str = "meet.accounts.files-secret";
 
-const CONSOLE_EMAIL: &str = "console@meet.emertins.com";
 const INVITE_TTL: f64 = 7.0 * 86400.0;
 const ACCOUNT_BODY_MAX: i64 = 4096;
 const ACCOUNT_LIMIT: usize = 10;
@@ -94,7 +93,6 @@ const ASC_MAX: usize = 1024 * 1024;
 const PROOF_PREFIX: &str = "lucid-meet-proof/1|";
 const CODE_PREFIX: &str = "LMJ1:";
 const STORED_MAX: usize = 65_535;
-const FILES_BASE_DEFAULT: &str = "https://lucidhubmeeting.emertins.com:8443";
 /// The Meet console's headers on every public answer (its own CSP, not the Admin Console's).
 const CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
 const PUBLIC_HEADERS: [(&str, &str); 8] = [
@@ -259,6 +257,11 @@ impl AccountSettings {
 
     fn enabled(&self) -> bool {
         !self.account_base.is_empty()
+    }
+
+    /// The console's own Meet address, `console@` the relay's name; "" when no relay name is set.
+    pub fn console_email(&self) -> String {
+        if self.relay_name.is_empty() { String::new() } else { format!("console@{}", self.relay_name.to_lowercase()) }
     }
 
     /// What a person types as the organization in the app: the public host and port.
@@ -1232,7 +1235,12 @@ impl Accounts {
     }
 
     fn warn_not_admin(&self) {
-        self.host.log("meet.accounts.relay-not-admin", &format!("the relay does not list {CONSOLE_EMAIL} as an admin"));
+        self.host.log("meet.accounts.relay-not-admin", &format!("the relay does not list {} as an admin", self.console_email()));
+    }
+
+    /// The console's own Meet address (see `AccountSettings::console_email`); "" with no settings.
+    fn console_email(&self) -> String {
+        self.settings.as_ref().map(AccountSettings::console_email).unwrap_or_default()
     }
 
     fn relay_admin(&self, method: &str, path: &str, body: Option<Value>) -> Result<Value, Refusal> {
@@ -1340,8 +1348,9 @@ impl Accounts {
     fn device_counts(&self) -> Result<HashMap<String, usize>, Refusal> {
         let answer = self.relay_admin("GET", "/v1/admin/devices", None)?;
         let mut counts = HashMap::new();
+        let console = self.console_email();
         for x in answer.get("devices").and_then(Value::as_array).into_iter().flatten() {
-            if !x.is_object() || x.get("principal").and_then(Value::as_str) == Some(CONSOLE_EMAIL) || truthy(x.get("revoked")) {
+            if !x.is_object() || x.get("principal").and_then(Value::as_str) == Some(console.as_str()) || truthy(x.get("revoked")) {
                 continue;
             }
             let who = if truthy(x.get("principal")) { str_or(x.get("principal")) } else { str_or(x.get("email")) }.to_lowercase();
@@ -1560,7 +1569,8 @@ impl Accounts {
         let word = match platform.as_str() {
             "computer" => "Computer",
             "iphone" => "iPhone",
-            _ => return Err(refuse(400, "Choose Computer or iPhone.")),
+            "android" => "Android",
+            _ => return Err(refuse(400, "Choose Computer, iPhone or Android.")),
         };
         let label = squash(&str_or(b.get("label")));
         if label.chars().count() > ACCOUNT_LABEL_MAX || !printable(&label) {
@@ -1864,13 +1874,16 @@ impl Accounts {
     /// why. Never logged or audited (a link is its token).
     fn download_links(&self, email: &str) -> (Vec<DownloadLink>, String) {
         let Some(secret) = &self.files_secret else { return (Vec::new(), "No download links: the console has no link secret.".into()) };
+        let base = self.settings.as_ref().map(|s| s.files_base.clone()).unwrap_or_default();
+        if base.is_empty() {
+            return (Vec::new(), "No download links: the console has no download address (files_base).".into());
+        }
         let release = match self.relay_admin("GET", "/v1/version", None) {
             Ok(r) => r,
             Err(e) => return (Vec::new(), format!("No download links: the relay could not be asked. {}", e.message)),
         };
         let files = release.get("files").and_then(Value::as_object).cloned().unwrap_or_default();
         let expires = self.now() as i64 + DOWNLOAD_DAYS * 86400;
-        let base = self.settings.as_ref().map(|s| s.files_base.clone()).unwrap_or_default();
         let mut links = Vec::new();
         for (platform, label) in DOWNLOAD_PLATFORMS {
             let name = files.get(platform).filter(|e| e.is_object()).map(|e| str_or(e.get("name"))).unwrap_or_default();
@@ -1896,7 +1909,7 @@ impl Accounts {
             return Err(refuse(409, ACCOUNT_OFF));
         }
         let (name, email) = check_person(b.get("name"), b.get("email"))?;
-        if email == CONSOLE_EMAIL {
+        if email == self.console_email() {
             return Err(refuse(400, "That address is the console itself."));
         }
         let (token, expires) = self.store.edit(|d| {
@@ -2094,14 +2107,16 @@ pub fn settings_of_old(cfg: &Obj, cert_pem: String, ca_pem: String) -> Result<Ac
             Some(v) => str_or(Some(v)).trim().to_owned(),
         }
     };
-    let proxy = text("account_proxy", "10.42.42.10");
+    let proxy = text("account_proxy", "");
     let proxy = if proxy.is_empty() { proxy } else { proxy.parse::<IpAddr>().map_err(|_| "account_proxy must be an IP address (the download gate's)".to_owned())?.to_string() };
     let people = match cfg.get("auto_approve") {
         None | Some(Value::Null) => Vec::new(),
         Some(Value::Array(a)) => a.iter().map(|p| str_or(Some(p)).trim().to_lowercase()).collect(),
         Some(_) => return Err("auto_approve must list email addresses".into()),
     };
-    if people.len() > AUTO_APPROVE_MAX || people.iter().any(|p| !address_ok(p) || p == CONSOLE_EMAIL) {
+    let relay_name = text("relay_name", "");
+    let console_email = if relay_name.is_empty() { String::new() } else { format!("console@{}", relay_name.to_lowercase()) };
+    if people.len() > AUTO_APPROVE_MAX || people.iter().any(|p| !address_ok(p) || *p == console_email) {
         return Err(format!("auto_approve must list at most {AUTO_APPROVE_MAX} email addresses (not the console's own)"));
     }
     let testflight = match cfg.get("testflight") {
@@ -2123,25 +2138,38 @@ pub fn settings_of_old(cfg: &Obj, cert_pem: String, ca_pem: String) -> Result<Ac
         }
         Some(_) => return Err("testflight must be an object with key_id, issuer_id and group_id".into()),
     };
-    let files_base = text("files_base", FILES_BASE_DEFAULT).trim_end_matches('/').to_owned();
-    if download_link(&files_base, "x").is_none() {
+    let files_base = text("files_base", "").trim_end_matches('/').to_owned();
+    if !files_base.is_empty() && download_link(&files_base, "x").is_none() {
         return Err("files_base must be https://host or https://host:port".into());
     }
-    Ok(AccountSettings {
+    let s = AccountSettings {
         account_base: check_account_base(&text("account_base", ""))?,
         account_proxy: proxy,
-        relay_address: text("relay_address", "10.42.42.10"),
+        relay_address: text("relay_address", ""),
         relay_port: port_of(cfg.get("relay_port"), 443, "relay_port")?,
-        relay_name: text("relay_name", "meet.emertins.com"),
+        relay_name,
         relay_cert_pem: cert_pem,
         relay_ca_pem: ca_pem,
-        invite_server: text("invite_server", "meet.emertins.com"),
+        invite_server: text("invite_server", ""),
         invite_port: port_of(cfg.get("invite_port"), 443, "invite_port")?,
-        invite_address: text("invite_address", "10.42.42.10"),
+        invite_address: text("invite_address", ""),
         auto_approve: people,
         testflight,
         files_base,
-    })
+    };
+    // Password sign-in and auto approval talk to the relay; invites also name it. No lab fallback: say what is missing.
+    if s.enabled() || !s.auto_approve.is_empty() {
+        let what = if s.enabled() { "Meet accounts (account_base)" } else { "auto approval (auto_approve)" };
+        for (key, value, means) in [("relay_name", &s.relay_name, "the Meet relay's name"), ("relay_address", &s.relay_address, "the Meet relay's address")] {
+            if value.is_empty() {
+                return Err(format!("{what} cannot be turned on: console.json has no {key}. Set it to {means}."));
+            }
+        }
+    }
+    if s.enabled() && s.invite_server.is_empty() {
+        return Err("Meet accounts (account_base) cannot be turned on: console.json has no invite_server. Set invite_server to the relay name the apps connect to.".into());
+    }
+    Ok(s)
 }
 
 /// The account keys of the Meet console's state.json.
@@ -2244,7 +2272,10 @@ fn summary_lines(s: &AccountSettings, asc: bool, files: bool) -> Vec<String> {
         format!("relay: {} at {}:{}; invites name {}:{}{}", s.relay_name, s.relay_address, s.relay_port, s.invite_server, s.invite_port, if s.invite_address.is_empty() { String::new() } else { format!(" via {}", s.invite_address) }),
         format!("auto approve: {}", if s.auto_approve.is_empty() { "nobody".into() } else { s.auto_approve.join(", ") }),
         format!("TestFlight: {}", if s.testflight.is_some() && asc { "on" } else { "off" }),
-        format!("download links: {}", if files { format!("on ({})", s.files_base) } else { "off (no link secret)".into() }),
+        format!(
+            "download links: {}",
+            if !files { "off (no link secret)".into() } else if s.files_base.is_empty() { "off (no files_base)".into() } else { format!("on ({})", s.files_base) }
+        ),
     ]
 }
 
@@ -2453,7 +2484,7 @@ mod tests {
             invite_address: "lucidhubmeeting.emertins.com".into(),
             auto_approve: vec!["enrique.mertins+appreview@gmail.com".into()],
             testflight: None,
-            files_base: FILES_BASE_DEFAULT.into(),
+            files_base: "https://lucidhubmeeting.emertins.com:8443".into(),
         }
     }
 
@@ -2741,7 +2772,54 @@ https://lucidhubmeeting.emertins.com:8443/meet/signin\n";
         *w.relay.down.lock() = true;
         let e = signin(&w, "john", "a long sentence I remember").unwrap_err();
         assert_eq!((e.status, e.message.as_str()), (502, "Your password is right, but Lucid Meet cannot set up a device right now. Try again in a few minutes."));
-        assert_eq!(w.a.signin(&obj(json!({ "username": "john", "password": "x", "platform": "android" })), "203.0.113.2").unwrap_err().message, "Choose Computer or iPhone.");
+        assert_eq!(w.a.signin(&obj(json!({ "username": "john", "password": "x", "platform": "blackberry" })), "203.0.113.2").unwrap_err().message, "Choose Computer, iPhone or Android.");
+    }
+
+    #[test]
+    fn android_signin_is_recorded_as_android() {
+        let w = with_account("acct-signin-android");
+        let out = w.a.signin(&obj(json!({ "username": "john", "password": "a long sentence I remember", "platform": "Android", "label": "" })), "203.0.113.2").unwrap();
+        assert!(out["code"].as_str().unwrap().starts_with("LMJ1:"));
+        let seeds = w.a.store.read(|d| Ok(table(d, "signin_seeds").clone())).unwrap();
+        let seed = seeds.values().next().unwrap();
+        assert_eq!(seed["platform"], "android");
+        assert_eq!(seed["label"], "Android", "the approval queue names the device by its platform word");
+        let audits = w.host.audits.lock();
+        let signin = audits.iter().find(|a| a.1 == "meet.account.signin").unwrap();
+        assert_eq!(signin.4["platform"], "android");
+        assert!(!format!("{:?}", *audits).to_lowercase().contains("iphone"));
+    }
+
+    #[test]
+    fn settings_refuse_to_turn_on_without_relay_values() {
+        let on = |extra: Value| {
+            let mut cfg = obj(json!({ "account_base": "https://hub.example.com:8443", "relay_name": "meet.example.com", "relay_address": "192.0.2.10", "invite_server": "meet.example.com" }));
+            for (k, v) in obj(extra) {
+                if v.is_null() {
+                    cfg.remove(&k);
+                } else {
+                    cfg.insert(k, v);
+                }
+            }
+            settings_of_old(&cfg, String::new(), String::new())
+        };
+        let s = on(json!({})).unwrap();
+        assert_eq!((s.account_proxy.as_str(), s.invite_address.as_str(), s.files_base.as_str()), ("", "", ""));
+        assert_eq!(s.console_email(), "console@meet.example.com");
+        assert_eq!(on(json!({ "relay_name": null })).unwrap_err(), "Meet accounts (account_base) cannot be turned on: console.json has no relay_name. Set it to the Meet relay's name.");
+        assert_eq!(on(json!({ "relay_address": null })).unwrap_err(), "Meet accounts (account_base) cannot be turned on: console.json has no relay_address. Set it to the Meet relay's address.");
+        assert_eq!(
+            on(json!({ "invite_server": null })).unwrap_err(),
+            "Meet accounts (account_base) cannot be turned on: console.json has no invite_server. Set invite_server to the relay name the apps connect to."
+        );
+        assert_eq!(
+            on(json!({ "account_base": null, "relay_name": null, "auto_approve": ["ana@example.com"] })).unwrap_err(),
+            "auto approval (auto_approve) cannot be turned on: console.json has no relay_name. Set it to the Meet relay's name."
+        );
+        assert!(on(json!({ "auto_approve": ["console@meet.example.com"] })).is_err(), "the console's own address, derived from relay_name");
+        // nothing on: nothing required
+        let off = settings_of_old(&Obj::new(), String::new(), String::new()).unwrap();
+        assert!(!off.enabled() && off.relay_name.is_empty() && off.console_email().is_empty());
     }
 
     #[test]
@@ -2810,7 +2888,7 @@ https://lucidhubmeeting.emertins.com:8443/meet/signin\n";
         // auto mode: the sign-in seed too, while john has fewer than 5 devices
         w.a.set_approval(&obj(json!({ "mode": "AUTO" }))).unwrap();
         w.relay.approved.lock().clear();
-        *w.relay.devices.lock() = (0..4).map(|i| json!({ "principal": "john@example.com", "device": i })).chain([json!({ "principal": "john@example.com", "revoked": true }), json!({ "principal": CONSOLE_EMAIL })]).collect();
+        *w.relay.devices.lock() = (0..4).map(|i| json!({ "principal": "john@example.com", "device": i })).chain([json!({ "principal": "john@example.com", "revoked": true }), json!({ "principal": "console@meet.emertins.com" })]).collect();
         assert_eq!(w.a.auto_approve_once().unwrap(), 2);
         let approved = w.relay.approved.lock().clone();
         assert_eq!(approved[1]["id"], "a1b");
@@ -3089,7 +3167,8 @@ https://lucidhubmeeting.emertins.com:8443/meet/signin\n";
         assert!(device_key_of(&String::from_utf8(sink.0[SECRET_DEVICE_KEY].clone()).unwrap()).is_some_and(|k| k.spki() == device.spki()));
         let s = AccountSettings::from_value(&book.settings.meet_accounts).unwrap();
         assert_eq!((s.account_base.as_str(), s.org().as_str(), s.invite_address.as_str()), ("https://lucidhubmeeting.emertins.com:8443", "lucidhubmeeting.emertins.com:8443", "lucidhubmeeting.emertins.com"));
-        assert_eq!(s.files_base, FILES_BASE_DEFAULT);
+        assert_eq!(s.files_base, "", "no lab download address by default");
+        assert!(summary.contains("download links: off (no files_base)"), "{summary}");
         assert_eq!(book.pending_audit[0]["action"], "meet.account.import");
         let d: Value = serde_json::from_str(&std::fs::read_to_string(dir.join(STATE_FILE)).unwrap()).unwrap();
         assert_eq!(d["accounts"]["john"]["created"], 1764000000.25);

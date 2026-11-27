@@ -4583,6 +4583,7 @@
     if (typeof v === "object") {
       return Object.entries(v).filter(([, x]) => x != null && x !== "").map(([a, x]) => fieldWord(a) + ": " + plainValue(a, x)).join(", ");
     }
+    if (k === "platform" && typeof v === "string") return clean(platformWord(v));
     if (typeof v === "number" && /_s$/.test(k)) return span(v);
     if (TIME_KEY.test(k) && (typeof v === "number" ? v > 1e8 : DATE_TEXT.test(String(v).trim())) && dateOf(v, "any")) return whenAny(v);
     return clean(String(v));
