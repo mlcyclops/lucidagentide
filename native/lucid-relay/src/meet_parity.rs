@@ -1315,7 +1315,7 @@ mod tests {
         let (sb, sc) = (session(&h, &ben), session(&h, &cy));
         let start = json!(pj::now() + 3600.0);
         let end = json!(pj::now() + 7200.0);
-        let create = |cohosts: Value| h.meeting_create(&sb, &ben, Some(&json!("Plan")), Some(&start), Some(&end), Some(&json!(["cy@x"])), None, None, None, Some(&cohosts));
+        let create = |cohosts: Value| h.meeting_create(&sb, &ben, Some(&json!("Plan")), Some(&start), Some(&end), Some(&json!(["cy@x"])), None, None, None, Some(&cohosts), None);
         assert_eq!(error(create(json!("cy@x"))), "cohosts must be a list of people");
         let many: Vec<String> = (0..11).map(|i| format!("p{i}@x")).collect();
         assert_eq!(error(create(json!(many))), MEETING_COHOSTS_FULL);

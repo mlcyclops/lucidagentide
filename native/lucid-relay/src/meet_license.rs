@@ -186,6 +186,7 @@ pub static GATE: &[(&str, &str, Class)] = &[
     ("POST", "/v1/meetings/rsvp", S),
     ("POST", "/v1/invite", S),
     ("POST", "/v1/invite/settle", S),
+    ("POST", "/v1/phone/call", S),
     ("POST", "/v1/prefs", S),
     ("POST", "/v1/emoji", S),
     ("POST", "/v1/emoji/delete", S),
