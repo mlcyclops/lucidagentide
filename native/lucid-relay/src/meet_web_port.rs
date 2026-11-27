@@ -283,6 +283,16 @@ fn one(port: &Port, reader: &mut BufReader<Tls>, address: &str) -> std::io::Resu
         let sent = write(reader.get_mut(), csp, 301, "text/plain", "no-store", &[("Location", "/w/".to_string())], b"");
         return Ok(sent.is_ok() && !close);
     }
+    // TH-1 4: the organization's brand, like the page files (no session, before any gate)
+    if let Some(answer) = crate::meet_brand::port_read(&port.relay.settings.state_dir, "/w/", &head.method, &path, &query) {
+        use crate::meet_brand::{Answer, JSON_CACHE, NO_LOGO};
+        let sent = match answer {
+            Answer::Json(v) => write(reader.get_mut(), csp, 200, "application/json", JSON_CACHE, &[], pj::dumps(&v).as_bytes()),
+            Answer::Logo { ctype, cache, bytes } => write(reader.get_mut(), csp, 200, ctype, cache, &[], &bytes),
+            Answer::NoLogo => json(reader.get_mut(), csp, 404, &error(NO_LOGO)),
+        };
+        return Ok(sent.is_ok() && !close);
+    }
     if get {
         if let Some((file, ctype)) = static_file(&WEB_STATIC, "/w/", &path) {
             let sent = match std::fs::read(&file) {

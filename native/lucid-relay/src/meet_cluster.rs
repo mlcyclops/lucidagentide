@@ -33,8 +33,14 @@ pub const COMMAND_FILE: &str = "cluster-command.json";
 pub const RESULT_FILE: &str = "cluster-command-result.json";
 pub const LOCK_FILE: &str = "cluster.lock";
 /// 2.2: the replica set, the top-level files and every file of these folders. Nothing else is copied.
-/// The release manifest and its history ride along, so a promoted standby offers the same Hub update.
-pub const TOP_FILES: [&str; 7] = ["state.json", "meet-seats.json", "push.secret", "guest.secret", "relays.json", "releases.json", "release-history.json"];
+/// The release manifest and its history ride along, so a promoted standby offers the same Hub update; so does the
+/// organization's brand (TH-1 3), so the standby's guest and web pages look the same.
+pub const TOP_FILES: [&str; 9] = ["state.json", "meet-seats.json", "push.secret", "guest.secret", "relays.json", "releases.json", "release-history.json", "brand.json", "brand-logo"];
+/// TH-1 3: the top-level files the standby removes when the active no longer lists them (a reset brand, a removed
+/// logo). Every other top-level file stays as it is on a standby while the active has none.
+const MIRRORED_TOP: [&str; 2] = [crate::meet_brand::RELAY_FILES.doc, crate::meet_brand::RELAY_FILES.logo];
+/// The largest brand file a standby takes (the logo is at most 256 KiB, the document far less).
+const BRAND_MAX: u64 = crate::meet_brand::LOGO_MAX as u64;
 pub const SET_DIRS: [&str; 2] = ["files", "emoji"];
 const RELAYS_FILE: &str = "relays.json";
 /// 2.3: the longest replica long-poll; a quiet relay answers this often.
@@ -1261,7 +1267,7 @@ impl Cluster {
             if !in_set(path) || !sha_ok(sha) || !seen.insert(path) {
                 return Err(bad("lists a file outside the replica set"));
             }
-            if size > FILE_MAX || (path == RELAYS_FILE && size > RELAYS_MAX) {
+            if size > FILE_MAX || (path == RELAYS_FILE && size > RELAYS_MAX) || (MIRRORED_TOP.contains(&path) && size > BRAND_MAX) {
                 return Err(bad(&format!("lists {path} larger than this node takes")));
             }
             list.push((path, size, sha));
@@ -1285,8 +1291,11 @@ impl Cluster {
         }
         let mut deleted = 0;
         for e in listing(&self.dir) {
-            let (Some(sub), name) = split(&e.path) else { continue };
-            if !seen.contains(e.path.as_str()) && tree::Dir::open(&self.dir, Some(sub), false).and_then(|d| d.unlink(name).map(|()| d.sync())).is_ok() {
+            let (sub, name) = split(&e.path);
+            if sub.is_none() && !MIRRORED_TOP.contains(&name) {
+                continue;
+            }
+            if !seen.contains(e.path.as_str()) && tree::Dir::open(&self.dir, sub, false).and_then(|d| d.unlink(name).map(|()| d.sync())).is_ok() {
                 self.hashes.lock().remove(&e.path);
                 deleted += 1;
             }
@@ -2309,6 +2318,34 @@ mod tests {
         assert_eq!((s["role"].as_str(), s["generation"].as_u64(), s["lagS"].as_i64(), s["peer"].as_str()), (Some("active"), Some(g0 + 2), Some(0), Some("azure")));
         let s = p.azure.status();
         assert_eq!((s["role"].as_str(), s["generation"].as_u64(), s["witness"].as_bool()), (Some("standby"), Some(g0 + 1), Some(false)));
+    }
+
+    /// TH-1 3: the brand and its logo reach the standby, and a reset (or a removed logo) on the active removes them
+    /// there too, while other top-level files the active lacks stay; an oversized brand file is refused.
+    #[test]
+    fn the_brand_replicates_and_its_reset_reaches_the_standby() {
+        let p = pair();
+        let (a, b) = (&p.lab.dir, &p.azure.dir);
+        put(a, "brand.json", "{\"v\": 1}");
+        put(a, "brand-logo", "logo bytes");
+        put(b, "relays.json", "azure directory");
+        p.lab.scan();
+        let peer = local(&p);
+        assert!(matches!(p.azure.pull_once(&peer, 0).unwrap(), PullOutcome::Applied { fetched: 2, deleted: 0, .. }));
+        assert_eq!(read(b, "brand.json"), read(a, "brand.json"));
+        assert_eq!(read(b, "brand-logo").as_deref(), Some("logo bytes"));
+        std::fs::remove_file(a.join("brand-logo")).unwrap();
+        p.lab.note_saved();
+        assert!(matches!(p.azure.pull_once(&peer, 0).unwrap(), PullOutcome::Applied { fetched: 0, deleted: 1, .. }));
+        assert_eq!(read(b, "brand-logo"), None);
+        std::fs::remove_file(a.join("brand.json")).unwrap();
+        p.lab.note_saved();
+        assert!(matches!(p.azure.pull_once(&peer, 0).unwrap(), PullOutcome::Applied { fetched: 0, deleted: 1, .. }));
+        assert_eq!(read(b, "brand.json"), None);
+        assert_eq!(read(b, "relays.json").as_deref(), Some("azure directory"), "only the brand files are mirrored away");
+        put(a, "brand-logo", &"x".repeat(crate::meet_brand::LOGO_MAX + 1));
+        p.lab.note_saved();
+        assert!(p.azure.pull_once(&peer, 0).unwrap_err().contains("brand-logo larger"));
     }
 
     /// MR-1 1.4 on the standby: the active's `relays.json` replaces this node's only when it verifies here.

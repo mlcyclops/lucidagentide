@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
-<meta name="color-scheme" content="dark">
+<meta name="color-scheme" content="dark light">
 <meta name="theme-color" content="#0a0b0f">
 <title>Lucid Meet</title>
 <link rel="stylesheet" href="/meet/static/account.css">
@@ -38,8 +38,8 @@
 
 <main id="main" class="card">
   <header class="head">
-    <svg class="mark" aria-hidden="true" focusable="false"><use href="#lucid-mark"/></svg>
-    <p class="eyebrow">Lucid Meet</p>
+    <svg id="topMark" class="mark" aria-hidden="true" focusable="false"><use href="#lucid-mark"/></svg>
+    <p id="topTitle" class="eyebrow">Lucid Meet</p>
     <h1 id="title" tabindex="-1">Lucid Meet</h1>
   </header>
 
@@ -48,6 +48,7 @@
 
   <!-- Accept an invite: choose a username and a password (or a new password) -->
   <section id="join" hidden>
+    <p id="joinLead" class="lede" hidden></p>
     <p id="join-who" class="lede"></p>
     <form id="join-form" class="stack" novalidate>
       <label for="join-username">Username</label>
@@ -114,6 +115,12 @@
     <p id="code-expires" class="hint"></p>
     <button id="again" type="button">Get a code for another device</button>
   </section>
+
+  <footer class="foot">
+    <a id="brandHelp" rel="noopener noreferrer" target="_blank" hidden>Help</a>
+    <p>Powered by Lucid Meet</p>
+    <p>This page comes from the organization's Lucid Admin Console.</p>
+  </footer>
 </main>
 </body>
 </html>

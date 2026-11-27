@@ -1937,7 +1937,7 @@
 
   const PAGES = {
     spokes: ["hubs", "spokes", "relays", "seats", "license", "logs", "requests"],
-    meet: ["people", "seats", "enrollments", "organizations", "signer", "bridges", "holds", "releases", "push", "identity", "calls", "servers", "license", "logs", "requests", "ai", "support"],
+    meet: ["people", "seats", "enrollments", "organizations", "signer", "bridges", "holds", "releases", "push", "identity", "calls", "servers", "license", "logs", "requests", "ai", "support", "branding"],
     admins: ["people", "sessions", "audit", "settings", "account"],
   };
   // Settings > AI (contract AI-1 section 9). The contract's own words are verbatim; the rest are the page's labels.
@@ -1981,6 +1981,8 @@
   PAGE_LABEL.meet.ai = AIW.page;
   // SE-1: the page is named for its tickets; the AC-2a fleet nav keeps the one-word support group for a later phase
   PAGE_LABEL.meet.support = "Support tickets";
+  // TH-1 6: the organization's brand on the guest portal, the web sign-in and the account pages
+  PAGE_LABEL.meet.branding = "Branding";
   // What each role below admin may open (2.3, 7.2): user managers the people lists and seats, viewers health and lists.
   const ROLE_PAGES = {
     "user-manager": { spokes: ["hubs", "spokes", "seats"], meet: ["people", "seats"], admins: ["people", "account"] },
@@ -4365,7 +4367,7 @@
     }
     if (!d.enabled) {
       return section("meet-accounts-h", MA.title, el("p", null, MA.off), el("p", null, MA.offHow, " ", el("code", { class: "cmd" }, MA.importCmd)),
-        el("p", null, MA.offCheck, " ", el("code", { class: "cmd" }, MA.statusCmd)));
+        el("p", null, MA.offCheck, " ", el("code", { class: "cmd" }, MA.statusCmd)), brandingLink());
     }
     const admin = isAdmin();
     const relay = d.relay || {};
@@ -4396,6 +4398,7 @@
       pairs([[MA.signIn, onOff(true)], [MA.org, code(d.org)], [MA.relay, relay.configured ? relay.name : MA.relayNone],
         [MA.testflight, onOff(d.testflight && d.testflight.on)], [MA.always, always.length ? always.join(", ") : undefined],
         [MA.approval, admin ? undefined : modeWord(d.approval)]]),
+      brandingLink(),
       approval,
       admin ? el("div", { class: "page-head" }, btn(MA.inviteBtn, inviteAccount, "primary")) : null,
       el("div", { id: "meet-accounts-out" }),
@@ -5350,6 +5353,275 @@
     }, "primary");
     return panel("Publish a release", box, publish);
   }
+
+  // ---- Meet > Branding (contract TH-1 section 6) ----
+  // The organization's name, accent color, mode, welcome text, help link and logo on the guest portal and the web
+  // sign-in, and from a Lucid Admin Console on its account pages too. Without a brand every page shows the standard
+  // Lucid theme. The preview is drawn on a canvas: this page sets no style, and the console's CSP takes no image data.
+  const BRW = {
+    intro: "Your organization's name, color and logo on the guest page, the web sign-in and the account pages. Without a brand every page shows the standard Lucid theme.",
+    introFleet: "Saving here keeps this console's copy for its account pages, then sends the same change to every Meeting Hub relay, each with its own confirmation.",
+    standard: "Standard Lucid theme",
+    current: "Brand", changed: "Last change", by: "Changed by", edit: "Name and color",
+    name: "Organization name", accent: "Accent color", mode: "Mode", welcome: "Welcome text on the guest setup page",
+    support: "Help link: it must start with https:// or mailto:",
+    modes: [["auto", "Follow the browser"], ["dark", "Dark"], ["light", "Light"]],
+    save: "Save the branding",
+    logo: "Logo", logoPick: "Logo file: PNG, JPEG or WebP, at most 256 KiB, 32 to 1024 pixels a side",
+    logoNow: "Current logo: <type>, <w> by <h> pixels, <n> bytes.", logoNone: "No logo: the Lucid mark shows.",
+    logoUpload: "Upload the logo", logoRemove: "Remove the logo",
+    reset: "Reset to the Lucid theme", preview: "Preview of the guest setup card",
+    previewJoin: "Join", previewPowered: "Powered by Lucid Meet", previewHelp: "Help",
+    textOn: "Button text in <color>: <ratio>:1, and 4.5:1 is needed.", onDark: "The color on the dark background: <ratio>:1, and 3:1 is needed.",
+    white: "white", dark: "near-black", passes: "Readable", fails: "Too faint",
+    nameNeeded: "The name is 1 to 60 characters.", faint: "Choose a color with more contrast: both lines above must pass.",
+    badSupport: "The help link must start with https:// or mailto:", tooBig: "The logo is larger than 256 KiB.",
+    notImage: "Choose a PNG, JPEG or WebP image. SVG logos are refused.", pickFirst: "Choose a logo file first.",
+    saveFirst: "Save the name and color before the logo.",
+    consoleCopy: "Saved for this console's account pages.", relays: "Relays: <list>.", relayOk: "<name> saved",
+    relayFailed: "<name> not saved (<words>)", noRelays: "No Meeting Hub relay is enrolled yet.",
+    open: "Branding of the guest page, the web sign-in and the account pages",
+    dlg: {
+      save: { title: "Save the branding of <name>?", body: ["Guests and members see it the next time a page opens."], button: ["Save"] },
+      logo: { title: "Upload this logo?", body: ["It replaces the Lucid mark in the page header."], button: ["Upload the logo"] },
+      removeLogo: { title: "Remove the logo?", body: ["The Lucid mark shows again; the name and color stay."], button: ["Remove the logo"] },
+      reset: { title: "Reset to the Lucid theme?", body: ["The brand and its logo are removed, and every page shows the standard Lucid theme."], button: ["Reset to the Lucid theme"] },
+    },
+  };
+  const LOGO_MAX = 256 * 1024;
+  const HEX6 = /^#[0-9a-f]{6}$/;
+  const brandingLink = () => (isAdmin() ? el("p", null, el("a", { href: "#/meet/branding" }, BRW.open)) : null);
+  // WCAG 2 relative luminance and contrast, as the relay checks them (TH-1 3).
+  function luminanceOf(hex) {
+    const n = parseInt(hex.slice(1), 16);
+    const lin = (v) => {
+      const s = v / 255;
+      return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+    };
+    return 0.2126 * lin(n >> 16) + 0.7152 * lin((n >> 8) & 255) + 0.0722 * lin(n & 255);
+  }
+  function contrastOf(a, b) {
+    const x = luminanceOf(a);
+    const y = luminanceOf(b);
+    return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+  }
+  // The better of white and near-black text (white on a tie) must reach 4.5:1; the color itself 3:1 on #0a0b0f.
+  function accentCheck(accent) {
+    const white = contrastOf(accent, "#ffffff");
+    const dark = contrastOf(accent, "#0a0b0f");
+    const best = Math.max(white, dark);
+    return { on: white >= dark ? "#ffffff" : "#0a0b0f", best, dark, ok: best >= 4.5 && dark >= 3 };
+  }
+  // Two decimals, rounded down, so a ratio just under a threshold never reads as reaching it.
+  const ratioText = (x) => (Math.floor(x * 100) / 100).toFixed(2);
+  // The logo's type by its magic bytes, as the relay reads it; "" for anything else (SVG among them).
+  function sniffImage(b) {
+    const ascii = (from, to) => String.fromCharCode.apply(null, Array.from(b.subarray(from, to)));
+    if (b.length >= 24 && b[0] === 0x89 && ascii(1, 4) === "PNG") return "image/png";
+    if (b.length >= 4 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "image/jpeg";
+    if (b.length >= 16 && ascii(0, 4) === "RIFF" && ascii(8, 12) === "WEBP") return "image/webp";
+    return "";
+  }
+  function base64Of(bytes) {
+    let s = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + 0x8000)));
+    return btoa(s);
+  }
+  // The guest setup card in the chosen colors: the logo (or a mark in the accent), the name, the welcome text, the
+  // Join button and the unbranded footer.
+  function drawBrandPreview(canvas, v, bitmap) {
+    const ctx = canvas.getContext && canvas.getContext("2d");
+    if (!ctx) return;
+    const t = v.mode === "light" ? { bg: "#f5f6fa", panel: "#ffffff", line: "#b8c0d4", text: "#141826", muted: "#4a5268", link: "#0b6e80" }
+      : { bg: "#0a0b0f", panel: "#0f1117", line: "#252a3a", text: "#edeff6", muted: "#aeb4c6", link: "#46c8dc" };
+    const w = canvas.width;
+    const h = canvas.height;
+    const box = (x, y, bw, bh, r) => {
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(x, y, bw, bh, r);
+      else ctx.rect(x, y, bw, bh);
+    };
+    const font = (size, weight) => weight + " " + size + "px system-ui, sans-serif";
+    ctx.fillStyle = t.bg;
+    ctx.fillRect(0, 0, w, h);
+    box(16, 16, w - 32, h - 32, 16);
+    ctx.fillStyle = t.panel;
+    ctx.fill();
+    ctx.strokeStyle = t.line;
+    ctx.stroke();
+    if (bitmap) {
+      const s = Math.min(160 / bitmap.width, 44 / bitmap.height);
+      ctx.drawImage(bitmap, 36, 36, bitmap.width * s, bitmap.height * s);
+    } else {
+      box(36, 36, 44, 44, 10);
+      ctx.fillStyle = v.accent;
+      ctx.fill();
+    }
+    ctx.fillStyle = t.text;
+    ctx.font = font(20, 650);
+    ctx.fillText(v.name || "Lucid Meet", 36, 110, w - 72);
+    ctx.fillStyle = t.muted;
+    ctx.font = font(14, 400);
+    const words = (v.welcome || "").split(" ");
+    let line = "";
+    let y = 136;
+    for (const word of words) {
+      const next = line ? line + " " + word : word;
+      if (ctx.measureText(next).width > w - 72 && line) {
+        ctx.fillText(line, 36, y);
+        y += 20;
+        line = word;
+        if (y > 176) break;
+      } else line = next;
+    }
+    if (line && y <= 176) ctx.fillText(line, 36, y);
+    box(36, h - 116, w - 72, 44, 10);
+    ctx.fillStyle = v.accent;
+    ctx.fill();
+    ctx.fillStyle = v.on;
+    ctx.font = font(16, 650);
+    ctx.textAlign = "center";
+    ctx.fillText(BRW.previewJoin, w / 2, h - 88);
+    ctx.textAlign = "left";
+    ctx.fillStyle = t.muted;
+    ctx.font = font(12, 400);
+    ctx.fillText(BRW.previewPowered, 36, h - 44);
+    if (v.support) {
+      ctx.fillStyle = t.link;
+      ctx.textAlign = "right";
+      ctx.fillText(BRW.previewHelp, w - 36, h - 44);
+      ctx.textAlign = "left";
+    }
+  }
+  // One Branding page: view is GET's {brand, public}; o.save, o.logo and o.reset take the body and run the write;
+  // o.canSave, o.canReset; o.intro an extra line; o.done after a write.
+  function brandingPage(view, o) {
+    const b = view && view.brand ? view.brand : null;
+    const id = () => uid("brand");
+    const f = {};
+    const ids = { name: id(), accent: id(), mode: id(), welcome: id(), support: id(), logo: id() };
+    f.name = el("input", { id: ids.name, type: "text", maxlength: "60", autocomplete: "organization", spellcheck: "false" });
+    f.accent = el("input", { id: ids.accent, type: "color", "aria-describedby": ids.accent + "-c" });
+    f.mode = el("select", { id: ids.mode }, BRW.modes.map(([v, w]) => el("option", { value: v }, w)));
+    f.welcome = el("textarea", { id: ids.welcome, maxlength: "200" });
+    f.support = el("input", { id: ids.support, type: "url", maxlength: "300", autocomplete: "off", spellcheck: "false" });
+    f.logo = el("input", { id: ids.logo, type: "file", accept: "image/png,image/jpeg,image/webp" });
+    f.name.value = b ? b.name : "";
+    f.accent.value = b ? b.accent : "#c64bd6";
+    f.mode.value = b ? b.mode : "auto";
+    f.welcome.value = (b && b.welcome) || "";
+    f.support.value = (b && b.support) || "";
+    const contrastLine = el("p", { id: ids.accent + "-c", class: "note", role: "status" });
+    const canvas = el("canvas", { class: "brand-preview", width: "420", height: "300", role: "img", "aria-label": BRW.preview });
+    let bitmap = null;
+    let picked = null;
+    const values = () => ({ name: f.name.value.trim(), accent: f.accent.value.toLowerCase(), mode: f.mode.value, welcome: f.welcome.value.trim(), support: f.support.value.trim() });
+    const modeWord = (m) => (BRW.modes.find(([v]) => v === m) || ["", m])[1];
+    function update() {
+      const v = values();
+      const c = HEX6.test(v.accent) ? accentCheck(v.accent) : null;
+      contrastLine.replaceChildren(...(c ? [fill(BRW.textOn, { color: c.on === "#ffffff" ? BRW.white : BRW.dark, ratio: ratioText(c.best) }), " ",
+        fill(BRW.onDark, { ratio: ratioText(c.dark) }), " ", stChip(c.ok ? BRW.passes : BRW.fails, c.ok ? "ok" : "bad")] : []));
+      drawBrandPreview(canvas, Object.assign(v, { on: c ? c.on : "#ffffff" }), bitmap);
+    }
+    for (const x of [f.name, f.accent, f.mode, f.welcome, f.support]) {
+      x.addEventListener("input", update);
+      x.addEventListener("change", update);
+    }
+    f.logo.addEventListener("change", () => {
+      picked = null;
+      bitmap = null;
+      const file = f.logo.files && f.logo.files[0];
+      if (!file) return update();
+      (async () => {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const type = sniffImage(bytes);
+        if (bytes.length > LOGO_MAX) return invalid(f.logo, BRW.tooBig);
+        if (!type) return invalid(f.logo, BRW.notImage);
+        picked = { type, data: base64Of(bytes) };
+        try {
+          bitmap = await createImageBitmap(file);
+        } catch (e) {
+          bitmap = null;
+        }
+      })().then(update, fail);
+    });
+    const save = btn(BRW.save, () => {
+      const v = values();
+      if (!v.name || [...v.name].length > 60) return invalid(f.name, BRW.nameNeeded);
+      if (!HEX6.test(v.accent) || !accentCheck(v.accent).ok) return invalid(f.accent, BRW.faint);
+      if (v.support && !/^(https:\/\/|mailto:)/.test(v.support)) return invalid(f.support, BRW.badSupport);
+      confirmDialog({
+        spec: BRW.dlg.save, vals: { name: v.name }, name: v.name,
+        params: [[BRW.name, v.name], [BRW.accent, code(v.accent)], [BRW.mode, modeWord(v.mode)], [BRW.welcome, v.welcome], [BRW.support, v.support]],
+        fields: [{ kind: "reason" }],
+        run: (d) => o.save(Object.assign({}, v, { reason: d.reason })), done: o.done,
+      });
+    }, "primary");
+    const upload = btn(BRW.logoUpload, () => {
+      if (!picked) return invalid(f.logo, BRW.pickFirst);
+      if (!b) return invalid(f.logo, BRW.saveFirst);
+      const body = picked;
+      confirmDialog({ spec: BRW.dlg.logo, vals: {}, params: [[BRW.logo, body.type]], run: () => o.logo(body), done: o.done });
+    });
+    const removeLogo = b && b.logo ? btn(BRW.logoRemove, () => confirmDialog({ spec: BRW.dlg.removeLogo, vals: {}, danger: true, run: () => o.logo({ remove: true }), done: o.done })) : null;
+    const reset = b && o.canReset ? btn(BRW.reset, () => confirmDialog({
+      spec: BRW.dlg.reset, vals: {}, danger: true, fields: [{ kind: "reason" }], run: (d) => o.reset({ reason: d.reason }), done: o.done,
+    }), "danger") : null;
+    const logoNow = b && b.logo ? fillText(BRW.logoNow, { type: b.logo.type, w: b.logo.w, h: b.logo.h, n: b.logo.bytes }) : BRW.logoNone;
+    const field = (fid, label, input, ...more) => el("div", { class: "field" }, el("label", { for: fid }, label), input, ...more);
+    const kids = [head(PAGE_LABEL.meet.branding), el("p", null, BRW.intro), o.intro ? el("p", null, o.intro) : null,
+      panel(null, pairs([[BRW.current, b ? b.name : BRW.standard], [BRW.changed, b ? whenAny(b.updated) : undefined], [BRW.by, b ? b.by : undefined], [BRW.logo, logoNow]]))];
+    if (o.canSave) {
+      kids.push(panel(BRW.edit,
+        field(ids.name, BRW.name, f.name),
+        field(ids.accent, BRW.accent, f.accent, contrastLine),
+        field(ids.mode, BRW.mode, f.mode),
+        field(ids.welcome, BRW.welcome, f.welcome),
+        field(ids.support, BRW.support, f.support),
+        sub(BRW.preview, canvas),
+        save));
+      kids.push(panel(BRW.logo, el("p", { class: "note" }, logoNow), field(ids.logo, BRW.logoPick, f.logo), el("div", { class: "page-head" }, upload, removeLogo)));
+    }
+    if (reset) kids.push(panel(null, reset));
+    update();
+    return kids.filter(Boolean);
+  }
+  // The relay's own console: the relay's brand, which its guest and web ports serve.
+  pages.meet_branding = async () => {
+    const d = await api("GET", "meet/brand");
+    const write = (path, action) => (body) => post(path, body, { action, target: "-" });
+    return brandingPage(d, { save: write("meet/brand", "meet.brand.set"), logo: write("meet/brand/logo", "meet.brand.logo"), reset: write("meet/brand/reset", "meet.brand.reset"),
+      canSave: canWrite(), canReset: isAdmin() });
+  };
+  // A Lucid Admin Console: its own copy for the account pages first, then the same change on every Meeting Hub relay
+  // through the proxy (6), each with its own fleet confirmation; the page says which relays took it.
+  pages.fleetBranding = async () => {
+    const [d, all] = await Promise.all([api("GET", "meet/accounts/brand", null, { direct: true }), fleetRelays()]);
+    const relays = all.filter((x) => x.product === "meet" && x.state === "active").sort(byName);
+    let said = "";
+    const both = (path, action) => async (body) => {
+      const r = await post("meet/accounts/" + path, body, { action, target: "-" }, { direct: true });
+      const list = [];
+      for (const x of relays) {
+        try {
+          await post("meet/" + path, body, { action, target: "-" }, { relay: x.id });
+          list.push(fillText(BRW.relayOk, { name: x.name }));
+        } catch (e) {
+          if (e && e.status === 401) throw e;
+          list.push(fillText(BRW.relayFailed, { name: x.name, words: e && e.message ? e.message : String(e) }));
+        }
+      }
+      said = BRW.consoleCopy + " " + (relays.length ? fillText(BRW.relays, { list: list.join("; ") }) : BRW.noRelays);
+      return r;
+    };
+    return brandingPage(d, {
+      save: both("brand", "meet.brand.set"), logo: both("brand/logo", "meet.brand.logo"), reset: both("brand/reset", "meet.brand.reset"),
+      canSave: isAdmin(), canReset: isAdmin(), intro: BRW.introFleet,
+      done: () => render({ keepMessages: true }).then(() => say(said)),
+    });
+  };
+
   pages.meet_push = async () => {
     const d = await api("GET", "meet/push");
     const failed = Object.entries(d.failed24h || {}).map(([reason, n]) => ({ reason, n }));
@@ -6414,6 +6686,8 @@
     if (a === "setup") return isAdmin() ? (c) => setupPage(b || "signin", c) : noPage(FMSG.notFound, FMSG.notAllowed);
     // AC-2b-D 3.7: the Meeting Hub organization CA page (admin).
     if (a === "license" && b === "meet-ca") return isAdmin() ? pages.fleetMeetCa : noPage(FW["meet-ca.title"], FMSG.notAllowed);
+    // TH-1 6: Branding (admin), linked from the Lucid Meet accounts section: the console's copy and every Meeting Hub relay
+    if (a === "meet" && b === "branding") return isAdmin() ? pages.fleetBranding : noPage(PAGE_LABEL.meet.branding, FMSG.notAllowed);
     const g = FNAV.find((x) => x.route === a);
     if (!g || (b && !g.pages.some(([id]) => id === b) && !(a === "relays" && /^r_[A-Za-z0-9]+$/.test(b)))) return noPage(FMSG.notFound, FMSG.notFoundBody);
     const href = a === "relays" && (!b || /^r_/.test(b)) ? "#/relays" : "#/" + a + (b ? "/" + b : "");

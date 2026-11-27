@@ -278,6 +278,11 @@ pub static GUEST_GATE: &[(&str, &str, Class)] = &[
     ("POST", "/g/v1/leave", S),
 ];
 
+/// TH-1 section 4: the brand reads of the guest and web ports. Like the page files they are exempt from the gate: the
+/// ports answer them (meet_brand::port_read) before the gate and before MR-1's admission, with no session, in every
+/// license state, so a stopped or standby relay still shows its organization's page while it refuses the API.
+pub static BRAND_READS: [&str; 4] = ["/g/v1/brand", "/g/brand/logo", "/w/v1/brand", "/w/brand/logo"];
+
 /// A route's class in `table`; None for a route missing from it (refused while stopped).
 pub fn class_in(table: &[(&str, &str, Class)], method: &str, path: &str) -> Option<Class> {
     table.iter().find(|(m, p, _)| *m == method && *p == path).map(|(_, _, c)| *c)
@@ -1148,6 +1153,20 @@ mod tests {
         assert_eq!(presence, vec!["/v1/whoami", "/v1/events", "/v1/hello", "/v1/bye"]);
         assert!(GUEST_GATE.iter().all(|(_, _, c)| *c == Class::Service), "the guest port serves people only");
         assert_eq!(class_in(GATE, "POST", "/v1/not-a-route"), None);
+    }
+
+    /// TH-1 4: the brand reads are no gated API route (a stopped gate would refuse a route missing from its table), and
+    /// meet_brand answers exactly them, which the ports call before the gate and MR-1's admission.
+    #[test]
+    fn brand_reads_are_answered_before_the_gate_like_the_page_files() {
+        for p in BRAND_READS {
+            assert_eq!(class_in(GUEST_GATE, "GET", p), None, "{p}");
+            assert_eq!(class_in(GATE, "GET", p), None, "{p}");
+            assert!(crate::meet_brand::port_read("", &p[..3], "GET", p, "").is_some(), "{p}");
+        }
+        for (prefix, other) in [("/g/", "/g/v1/wait"), ("/w/", "/w/v1/config"), ("/g/", "/g/brand/logo/x")] {
+            assert_eq!(crate::meet_brand::port_read("", prefix, "GET", other, ""), None, "{other}");
+        }
     }
 
     /// Every route of both ports in one service state: `service` routes refused (or served), `exempt` ones always.

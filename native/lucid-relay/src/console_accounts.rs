@@ -124,8 +124,18 @@ const fn admin_post(path: &'static str, action: &'static str, target: &'static s
     RouteSpec { method: "POST", path, role: Role::Admin, action, target, stepup: false, need: Need::Any, security: false, keys, body_max: crate::console::BODY_MAX }
 }
 
-/// The admin routes (after /console/api/), fleet console only; admins as the Meet console asked, no step-up.
-pub static ROUTES: [RouteSpec; 6] = [
+/// TH-1 5, 6: the console's own copy of the organization's brand, which the account pages read.
+const BRAND_READ: &str = "/meet/api/brand";
+const BRAND_LOGO: &str = "/meet/brand/logo";
+
+/// The admin routes (after /console/api/), fleet console only; admins as the Meet console asked, no step-up. The TH-1
+/// brand rows (the console's own copy for the account pages; the Branding page then sends the same change to each
+/// Meeting Hub relay through the proxy) take a step-up like the relays' own `meet/brand` rows.
+pub static ROUTES: [RouteSpec; 10] = [
+    RouteSpec { method: "GET", path: "meet/accounts/brand", role: Role::Admin, action: "", target: "-", stepup: false, need: Need::Any, security: false, keys: &[], body_max: 0 },
+    RouteSpec { method: "POST", path: "meet/accounts/brand", role: Role::Admin, action: "meet.brand.set", target: "-", stepup: true, need: Need::Any, security: false, keys: &crate::meet_brand::FIELD_KEYS, body_max: 4096 },
+    RouteSpec { method: "POST", path: "meet/accounts/brand/logo", role: Role::Admin, action: "meet.brand.logo", target: "-", stepup: true, need: Need::Any, security: false, keys: &crate::meet_brand::LOGO_KEYS, body_max: crate::meet_brand::LOGO_BODY_MAX },
+    RouteSpec { method: "POST", path: "meet/accounts/brand/reset", role: Role::Admin, action: "meet.brand.reset", target: "-", stepup: true, need: Need::Any, security: false, keys: &["reason"], body_max: 1024 },
     RouteSpec { method: "GET", path: "meet/accounts", role: Role::Admin, action: "", target: "-", stepup: false, need: Need::Any, security: false, keys: &[], body_max: 0 },
     admin_post("meet/accounts/invite", "meet.account.invite", "email", &["name", "email"]),
     admin_post("meet/accounts/reset", "meet.account.reset", "username", &["username"]),
@@ -1104,6 +1114,8 @@ pub struct Accounts {
     host: Arc<dyn Host>,
     settings: Option<AccountSettings>,
     store: Store,
+    /// The console's state folder: its own copy of the organization's brand (TH-1 6).
+    brand_dir: PathBuf,
     limits: Limiter,
     relay: Option<Relay>,
     device_key: Option<Key>,
@@ -1162,6 +1174,7 @@ impl Accounts {
             host,
             settings: parts.settings,
             store: Store { path: state_dir.join(STATE_FILE), mu: Mutex::new(()) },
+            brand_dir: state_dir.to_path_buf(),
             limits: Limiter::default(),
             relay: parts.relay.map(|transport| Relay { transport, session: Mutex::new(String::new()) }),
             device_key: parts.device_key,
@@ -1651,12 +1664,17 @@ impl Accounts {
         }
         let page = PAGES.iter().find(|p| r.method == "GET" && p.0 == path);
         let route = PUBLIC_ROUTES.iter().find(|p| r.method == "POST" && **p == path);
+        let brand = r.method == "GET" && (path == BRAND_READ || path == BRAND_LOGO);
         let unknown = || Some(closing(public_json(404, &json!({ "error": "Unknown path." }), None)));
         if !self.enabled() {
-            return if page.is_some() || route.is_some() { unknown() } else { None };
+            return if page.is_some() || route.is_some() || brand { unknown() } else { None };
         }
         if r.method != "GET" && r.method != "POST" {
             return Some(closing(public_json(405, &json!({ "error": "Method not allowed." }), None)));
+        }
+        // TH-1 4: the brand the pages wear; only the logo takes a query (`?v=`, its cache key)
+        if brand && fragment.is_empty() && (path == BRAND_LOGO || query.is_empty()) {
+            return Some(self.brand_public(path, query));
         }
         if (page.is_none() && route.is_none()) || !query.is_empty() || !fragment.is_empty() {
             return unknown();
@@ -1696,8 +1714,11 @@ impl Accounts {
 
     /// One admin route (role, origin, size and keys checked by the console); writes answer `Done` for the core's
     /// audit (never a link or a token in it).
-    pub fn admin_route(&self, spec: &RouteSpec, params: &Value, by: &str, _t: i64) -> Result<Done, ApiError> {
+    pub fn admin_route(&self, spec: &RouteSpec, params: &Value, by: &str, t: i64) -> Result<Done, ApiError> {
         let b = params.as_object().cloned().unwrap_or_default();
+        if spec.path == "meet/accounts/brand" || spec.path.starts_with("meet/accounts/brand/") {
+            return self.brand_route(spec, &b, by, t);
+        }
         let done = |(answer, target, detail): (Value, String, Value)| Done::ok(Out::ok(answer), Some(target), detail);
         match spec.path {
             "meet/accounts" => self.view().map(|v| Done::plain(Out::ok(v))),
@@ -1709,6 +1730,60 @@ impl Accounts {
             _ => Err(refuse(404, "There is no such page.")),
         }
         .map_err(Refusal::api)
+    }
+
+    /// TH-1 6: the console's own copy of the organization's brand (`meet-brand.json`, `meet-brand-logo` in its state
+    /// folder), read by the account pages. Validated by the relays' rules (meet_brand.rs); `by` and `updated` are the
+    /// console's. The Branding page sends the same change to each Meeting Hub relay through the proxy.
+    fn brand_route(&self, spec: &RouteSpec, b: &Obj, by: &str, t: i64) -> Result<Done, ApiError> {
+        use crate::meet_brand::{self as mb, CONSOLE_FILES};
+        let dir = self.brand_dir.as_path();
+        let current = mb::load(dir, &CONSOLE_FILES);
+        if spec.method == "GET" {
+            let public = mb::public(current.as_ref(), "/meet/");
+            return Ok(Done::plain(Out::ok(json!({ "ok": true, "brand": current.as_ref().map(mb::to_value), "public": public["brand"] }))));
+        }
+        let invalid = |words: String| ApiError::with("invalid", words);
+        let failed = |why: String| {
+            self.host.log("meet.accounts.brand", &why);
+            ApiError::of("write-failed")
+        };
+        if spec.action != "meet.brand.logo" {
+            crate::console_auth::reason_of(b.get("reason"))?;
+        }
+        let saved = match spec.action {
+            "meet.brand.reset" => {
+                mb::remove(dir, &CONSOLE_FILES).map_err(failed)?;
+                None
+            }
+            "meet.brand.set" => {
+                let next = mb::with_fields(current.as_ref(), b, by, t).map_err(invalid)?;
+                mb::save(dir, &CONSOLE_FILES, &next, None).map_err(failed)?;
+                Some(next)
+            }
+            _ => {
+                let (next, bytes) = mb::with_logo(current.as_ref(), b, by, t).map_err(invalid)?;
+                mb::save(dir, &CONSOLE_FILES, &next, bytes.as_deref()).map_err(failed)?;
+                Some(next)
+            }
+        };
+        let detail = match &saved {
+            Some(n) => json!({ "name": n.name, "accent": n.accent, "mode": n.mode, "logo": n.logo.as_ref().map(|l| l.sha256.clone()) }),
+            None => json!({ "reset": true }),
+        };
+        Ok(Done::ok(Out::ok(json!({ "ok": true, "brand": saved.as_ref().map(mb::to_value) })), Some("-".to_owned()), detail))
+    }
+
+    /// TH-1 4: `GET /meet/api/brand` (no query) and `GET /meet/brand/logo[?v=]`, beside the account pages.
+    fn brand_public(&self, path: &str, query: &str) -> ConsoleReply {
+        use crate::meet_brand::{self as mb, Answer, CONSOLE_FILES};
+        let dir = Some(self.brand_dir.as_path());
+        let answer = if path == BRAND_READ { Answer::Json(mb::public(dir.and_then(|d| mb::load(d, &CONSOLE_FILES)).as_ref(), "/meet/")) } else { mb::logo_answer(dir, &CONSOLE_FILES, query) };
+        match answer {
+            Answer::Json(v) => public_reply(200, JSON_TYPE, dumps(&v).into_bytes(), mb::JSON_CACHE, None),
+            Answer::Logo { ctype, cache, bytes } => public_reply(200, ctype, bytes, cache, None),
+            Answer::NoLogo => public_json(404, &json!({ "error": mb::NO_LOGO }), None),
+        }
     }
 
     /// The accounts, the open invites, the approval mode and what is set up.
@@ -2777,6 +2852,52 @@ https://lucidhubmeeting.emertins.com:8443/meet/signin\n";
 
     fn answer(r: &ConsoleReply) -> Value {
         serde_json::from_slice(&r.body).unwrap()
+    }
+
+    /// TH-1 4 to 6: the console's own brand copy, set through the admin routes (validated, `by` from the console),
+    /// served beside the account pages with their headers: `{"brand": null}` without one, never `by` or `updated`,
+    /// the logo with its stored type and nosniff, long-cached only for the current `?v=`, 404 without one.
+    #[test]
+    fn console_accounts_brand_copy_serves_the_account_pages() {
+        let w = world("acct-brand");
+        let a = &w.a;
+        let get = |target: &str| call(a, "GET", target, None, b"").unwrap();
+        let spec = |m: &str, p: &str| ROUTES.iter().find(|r| r.method == m && r.path == p).unwrap();
+        let admin = "admin@emertins.com";
+        let none = get("/meet/api/brand");
+        assert_eq!((none.status, answer(&none)), (200, json!({ "brand": null })));
+        assert!(none.content_type.starts_with("application/json"));
+        assert!(none.headers.contains(&("Cache-Control", "no-cache".into())) && none.headers.contains(&("Content-Security-Policy", CSP.into())));
+        let no_logo = get("/meet/brand/logo");
+        assert_eq!((no_logo.status, answer(&no_logo)["error"].as_str()), (404, Some("this organization has no logo")));
+        // refused whole: an unknown key, a weak accent, no reason
+        for body in [json!({ "name": "Contoso", "accent": "#0f6cbd", "reason": "r", "css": "x" }), json!({ "name": "Contoso", "accent": "#777777", "reason": "r" }), json!({ "name": "Contoso", "accent": "#0f6cbd" })] {
+            assert_eq!(a.admin_route(spec("POST", "meet/accounts/brand"), &body, admin, 5).err().unwrap().code, "invalid", "{body}");
+        }
+        let set = json!({ "name": "Contoso", "accent": "#0f6cbd", "welcome": "Welcome.", "reason": "brand" });
+        let done = a.admin_route(spec("POST", "meet/accounts/brand"), &set, admin, 5).unwrap();
+        assert_eq!((done.out.body["brand"]["by"].as_str(), done.out.body["brand"]["updated"].as_i64()), (Some(admin), Some(5)));
+        let png = crate::meet_brand::tests::png(64, 64);
+        let logo = json!({ "type": "image/png", "data": crate::meet_json::b64(&png) });
+        a.admin_route(spec("POST", "meet/accounts/brand/logo"), &logo, admin, 6).unwrap();
+        let read = answer(&get("/meet/api/brand"));
+        assert_eq!((read["brand"]["name"].as_str(), read["brand"]["onAccent"].as_str(), read["brand"]["support"].clone()), (Some("Contoso"), Some("#ffffff"), Value::Null));
+        assert!(!read.to_string().contains(admin) && !read.to_string().contains("updated"));
+        let path = read["brand"]["logo"].as_str().unwrap().to_owned();
+        assert!(path.starts_with("/meet/brand/logo?v="), "{path}");
+        let image = get(&path);
+        assert_eq!((image.status, image.content_type, image.body.as_slice()), (200, "image/png", png.as_slice()));
+        assert!(image.headers.contains(&("Cache-Control", "public, max-age=86400".into())) && image.headers.contains(&("X-Content-Type-Options", "nosniff".into())));
+        assert!(get("/meet/brand/logo?v=000000000000").headers.contains(&("Cache-Control", "no-cache".into())));
+        assert_eq!(get("/meet/api/brand?x=1").status, 404);
+        let view = a.admin_route(spec("GET", "meet/accounts/brand"), &Value::Null, admin, 7).unwrap();
+        assert_eq!(view.out.body["brand"]["logo"]["w"].as_u64(), Some(64));
+        a.admin_route(spec("POST", "meet/accounts/brand/reset"), &json!({ "reason": "back" }), admin, 8).unwrap();
+        assert_eq!(answer(&get("/meet/api/brand")), json!({ "brand": null }));
+        assert_eq!(get("/meet/brand/logo").status, 404);
+        // with password sign-in off the pages are not served, and neither is their brand
+        let off = world_with("acct-brand-off", true, false);
+        assert_eq!(call(&off.a, "GET", "/meet/api/brand", None, b"").unwrap().status, 404);
     }
 
     #[test]

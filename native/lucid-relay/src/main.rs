@@ -172,6 +172,7 @@ mod mcp;
 #[cfg(test)]
 mod mcp_e2e_tests;
 mod meet;
+mod meet_brand;
 mod meet_ca;
 mod meet_cluster;
 mod meet_console;

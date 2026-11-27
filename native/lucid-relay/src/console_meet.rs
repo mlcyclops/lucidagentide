@@ -56,7 +56,14 @@ const PEOPLE_STATES: [&str; 6] = ["online", "joined", "waiting", "approved", "in
 /// The 4.9 routes, each with its role (L1). GETs check the license themselves: the section reads in every state but
 /// none; CRL uploads, blocks, unblocks and hold placement are security actions that work in every state (2.4); bridge
 /// changes check the product themselves (turning a bridge off works in every state).
-pub static ROUTES: [RouteSpec; 55] = [
+pub static ROUTES: [RouteSpec; 59] = [
+    // TH-1 6: the organization's brand for the guest portal and the web sign-in (meet_brand.rs); setting it needs the
+    // product license, going back to the standard theme works in every state. The logo comes as JSON {type, data
+    // (base64), remove}: console POSTs are JSON.
+    RouteSpec { method: "GET", path: "meet/brand", role: Role::Admin, action: "", target: "-", stepup: false, need: Need::Any, security: false, keys: &[], body_max: 0 },
+    RouteSpec { method: "POST", path: "meet/brand", role: Role::Admin, action: "meet.brand.set", target: "-", stepup: true, need: Need::Product, security: false, keys: &crate::meet_brand::FIELD_KEYS, body_max: 4096 },
+    RouteSpec { method: "POST", path: "meet/brand/logo", role: Role::Admin, action: "meet.brand.logo", target: "-", stepup: true, need: Need::Product, security: false, keys: &crate::meet_brand::LOGO_KEYS, body_max: crate::meet_brand::LOGO_BODY_MAX },
+    RouteSpec { method: "POST", path: "meet/brand/reset", role: Role::Admin, action: "meet.brand.reset", target: "-", stepup: true, need: Need::Any, security: false, keys: &["reason"], body_max: 1024 },
     // MR-1 2.5, 4: this relay's cluster node (role, epoch, generation, lag), the directory it holds, and the operator's
     // role changes (each restarts the relay in its new role once answered)
     RouteSpec { method: "GET", path: "meet/cluster/status", role: Role::Admin, action: "", target: "-", stepup: false, need: Need::Any, security: false, keys: &[], body_max: 0 },
@@ -138,7 +145,7 @@ pub fn services_summary(servers: Option<&Value>, push: Option<&Value>) -> Value 
 }
 
 const SECURITY_ACTIONS: [&str; 8] = ["meet.block", "meet.unblock", "meet.crl", "meet.revoke", "meet.holds.place", "meet.ai.hold", "meet.ai.mcp.server.off", "meet.ai.mcp.off"];
-const PAGES: [&str; 17] = ["people", "seats", "enrollments", "organizations", "signer", "bridges", "holds", "releases", "push", "identity", "calls", "servers", "license", "logs", "requests", "ai", "support"];
+const PAGES: [&str; 18] = ["people", "seats", "enrollments", "organizations", "signer", "bridges", "holds", "releases", "push", "identity", "calls", "servers", "license", "logs", "requests", "ai", "support", "branding"];
 const LOCKED_PAGES: [&str; 6] = ["security", "seats", "license", "logs", "requests", "support"];
 
 // ── refusals ─────────────────────────────────────────────────────────────────────────────────────────────────
@@ -987,6 +994,68 @@ impl MeetSection {
         Ok(SectionAnswer::Done { answer, target: version, detail })
     }
 
+    /// TH-1 6: the relay's state folder, where its guest and web ports read the brand.
+    fn brand_dir(relay: &Relay) -> Result<PathBuf, ApiError> {
+        let dir = relay.settings.state_dir.trim();
+        if dir.is_empty() {
+            return Err(invalid("This relay has no state folder (state_dir in relay.json), so it keeps no brand."));
+        }
+        Ok(PathBuf::from(dir))
+    }
+
+    /// `GET meet/brand`: the stored document (with `by` and `updated`) or null, and the public read the pages get.
+    fn brand_view(relay: &Relay) -> Result<Value, ApiError> {
+        let brand = crate::meet_brand::load(&Self::brand_dir(relay)?, &crate::meet_brand::RELAY_FILES);
+        let public = crate::meet_brand::public(brand.as_ref(), "/g/");
+        Ok(json!({"ok": true, "brand": brand.as_ref().map(crate::meet_brand::to_value), "public": public["brand"]}))
+    }
+
+    /// `POST meet/brand`, `meet/brand/logo`, `meet/brand/reset`: on one admin's word, audited with what changed.
+    fn brand_write(&self, call: &SectionCall) -> Result<SectionAnswer, ApiError> {
+        let action = call.spec.action;
+        if action != "meet.brand.logo" {
+            reason_of(call.body.get("reason")).map_err(invalid)?;
+        }
+        let answer = self.run(action, call.body, &call.caller.email, true, call.t)?;
+        let detail = match answer.get("brand").filter(|b| !b.is_null()) {
+            Some(b) => json!({"name": b.get("name"), "accent": b.get("accent"), "mode": b.get("mode"), "logo": b.get("logo").and_then(|l| l.get("sha256")).cloned().unwrap_or(Value::Null)}),
+            None => json!({"reset": true}),
+        };
+        Ok(SectionAnswer::Done { answer, target: "-".into(), detail })
+    }
+
+    /// The relay actions `meet.brand.set` (and its logo) and `meet.brand.reset`: the files the guest and web ports
+    /// serve, then a new MR-1 generation so the standby takes them.
+    fn brand_run(relay: &Relay, action: &str, p: &Obj, by: &str, t: i64) -> Result<Value, ApiError> {
+        use crate::meet_brand::{self as mb, RELAY_FILES};
+        let dir = Self::brand_dir(relay)?;
+        let current = mb::load(&dir, &RELAY_FILES);
+        let failed = |e: String| {
+            crate::meet::log_error(&format!("console.meet-brand why={}", m::kv(&e)));
+            ApiError::of("write-failed")
+        };
+        let saved = match action {
+            "meet.brand.reset" => {
+                mb::remove(&dir, &RELAY_FILES).map_err(failed)?;
+                None
+            }
+            "meet.brand.set" => {
+                let b = mb::with_fields(current.as_ref(), p, by, t).map_err(invalid)?;
+                mb::save(&dir, &RELAY_FILES, &b, None).map_err(failed)?;
+                Some(b)
+            }
+            _ => {
+                let (b, bytes) = mb::with_logo(current.as_ref(), p, by, t).map_err(invalid)?;
+                mb::save(&dir, &RELAY_FILES, &b, bytes.as_deref()).map_err(failed)?;
+                Some(b)
+            }
+        };
+        if let Some(c) = relay.hub.cluster() {
+            c.note_saved();
+        }
+        Ok(json!({"ok": true, "brand": saved.as_ref().map(mb::to_value)}))
+    }
+
     fn files_start(&self, call: &SectionCall) -> Result<SectionAnswer, ApiError> {
         // 3.9: 6 an hour for the console, counted by the core console
         if let Some(core) = self.core() {
@@ -1078,6 +1147,7 @@ impl MeetSection {
                 relay.set_release("", &who, &body).map_err(from_hub)?;
                 Ok(json!({"ok": true}))
             }
+            "meet.brand.set" | "meet.brand.logo" | "meet.brand.reset" => Self::brand_run(&relay, action, &p, &who.principal, t),
             "meet.clock.confirm" => {
                 // approved (or sole-admin path): the browser time of the request, checked again now
                 let browser = p.get("browserTime").and_then(Value::as_i64).ok_or_else(|| invalid("browserTime is a time in milliseconds."))?;
@@ -1277,7 +1347,8 @@ impl ProductSection for MeetSection {
             cluster_write_guard(&relay, call.spec.path)?;
         }
         // Seats and the relay's time are always allowed (2.4)
-        let always = matches!(call.spec.path, "meet/identity" | "meet/seats" | "meet/clock" | "meet/counts" | "meet/support" | "meet/cluster/status" | "meet/cluster/directory");
+        // ...and so is the brand (TH-1: back to the standard theme works in every state)
+        let always = matches!(call.spec.path, "meet/identity" | "meet/seats" | "meet/clock" | "meet/counts" | "meet/support" | "meet/cluster/status" | "meet/cluster/directory" | "meet/brand");
         if call.spec.method == "GET" && call.license == LicenseState::None && !always {
             return Err(license_needed());
         }
@@ -1395,6 +1466,11 @@ impl ProductSection for MeetSection {
             ("POST", "meet/holds") => self.holds_place(&relay, call),
             ("POST", "meet/holds/release") => self.holds_release(&relay, call),
             ("POST", "meet/release") => self.release_set(&relay, call),
+            ("GET", "meet/brand") => {
+                filters(call.query, &[])?;
+                read(Self::brand_view(&relay))
+            }
+            ("POST", "meet/brand" | "meet/brand/logo" | "meet/brand/reset") => self.brand_write(call),
             ("POST", "meet/files/start") => self.files_start(call),
             ("GET", "meet/ai") => read(self.ai_view(&relay, call)),
             ("GET", "meet/ai/cards") => read(self.ai_cards(&relay, call)),
@@ -3042,6 +3118,54 @@ mod tests {
         assert_eq!(v["history"].as_array().unwrap().len(), 4);
         assert_eq!(v["history"][0]["version"], "1.0.3");
         assert!(v["history"][0]["until"].is_null());
+    }
+
+    /// TH-1 6: the brand is validated, written where the guest and web ports read it (with `by` and `updated` from the
+    /// console, never the body), its logo comes as base64 JSON, reset works in every license state, and a standby
+    /// takes no brand.
+    #[test]
+    fn console_meet_brand_set_logo_reset_and_standby_refusal() {
+        use crate::meet_brand::{port_read, Answer};
+        let (relay, section) = fixture(&["ann@x.org"]);
+        let dir = PathBuf::from(&relay.settings.state_dir);
+        let post = |path: &str, body: Value, license: LicenseState| call(&section, "POST", path, "", body, "ann@x.org", true, license, T0);
+        // refused with words, nothing written: a weak accent, a missing reason, a logo before a brand
+        assert_eq!(post("meet/brand", json!({"name": "Contoso", "accent": "#777777", "reason": "brand"}), LicenseState::Valid).err().unwrap().code, "invalid");
+        assert_eq!(post("meet/brand", json!({"name": "Contoso", "accent": "#0f6cbd"}), LicenseState::Valid).err().unwrap().code, "invalid");
+        let logo = crate::meet_brand::tests::png(128, 96);
+        let logo_body = json!({"type": "image/png", "data": crate::meet_json::b64(&logo)});
+        assert_eq!(post("meet/brand/logo", logo_body.clone(), LicenseState::Valid).err().unwrap().code, "invalid");
+        assert!(!dir.join("brand.json").exists() && !dir.join("brand-logo").exists());
+        let set = json!({"name": "Contoso", "accent": "#0f6cbd", "mode": "dark", "welcome": "Welcome to Contoso.", "support": "mailto:help@contoso.example", "reason": "brand"});
+        let SectionAnswer::Done { answer, detail, .. } = post("meet/brand", set, LicenseState::Valid).unwrap() else { panic!("not done") };
+        assert_eq!((answer["brand"]["by"].as_str(), answer["brand"]["updated"].as_i64()), (Some("ann@x.org"), Some(T0)));
+        assert_eq!(detail["accent"], "#0f6cbd");
+        assert!(matches!(post("meet/brand/logo", logo_body, LicenseState::Valid).unwrap(), SectionAnswer::Done { .. }));
+        assert_eq!(std::fs::read(dir.join("brand-logo")).unwrap(), logo);
+        // an SVG called a PNG is refused and the stored logo stays
+        let svg = json!({"type": "image/png", "data": crate::meet_json::b64(b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>")});
+        assert_eq!(post("meet/brand/logo", svg, LicenseState::Valid).err().unwrap().code, "invalid");
+        assert_eq!(std::fs::read(dir.join("brand-logo")).unwrap(), logo);
+        // what the guest port answers, and the console's view (readable in every license state)
+        let Some(Answer::Json(public)) = port_read(&relay.settings.state_dir, "/g/", "GET", "/g/v1/brand", "") else { panic!("no read") };
+        assert_eq!((public["brand"]["mode"].as_str(), public["brand"]["onAccent"].as_str()), (Some("dark"), Some("#ffffff")));
+        assert!(public["brand"]["logo"].as_str().is_some_and(|l| l.starts_with("/g/brand/logo?v=")));
+        let SectionAnswer::Read(view) = call(&section, "GET", "meet/brand", "", Value::Null, "ann@x.org", true, LicenseState::None, T0).unwrap() else { panic!("not a read") };
+        assert_eq!((view["brand"]["by"].as_str(), view["brand"]["logo"]["w"].as_u64()), (Some("ann@x.org"), Some(128)));
+        // back to the standard theme, without a license
+        assert!(matches!(post("meet/brand/reset", json!({"reason": "back to Lucid"}), LicenseState::None).unwrap(), SectionAnswer::Done { .. }));
+        assert!(!dir.join("brand.json").exists() && !dir.join("brand-logo").exists());
+        assert_eq!(port_read(&relay.settings.state_dir, "/w/", "GET", "/w/v1/brand", ""), Some(Answer::Json(json!({"brand": null}))));
+        // MR-1: a standby takes no brand
+        let cfg = crate::meet_cluster::parse(&json!({"id": "emertins-meet", "node": "azure", "role": "standby",
+            "peer": {"node": "lab", "url": "https://meet.emertins.com", "spki_sha256": crate::codec::b64u(&[4u8; 32])},
+            "client_cert": "/c.crt", "client_key": "/c.key"}))
+        .unwrap();
+        relay.hub.set_cluster(crate::meet_cluster::Cluster::open(&cfg, &dir).unwrap());
+        for (path, body) in [("meet/brand", json!({"name": "Contoso", "accent": "#0f6cbd", "reason": "x"})), ("meet/brand/reset", json!({"reason": "x"}))] {
+            assert_eq!(post(path, body, LicenseState::Valid).err().unwrap().code, "stale", "{path}");
+        }
+        assert!(!dir.join("brand.json").exists());
     }
 
     #[test]

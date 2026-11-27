@@ -468,7 +468,16 @@ pub const FLEET_SCOPES: &[ScopeRow] = &[
     row("POST", "meet/cluster/promote", Health::Write, CONFIG),
     row("POST", "meet/cluster/demote", Health::Write, CONFIG),
     row("POST", "meet/cluster/handover", Health::Write, CONFIG),
+    // TH-1 6: the organization's brand, pushed by the fleet console to each Meeting Hub relay (the read takes the full
+    // scope: a read-health viewer projection needs a field list in the projection vector)
+    row("GET", "meet/brand", Health::Refused, CONFIG),
+    row("POST", "meet/brand", Health::Write, CONFIG),
+    row("POST", "meet/brand/logo", Health::Write, CONFIG),
+    row("POST", "meet/brand/reset", Health::Write, CONFIG),
 ];
+/// The TH-1 rows above, which the AC-2a step-up vector's 5.4 table does not list yet.
+#[cfg(test)]
+const TH1_ROWS: [(&str, &str); 4] = [("GET", "meet/brand"), ("POST", "meet/brand"), ("POST", "meet/brand/logo"), ("POST", "meet/brand/reset")];
 
 pub fn scope_row(method: &str, path: &str) -> Option<&'static ScopeRow> {
     FLEET_SCOPES.iter().find(|r| r.method == method && r.path == path)
@@ -1929,9 +1938,15 @@ pub(crate) mod tests {
             let h = scope_request_hash(c["relayId"].as_str().unwrap(), c["requestId"].as_str().unwrap(), c["generation"].as_u64().unwrap(), &list("oldScopes"), &list("requestedScopes")).unwrap();
             assert_eq!(h, c["hash_hex"].as_str().unwrap());
         }
-        // The 5.4 table: the relay's own copy equals the vector's, row for row.
+        // The 5.4 table: the relay's own copy equals the vector's, row for row, plus the TH-1 brand rows (which take
+        // the `config` scope like every other Meeting Hub setting).
         let rows = v["routes"].as_array().unwrap();
-        assert_eq!(rows.len(), FLEET_SCOPES.len());
+        assert_eq!(rows.len() + TH1_ROWS.len(), FLEET_SCOPES.len());
+        for (m, p) in TH1_ROWS {
+            let row = scope_row(m, p).unwrap_or_else(|| panic!("{m} {p} missing"));
+            assert_eq!(row.scopes, CONFIG, "{m} {p}");
+            assert!(rows.iter().all(|r| r["method"] != m || r["path"] != p), "{m} {p} is in the vector now: drop it from TH1_ROWS");
+        }
         for r in rows {
             let row = scope_row(r["method"].as_str().unwrap(), r["path"].as_str().unwrap()).unwrap_or_else(|| panic!("{} missing", r["route"]));
             let health = match row.health {
