@@ -8,10 +8,10 @@
 // Visualize opens. It is a button (aria-expanded): a click, Enter or Space pops it up into a small card, zooming out
 // of the box: a header (Session ledger, collapse) and a list showing five agents at a time, scrollable for more.
 // The card drags by its header anywhere inside the stage, in 2D and 3D alike (it is DOM over the canvas; its pointer
-// events never reach the camera), tilting a little with the drag; where it was left is kept (localStorage
-// `lucid.viz.ledger.v1`) and re-clamped when the stage resizes. Collapsing (the button, or Esc inside it) zooms it
-// back into the lower-right box wherever it was. A value that changed flashes briefly. Reduced motion: no zoom, no
-// tilt, no flash.
+// events never reach the camera), tilting a little with the drag; where it was left is kept (`lucid.viz.ledger.v1`
+// in the store mountLedger is given, engine-kept since P-VIZ.PREFS1) and re-clamped when the stage resizes.
+// Collapsing (the button, or Esc inside it) zooms it back into the lower-right box wherever it was. A value that
+// changed flashes briefly. Reduced motion: no zoom, no tilt, no flash.
 
 import { el } from "./dom.ts";
 import { esc } from "./format.ts";
@@ -37,9 +37,12 @@ export interface LedgerView {
 
 type Pos = { x: number; y: number };
 
-function loadPos(): Pos | null {
+/** Where the ledger's place persists: viz_prefs_store (P-VIZ.PREFS1, ADR-0697), engine-kept and mirrored locally. */
+type PosStore = Pick<Storage, "getItem" | "setItem">;
+
+function loadPos(store: PosStore): Pos | null {
   try {
-    const v = JSON.parse(localStorage.getItem(POS_KEY) ?? "null") as Partial<Pos> | null;
+    const v = JSON.parse(store.getItem(POS_KEY) ?? "null") as Partial<Pos> | null;
     return v && Number.isFinite(v.x) && Number.isFinite(v.y) ? { x: v.x!, y: v.y! } : null;
   } catch { return null; }
 }
@@ -64,7 +67,7 @@ function cellsOf(r: LedgerRow): Cells {
 
 const CELL_KEYS = ["tok", "loc", "repo"] as const;
 
-export function mountLedger(stage: HTMLElement, reducedMotion: () => boolean): LedgerView {
+export function mountLedger(stage: HTMLElement, reducedMotion: () => boolean, store: PosStore): LedgerView {
   const root = el(`<div class="viz-ledger" data-viz-ledger>
     <button type="button" class="viz-ledger-pill" data-lg-pill aria-expanded="false" aria-controls="vizLedgerCard"
       data-tip="${esc(tipValue("Session ledger", "Each agent's tokens, lines of code and repo this session. Click to open."))}">
@@ -89,7 +92,7 @@ export function mountLedger(stage: HTMLElement, reducedMotion: () => boolean): L
   stage.appendChild(root);
 
   let expanded = false;
-  let pos = loadPos();
+  let pos = loadPos(store);
   let anim: Animation | null = null;
   let last: { rows: readonly LedgerRow[]; sum: LedgerSummary } | null = null;
   const painted = new Map<string, { node: HTMLElement; cells: Cells }>();
@@ -179,7 +182,7 @@ export function mountLedger(stage: HTMLElement, reducedMotion: () => boolean): L
     drag = null;
     card.classList.remove("dragging");
     card.style.removeProperty("--lg-ry");
-    if (pos) { try { localStorage.setItem(POS_KEY, JSON.stringify(pos)); } catch { /* the place still holds for this session */ } }
+    if (pos) store.setItem(POS_KEY, JSON.stringify(pos));
   };
   head.addEventListener("pointerup", endDrag);
   head.addEventListener("pointercancel", endDrag);

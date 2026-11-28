@@ -1902,6 +1902,12 @@ demo-P-VIZ.MOTION1: ## P-VIZ.MOTION1 (ADR-0696): Visualize's View > Motion, Foll
 	node --check desktop/scripts/demo_p_viz_motion_1.mjs
 	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_viz_motion_1.mjs; else echo "demo-P-VIZ.MOTION1: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi
 
+.PHONY: demo-P-VIZ.PREFS1
+demo-P-VIZ.PREFS1: ## P-VIZ.PREFS1 (ADR-0697): the engine keeps Visualize's preferences (view, layout, style and world options, Motion, cast, panel size, ledger place, auto camera, Fly to approvals) behind /api/viz/prefs, localStorage mirrors them, so a port-rolled launch keeps them. Real-UI proof, wide and narrow (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7811): LUCID_DEMO_BROWSER_URL=http://127.0.0.1:<cdp> LUCID_DEMO_URL=http://127.0.0.1:7811/ node desktop/scripts/demo_p_viz_prefs_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/viz_prefs_store.test.ts desktop/renderer/viz_worlds.test.ts desktop/renderer/viz_cast_prefs.test.ts desktop/renderer/viz_panel_size.test.ts tools/ux_pr_gate.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_viz_prefs_1.mjs
+	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_viz_prefs_1.mjs; else echo "demo-P-VIZ.PREFS1: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi
+
 .PHONY: demo-P-WHATSNEW.1
 demo-P-WHATSNEW.1: ## P-WHATSNEW.1 (ADR-0686): a one-time What's new popup after an upgrade (bundled manifest with pictures, seen version kept engine-side, never over onboarding or the suggestion toast), Dismiss points at About > What's new, About replays it read-only. Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7821, fresh browser profile): LUCID_DEMO_BROWSER_URL=http://127.0.0.1:<cdp> LUCID_DEMO_URL=http://127.0.0.1:7821/ node desktop/scripts/demo_p_whatsnew_1.mjs
 	$(BUN) test $(TEST_IGNORES) desktop/renderer/release_notes.test.ts desktop/renderer/whats_new.test.ts desktop/about.test.ts harness/adr_numbering.test.ts

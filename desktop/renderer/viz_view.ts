@@ -19,7 +19,7 @@
 // saved world not loaded yet holds the first mount (an opaque spinner on its last backdrop), so the scene never shows
 // anime first and then pops to the world.
 //
-// P-VIZ.2 (ADR-0623): the header's Auto camera checkbox (persisted in localStorage `lucid.viz.autoCamera`,
+// P-VIZ.2 (ADR-0623): the header's Auto camera checkbox (persisted as `lucid.viz.autoCamera` in vizStore,
 // on by default) hands the camera to the scene's director, which follows the action. The scene unchecks it
 // the moment the user drags, pans or zooms, and a short hint under it says how to hand the camera back.
 // Fit frames everything and takes the camera off auto.
@@ -126,6 +126,7 @@ import { adoptArtifact, armSample, armTemplate, artifactOf, buildEvent, buildSit
 import type { WorldDefinition, WorldScaffold } from "./viz_world_api.ts";
 import { vizBrandFor } from "./viz_brand.ts"; // P-VIZ.7 (ADR-0641): the demo probe reports each figure's sponsor
 import { mountLedger, type LedgerView } from "./viz_ledger.ts";
+import { createVizPrefs } from "./viz_prefs_store.ts"; // P-VIZ.PREFS1 (ADR-0697)
 import { createLedger, ledgerEvent, ledgerFleet, ledgerFolder, ledgerHub, ledgerRows, ledgerSummary, syncLedger } from "./viz_ledger_model.ts";
 import {
   applyEvent, applyFleet, applyRuns, census, committing, createVizState, describeNode, drainEvents, drainNewApprovals, edgesOf, fmtRate, HUB_ID, idleSeconds,
@@ -214,6 +215,12 @@ const WATCH_MAX = 3;
 const REC_MAX_MS = 120_000;
 const REC_KEEP = 6;
 const PREFS_KEY = "lucid.viz.v1";
+/** P-VIZ.PREFS1 (ADR-0697): every Visualize preference below reads and writes through this store: the engine keeps
+ *  them (a port-rolled launch keeps them too), localStorage mirrors them for the first paint. */
+const vizStore = createVizPrefs(typeof localStorage === "undefined" ? null : localStorage, {
+  load: () => bridge.vizPrefs(),
+  save: (key, value) => bridge.setVizPref(key, value),
+});
 
 interface Recording { id: number; url: string; size: number; mime: string; at: number; ms: number; meta: VizEvent[] }
 
@@ -268,7 +275,7 @@ let tray: ThrowTray | null = null;
 let asks: ApprovalsView | null = null;
 const FLY_KEY = "lucid.viz.flyToApprovals.v1";
 const FLY_HOLD_MS = 2600;
-let flyAsks = ((): boolean => { try { return localStorage.getItem(FLY_KEY) !== "0"; } catch { return true; } })();
+let flyAsks = vizStore.getItem(FLY_KEY) !== "0";
 let flights = 0;
 const motionMq = typeof matchMedia === "function" ? matchMedia("(prefers-reduced-motion: reduce)") : null;
 
@@ -296,7 +303,7 @@ const laneLogs = new Map<string, PanelLane>();
 /** Lanes with a prompt from the panel in flight (a second send stages instead). */
 const sending = new Set<string>();
 /** P-VIZ.LANE1: the panel's user size (null: its natural size), as saved; applied clamped to the stage. */
-let panelSize: PanelSize | null = loadPanelSize(localStorage);
+let panelSize: PanelSize | null = loadPanelSize(vizStore);
 /** How tall (px) the panel's prompt box grows with its text before it scrolls (a Fleet card's stops at 64). */
 const PANEL_INPUT_CAP = 120;
 let lastLanes: readonly LaneView[] = [];
@@ -313,13 +320,13 @@ let mainFolder: string | null = null;
 interface Prefs { view: VizViewMode; layout: VizLayout; style: VizStyle; reactions: boolean; motion: "system" | "always" }
 function loadPrefs(): Prefs {
   try {
-    const p = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}") as Partial<Prefs>;
+    const p = JSON.parse(vizStore.getItem(PREFS_KEY) ?? "{}") as Partial<Prefs>;
     // P-WORLDS.1: a saved world style stays saved; until it loads (or if it is gone) the scene draws anime.
     return { view: p.view === "2d" ? "2d" : "3d", layout: p.layout === "constellation" ? "constellation" : "orbit", style: parseStyle(p.style), reactions: parseReactionsOpen(p.reactions), motion: p.motion === "always" ? "always" : "system" };
   } catch { return { view: "3d", layout: "orbit", style: "anime", reactions: false, motion: "system" }; }
 }
 let prefs: Prefs = loadPrefs();
-function savePrefs(): void { try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch { /* the choice still applies for this session */ } }
+function savePrefs(): void { vizStore.setItem(PREFS_KEY, JSON.stringify(prefs)); }
 /** P-VIZ.MOTION1 (ADR-0696): how this view reads the perf tier, and whether it holds its motion back. With Motion set
  *  to Always animate, the OS reduced-motion setting neither lowers Auto here nor stops the figures; on "system" both
  *  follow it, as before. Everything else in the app keeps following the OS. */
@@ -345,8 +352,8 @@ let worldsListed = false;
 
 /** P-VIZ.STYLEOPT1 (ADR-0688): each built-in style's option values, stored like a world's (ids builtin:<style>). */
 const builtinVals: Record<BuiltinStyle, WorldOptionValues> = {
-  anime: loadOptions(localStorage, BUILTIN_OPTIONS.anime),
-  professional: loadOptions(localStorage, BUILTIN_OPTIONS.professional),
+  anime: loadOptions(vizStore, BUILTIN_OPTIONS.anime),
+  professional: loadOptions(vizStore, BUILTIN_OPTIONS.professional),
 };
 
 /** The built-in style drawn (anime under a world, whose look is not drawn then) and its look. */
@@ -378,7 +385,7 @@ function activeEntry(): WorldEntry | null {
 function resolveWorld(): void {
   const def = activeEntry()?.def;
   if (!def) { curWorld = null; return; }
-  const options = loadOptions(localStorage, def);
+  const options = loadOptions(vizStore, def);
   const same = curWorld?.def === def && Object.keys(options).every((k) => curWorld?.options[k] === options[k]);
   if (!same) curWorld = { def, options };
 }
@@ -581,12 +588,12 @@ function setWorldOption(key: string, value: string | boolean | null): void {
   const w = curWorld;
   if (w) {
     if (value === null || !w.def.options.some((x) => x.key === key)) return;
-    curWorld = { def: w.def, options: saveOption(localStorage, w.def, key, value) };
+    curWorld = { def: w.def, options: saveOption(vizStore, w.def, key, value) };
   } else {
     // P-VIZ.STYLEOPT1 (ADR-0688): the built-in style's options, stored the same way
     const s = builtinOf(), def = BUILTIN_OPTIONS[s];
-    if (value === null) builtinVals[s] = resetOptions(localStorage, def);
-    else if (def.options.some((x) => x.key === key)) builtinVals[s] = saveOption(localStorage, def, key, value);
+    if (value === null) builtinVals[s] = resetOptions(vizStore, def);
+    else if (def.options.some((x) => x.key === key)) builtinVals[s] = saveOption(vizStore, def, key, value);
     else return;
   }
   if (!scene) return;
@@ -599,11 +606,11 @@ function setWorldOption(key: string, value: string | boolean | null): void {
 // ---------------------------------------------------------------------------------------------- P-WORLDS.CAST2 (ADR-0650)
 // Cast customization for world figures: the View menu's Cast section (the fleet mode, a skin ramp with its
 // undertone, a hair-color ramp and hair style chips) and a node's "Customize look" (its panel), which pins that
-// lane's (or the hub's) look. Both persist in viz_cast_prefs (localStorage lucid.viz.cast.v1) and reach the
+// lane's (or the hub's) look. Both persist in viz_cast_prefs (lucid.viz.cast.v1 in vizStore) and reach the
 // scene's CastBook through scene.setCast, which rebuilds the figures. Shown while a world is drawn: the built-in
 // Anime and Office casts do not read it.
 
-let castPrefs: CastPrefs = loadCastPrefs(localStorage);
+let castPrefs: CastPrefs = loadCastPrefs(vizStore);
 let lookPop: { id: string; node: HTMLElement; close: () => void; reposition: () => void } | null = null;
 
 /** Columns for `n` swatches: at most 10 a row (what fits the View menu), spread evenly over the rows so a ramp of
@@ -672,7 +679,7 @@ function paintCast(): void {
 /** Save, hand to the scene (it rebuilds the figures) and repaint whatever shows them. */
 function setCastPrefs(next: CastPrefs): void {
   castPrefs = next;
-  saveCastPrefs(localStorage, next);
+  saveCastPrefs(vizStore, next);
   scene?.setCast(next);
   paintCast();
   paintLook();
@@ -758,8 +765,25 @@ function sceneTheme(at: HTMLElement): VizTheme {
 /** P-VIZ.2 (ADR-0623): the auto camera (follows the action; on unless the user turned it off last time). */
 const AUTO_KEY = "lucid.viz.autoCamera";
 const AUTO_HINT_MS = 4500;
-let autoCam = ((): boolean => { try { return localStorage.getItem(AUTO_KEY) !== "0"; } catch { return true; } })();
+let autoCam = vizStore.getItem(AUTO_KEY) !== "0";
 let autoHintTimer = 0;
+
+/** P-VIZ.PREFS1 (ADR-0697): the engine answered with preferences the mirror did not have (a launch on a new port starts
+ *  with an empty one, or another window saved some): read them all again. The engine answers on loopback long before
+ *  anyone opens Visualize; should the view already be up, it rebuilds with them. */
+function reloadVizPrefs(): void {
+  flyAsks = vizStore.getItem(FLY_KEY) !== "0";
+  panelSize = loadPanelSize(vizStore);
+  prefs = loadPrefs();
+  builtinVals.anime = loadOptions(vizStore, BUILTIN_OPTIONS.anime);
+  builtinVals.professional = loadOptions(vizStore, BUILTIN_OPTIONS.professional);
+  castPrefs = loadCastPrefs(vizStore);
+  autoCam = vizStore.getItem(AUTO_KEY) !== "0";
+  if (!isOpen()) return;
+  paintToggles();
+  paintViewMenu();
+  remount();
+}
 
 /** A data-tip value escaped for an HTML attribute. */
 const tipAttr = (title: string, desc: string): string => esc(tipValue(title, desc));
@@ -774,6 +798,7 @@ let headRo: ResizeObserver | null = null;
 /** Called once from app.ts with the bridge seam. */
 export function initViz(d: VizDeps): void {
   deps = d;
+  void vizStore.ready.then((changed) => { if (changed) reloadVizPrefs(); }); // P-VIZ.PREFS1 (ADR-0697)
   // P-WORLDS.UPDATE1 (ADR-0685): the Worlds button's dot and the open menu follow the pending updates; a new version
   // on disk is loaded at once (its module URL names the version, so the world is rebuilt from it).
   d.worldUpdates.onChange((why) => {
@@ -948,7 +973,7 @@ export function openViz(opts: { onClose?: () => void } = {}): void {
     .finally(() => { if (seq === openSeq) endStyleWait(); });
   if (!!demo !== ledgerIsDemo) { ledger = createLedger(); ledgerIsDemo = !!demo; mainFolder = null; }
   loadMainFolder();
-  ledgerView = mountLedger($("[data-viz-stage]", view) as HTMLElement, vizReduced);
+  ledgerView = mountLedger($("[data-viz-stage]", view) as HTMLElement, vizReduced, vizStore);
   builds = createBuildBook(); // P-WORLDS.BUILD1 (ADR-0653): builds live as long as the model
   chips = mountArtifactChips($("[data-viz-stage]", view) as HTMLElement, (id) => scene?.screenBoxOf(id) ?? null, openChip);
   const d = deps;
@@ -1230,7 +1255,7 @@ function openViewMenu(anchor: HTMLElement): void {
     if (t.matches("input[data-viz-wopt], select[data-viz-wopt]")) onWorldOption(t as HTMLInputElement | HTMLSelectElement);
     if (t.matches("input[data-viz-flyask]")) { // P-VIZ.APPROVE1 (ADR-0655)
       flyAsks = (t as HTMLInputElement).checked;
-      try { localStorage.setItem(FLY_KEY, flyAsks ? "1" : "0"); } catch { /* still applies for this session */ }
+      vizStore.setItem(FLY_KEY, flyAsks ? "1" : "0");
     }
   });
   paintViewMenu();
@@ -1276,7 +1301,7 @@ function fitHead(): void {
 /** Turn the auto camera on or off (the checkbox, Fit, or the user grabbing the camera) and remember it. */
 function setAutoCamera(on: boolean, hint: boolean): void {
   autoCam = on;
-  try { localStorage.setItem(AUTO_KEY, on ? "1" : "0"); } catch { /* still applies for this session */ }
+  vizStore.setItem(AUTO_KEY, on ? "1" : "0");
   paintToggles();
   scene?.setAuto(on);
   if (on) hideAutoHint(); else if (hint) showAutoHint();
@@ -1494,7 +1519,7 @@ function endStyleWait(): void {
 /** P-VIZ.NOFLASH1: the saved style's backdrop color from the last time it was drawn, else null. */
 function savedBackdrop(): string | null {
   try {
-    const v = JSON.parse(localStorage.getItem(BACKDROP_KEY) ?? "null") as { style?: unknown; bg?: unknown } | null;
+    const v = JSON.parse(vizStore.getItem(BACKDROP_KEY) ?? "null") as { style?: unknown; bg?: unknown } | null;
     return v && v.style === prefs.style && typeof v.bg === "string" && /^#[0-9a-f]{6}$/i.test(v.bg) ? v.bg : null;
   } catch { return null; }
 }
@@ -1502,7 +1527,7 @@ function savedBackdrop(): string | null {
 /** P-VIZ.NOFLASH1: keep the drawn world's backdrop color for the next open's spinner (built-in styles need none). */
 function rememberBackdrop(bg: string): void {
   if (!curWorld) return;
-  try { localStorage.setItem(BACKDROP_KEY, JSON.stringify({ style: prefs.style, bg })); } catch { /* the next open starts on the theme's backdrop */ }
+  vizStore.setItem(BACKDROP_KEY, JSON.stringify({ style: prefs.style, bg }));
 }
 
 /** Rebuild the scene (a tier, theme or motion change, Try again). P-VIZ.NOFLASH1: the scene on screen becomes the
@@ -2254,7 +2279,7 @@ function applyPanelSize(box: HTMLElement, stage: { width: number; height: number
 /** A new user size (null: back to the natural size), saved for the next open and applied at once. */
 function setPanelSize(s: PanelSize | null): void {
   panelSize = s;
-  savePanelSize(localStorage, s);
+  savePanelSize(vizStore, s);
   if (view && panel) applyPanelSize(panelEl("[data-viz-panel]"), panelEl("[data-viz-stage]").getBoundingClientRect());
 }
 

@@ -3,8 +3,8 @@
 
 // desktop/renderer/viz_cast_prefs.ts - P-WORLDS.CAST2 (ADR-0650): the user's cast preferences for world figures.
 //
-// Persisted on this machine in localStorage CAST_KEY as `{ fleet, pinned: { [nodeId]: pin } }`, shared by every
-// world, so a look follows the lane (or the hub) across worlds and restarts.
+// Persisted under CAST_KEY as `{ fleet, pinned: { [nodeId]: pin } }` (in the store viz_view passes, engine-kept
+// since P-VIZ.PREFS1), shared by every world, so a look follows the lane (or the hub) across worlds and restarts.
 //   fleet:  the mode ("balanced", the default: viz_cast's balanced sequence; "same": every human figure takes the
 //           fleet's skin step, hair style and hair color), and the undertone every unpinned skin is drawn in.
 //   pinned: a node's own look (the View panel's "Customize look"): any of presentation, skin step, undertone,
