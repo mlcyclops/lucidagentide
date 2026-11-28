@@ -404,4 +404,34 @@ describe("watchPerfTier - GPU probe and governor step-down", () => {
     await ready;
     expect(u.tier()).toBe(resolveTier("auto", machine(null)));
   });
+
+  describe("P-VIZ.MOTION1: a surface set to Always animate reads the tier through a lens", () => {
+    const g = globalThis as { matchMedia?: (q: string) => { matches: boolean } };
+    const saved = g.matchMedia;
+    /** A watcher on a machine whose OS asks for reduced motion (Windows Animation effects off). */
+    const reducedOs = async (): Promise<PerfTierWatcher> => {
+      g.matchMedia = (q) => ({ matches: q.includes("prefers-reduced-motion: reduce") });
+      try { const { w, ready } = watch(mem(), "discrete"); await ready; return w; } finally { g.matchMedia = saved; }
+    };
+    const animating = resolveTier("auto", machine("discrete")); // the same machine, reduced motion not asked for
+    const lens = { animate: true };
+
+    test("the OS setting lowers Auto for the app, not for the surface that animates anyway", async () => {
+      const w = await reducedOs();
+      expect(w.tier()).toBe(resolveTier("auto", { ...machine("discrete"), reducedMotion: true }));
+      expect(w.tier(lens)).toBe(animating);
+    });
+    test("a step-down through the lens caps the lens tier, tells every subscriber, and leaves the app's tier alone", async () => {
+      const w = await reducedOs();
+      const app = w.tier();
+      if (animating === "minimal" || animating === app) return; // nothing above the app's tier to step down from here
+      const heard: string[] = [];
+      w.onChange((t) => heard.push(t));
+      expect(w.stepDown(undefined, lens)).toBe(stepDownTier(animating));
+      expect(w.tier(lens)).toBe(stepDownTier(animating));
+      expect(w.steppedFrom(lens)).toBe(animating);
+      expect(heard.length).toBe(1); // the lens's view changed even when the app's did not
+      expect(w.tier()).toBe(capTier(app, stepDownTier(animating))); // the app's tier moves only if the cap is below it
+    });
+  });
 });

@@ -6640,3 +6640,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-27):** the engine's settings_store loads the world-update announced keys from the new import-free `world_update_keys.ts` instead of `world_updates.ts`, whose imports pulled ui.ts and bridge.ts (DOM types) into the root program; root `tsc --noEmit` 373 errors to 0, so CI's harness job typechecks and runs its tests again; demo-P-TYPECHECK.1.
 - **stubbed:** none.
 - **next:** merge it before #699 so that PR's harness job goes green on rebase.
+## P-VIZ.MOTION1 (ADR-0696): Visualize can animate on a system that asks for reduced motion
+- **shipped (2026-11-28):** View > Motion: Follow system (default, with a note when the system asks for reduced motion) or Always animate (`lucid.viz.v1` motion); a `TierLens` on the shared perf watcher (`tier`, `stepDown`, `steppedFrom` take `{ animate }`) so Auto ignores reduced motion for Visualize only and shares the governor's cap; `vizLens()` / `vizReduced()` replace the view's direct tier and media-query reads; on the RTX 5070 box: reduced, 0 particles, 15 fps idle cadence to ultra, 12000 particles, 16.7 ms busy frames; demo_p_viz_motion_1.mjs, demo-P-VIZ.MOTION1.
+- **stubbed:** the choice lives in renderer localStorage with the other `lucid.viz.v1` prefs, so a port-rolled launch forgets it (ADR-0688 follow-up: move them engine-side).
+- **next:** move the Visualize prefs (style options, motion) engine-side so a port-rolled launch keeps them.
