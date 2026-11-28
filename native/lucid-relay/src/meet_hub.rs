@@ -5952,6 +5952,12 @@ impl Hub {
         Ok(obj([("ok", Value::Bool(true)), ("out_of_office", shown)]))
     }
 
+    /// Tests: `principal` is a person of `org`, so this hub serves `org` (r8 5 `org-not-served`).
+    #[cfg(test)]
+    pub(crate) fn pr_test_serve(&self, org: &str, principal: &str) {
+        self.st.lock().organizations.insert(principal.to_string(), serde_json::json!({"id": org, "label": org}));
+    }
+
     /// r8 4.2 / 5 `api-presence`: 1.3 views of people `org`'s pinned policy covers. `people` non-empty: those (uncovered ones omitted); else every covered directory person sorted by principal after `after`, at most `limit`.
     /// Answer {"presence": [{"principal","availability","activity","out_of_office": null | {"message"?,"from"?,"until"?,"by","set_at"},"status": null | {...},"presence","mobile"}], "next"?: "<last principal>"}
     pub fn api_presence_read(&self, org: &str, people: &[String], after: Option<&str>, limit: usize) -> Result<serde_json::Value, crate::fleet_wire::Refusal> {

@@ -2986,4 +2986,89 @@ mod tests {
         assert!(relay["paths"]["/api/orgs/acme/v1/presence"]["get"].is_object());
         assert!(relay["paths"]["/api/orgs/acme/v1/presence/{principal}/sessions"].is_null(), "no writes on a relay listener");
     }
+
+    /// One relay whose fleet ops reach a real Meet hub, the way `meet.rs` dispatches `api-presence` and
+    /// `api-presence-write` (revision 8 5).
+    struct HubFleet(crate::meet_hub::Hub);
+    impl Data for HubFleet {
+        fn relays(&self, org: &str, now: i64) -> Vec<RelayInfo> {
+            Fleet.relays(org, now)
+        }
+        fn ids(&self, org: &str) -> Vec<String> {
+            Fleet.ids(org)
+        }
+        fn exposition(&self, org: &str, ids: &[String], now: i64) -> String {
+            Fleet.exposition(org, ids, now)
+        }
+        fn console(&self) -> Value {
+            Fleet.console()
+        }
+        fn presence(&self, _org: &str, reaches: &dyn Fn(&str) -> bool, op: &str, body: &Value) -> Option<Vec<crate::api_presence::Outcome>> {
+            if !reaches(R1) {
+                return Some(Vec::new());
+            }
+            let answer = match op {
+                "api-presence" => crate::api_presence::ReadArgs::of(body).and_then(|a| self.0.api_presence_read(&a.org, &a.people, a.after.as_deref(), a.limit)),
+                _ => crate::api_presence::WriteArgs::of(body).and_then(|a| self.0.api_presence_write(&a.org, &a.client_id, &a.client_name, &a.principal, &a.kind, &a.body)),
+            };
+            Some(vec![(R1.to_string(), Some(answer))])
+        }
+    }
+
+    /// Revision 8 end to end: an integration client reads and writes a person's presence through the front door
+    /// pipeline into a real relay hub, and the hub raises `presence.changed` events the registry accepts.
+    #[test]
+    fn an_integration_drives_a_real_hubs_presence_through_the_front_door() {
+        use crate::meet::Identity;
+        let hub = crate::meet_hub::Hub::new(None, &[], 168.0, 30.0, 365.0, None, Arc::new(crate::meet_console::LinkStats::new()));
+        hub.pr_test_serve(ORG, ANN);
+        hub.pc_test_holds(ORG, "acme.example");
+        let ann = Identity { principal: ANN.into(), name: "Ann".into(), device: "aaaaaaaaaaaaaaaa".into(), ..Default::default() };
+        hub.hello(&ann, "", &serde_json::Map::new()).unwrap();
+        let data = HubFleet(hub);
+        let env = presence_env("confidential", json!(["*"]));
+        let read = env.mint(&["presence.read"], "R0", "confidential", 1, I, NOW, NOW + 600);
+        let write = env.mint(&["presence.write"], "R0", "confidential", 1, I, NOW, NOW + 600);
+        const ONE: &str = "/api/orgs/acme/v1/presence/ann%40acme.example";
+        let get = || presence_call(&env, &data, Side::FrontDoor, "GET", ONE, "", None, &read).body;
+        let shown = |v: &Value| (v["availability"].as_str().map(str::to_owned), v["activity"].as_str().map(str::to_owned));
+        let pair = |a: &str, b: &str| (Some(a.to_owned()), Some(b.to_owned()));
+        // online on a device: available
+        let first = get();
+        assert_eq!(shown(&first), pair("available", "available"), "{first}");
+        // the mail system's calendar says she is in a meeting now (times only)
+        let now_ms = (crate::meet_json::now() * 1000.0) as i64;
+        let blocks = json!({"blocks": [{"start": now_ms - 60_000, "end": now_ms + 3_600_000, "show": "busy"}]});
+        let r = presence_call(&env, &data, Side::FrontDoor, "POST", &format!("{ONE}/calendar"), "", Some(blocks), &write);
+        assert_eq!((r.status, &r.body["relays"]), (200, &json!([R1])), "{}", r.body);
+        assert_eq!(shown(&get()), pair("busy", "in_meeting"));
+        // automatic replies on: the meeting stays, the record names the client
+        let r = presence_call(&env, &data, Side::FrontDoor, "POST", &format!("{ONE}/out-of-office"), "", Some(json!({"on": true, "message": "Back Monday"})), &write);
+        assert_eq!(r.status, 200, "{}", r.body);
+        let v = get();
+        assert_eq!(shown(&v), pair("busy", "in_meeting"));
+        assert_eq!((v["out_of_office"]["message"].as_str(), v["out_of_office"]["by"].as_str()), (Some("Back Monday"), Some("monitor")));
+        // an application session presenting outranks busy (dnd > busy); clearing it goes back
+        let session = json!({"session": "deck-1", "availability": "dnd", "activity": "presenting", "expires_in": 900});
+        assert_eq!(presence_call(&env, &data, Side::FrontDoor, "POST", &format!("{ONE}/sessions"), "", Some(session), &write).status, 200);
+        assert_eq!(shown(&get()), pair("dnd", "presenting"));
+        assert_eq!(presence_call(&env, &data, Side::FrontDoor, "POST", &format!("{ONE}/sessions/deck-1/clear"), "", None, &write).status, 200);
+        // calendar cleared: available with automatic replies shows out of office
+        let r = presence_call(&env, &data, Side::FrontDoor, "POST", &format!("{ONE}/calendar"), "", Some(json!({"blocks": []})), &write);
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert_eq!(shown(&get()), pair("available", "out_of_office"));
+        // the list read agrees; a person the policy does not cover is refused
+        let list = presence_call(&env, &data, Side::FrontDoor, "GET", "/api/orgs/acme/v1/presence", &format!("people={ANN}"), None, &read);
+        assert_eq!(shown(&list.body["presence"][0]), pair("available", "out_of_office"));
+        let outside = presence_call(&env, &data, Side::FrontDoor, "POST", "/api/orgs/acme/v1/presence/zed%40other.example/out-of-office", "", Some(json!({"on": false})), &write);
+        assert_eq!(code(&outside), (403, "not-covered".into()));
+        // the hub raised presence.changed for acme, each one valid under the registry, never with the message
+        let events: Vec<_> = data.0.api_take_events().into_iter().filter(|(_, kind, _)| *kind == "presence.changed").collect();
+        assert!(!events.is_empty());
+        for (org, kind, payload) in &events {
+            assert_eq!(org, ORG);
+            crate::api_events::check_emit(R1, kind, payload).unwrap_or_else(|e| panic!("{payload}: {e}"));
+            assert!(payload.get("message").is_none() && payload["principal"] == ANN, "{payload}");
+        }
+    }
 }
