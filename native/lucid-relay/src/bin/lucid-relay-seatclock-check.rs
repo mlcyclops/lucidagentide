@@ -94,6 +94,8 @@ mod license;
 mod log;
 #[path = "../meet.rs"]
 mod meet;
+#[path = "../meet_brand.rs"]
+mod meet_brand;
 #[path = "../meet_console.rs"]
 mod meet_console;
 #[path = "../meet_console_identity.rs"]

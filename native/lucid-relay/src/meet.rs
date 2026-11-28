@@ -269,6 +269,9 @@ pub struct Settings {
     pub sfu_secret_file: String,
     pub sfu_threshold: Value,
     pub sfu_max: Value,
+    /// PH-1 (docs/phone/contract.md section 2): phone numbers through LiveKit SIP, `{webhook_listen, webhook_from,
+    /// lines, outbound_trunk, conference}` (null = off). Kept as relay.json holds it; meet_phone checks it at start.
+    pub phone: Value,
     /// Bridges (contract BR-1): each organization's bridge policy {org id: policy} ("_none" for people with no
     /// organization). A missing org is off. Checked at start (meet_bridge); admins change it at runtime
     /// (/v1/admin/bridge, kept in state.json over this).
@@ -315,6 +318,8 @@ pub struct Settings {
     pub web_orgs: Value,
     /// API-1 7.2: the API listener's `host:port` (None = off: the key absent or false; `true` = 0.0.0.0:9443).
     pub api_listen: Option<String>,
+    /// MR-1 2.1: this relay as one node of a two-node cluster (None = a single relay as before).
+    pub cluster: Option<crate::meet_cluster::ClusterSettings>,
 }
 
 /// relay.json `push`: `{enabled, team_id, key_id, key_file (the .p8, never logged), topic (the app's bundle id),
@@ -353,14 +358,14 @@ pub struct FcmSettings {
     pub credentials_file: String,
 }
 
-const SETTINGS_FIELDS: [&str; 73] = [
+const SETTINGS_FIELDS: [&str; 75] = [
     "guest_verify_url", "guest_rules", "gov_baseline", "gov_domains", "captioner_principal", "web_port", "web_public", "web_cert", "web_key", "web_sso_url", "web_orgs",
     "host", "port", "cert", "key", "client_ca", "crl", "turn_secret_file", "turn_host", "turn_host_public", "turn_ttl", "stun_urls", "state_dir", "admins", "history_hours", "mail_days", "channel_days", "signer_url", "signer_cert",
     "signer_key", "signer_ca", "files_secret_file", "files_base", "console_sources", "files_power", "min_client", "version_exempt", "recording_enabled", "organizations", "file_max_mb", "files_quota_gb", "guest_port",
-    "guest_public", "guest_cert", "guest_key", "sfu_url", "sfu_api_key", "sfu_secret_file", "sfu_threshold", "sfu_max",
+    "guest_public", "guest_cert", "guest_key", "sfu_url", "sfu_api_key", "sfu_secret_file", "sfu_threshold", "sfu_max", "phone",
     "bridge_policies", "chat_e2ee", "chat_history_share", "attendance", "attendance_days", "emoji_max", "push", "enclave", "enclave_networks", "legal_holds", "notify_previews",
     "console_port", "console_public", "console_cert", "console_key", "console_first_admin", "console_profile", "license",
-    "with_console", "fleet_proxy", "fleet_pki", "license_edition", "api_listen",
+    "with_console", "fleet_proxy", "fleet_pki", "license_edition", "api_listen", "cluster",
 ];
 
 /// ORG_FIELD_MAX: characters of an organization id or label.
@@ -430,6 +435,7 @@ impl Default for Settings {
             sfu_secret_file: String::new(),
             sfu_threshold: Value::from(9),
             sfu_max: Value::from(100),
+            phone: Value::Null,
             bridge_policies: Obj::new(),
             chat_e2ee: Value::from("default"),
             chat_history_share: Value::Bool(true),
@@ -454,6 +460,7 @@ impl Default for Settings {
             web_sso_url: Value::from(""),
             web_orgs: Value::Array(Vec::new()),
             api_listen: None,
+            cluster: None,
         }
     }
 }
@@ -698,7 +705,7 @@ impl Settings {
         text("sfu_url", &mut s.sfu_url)?;
         text("sfu_api_key", &mut s.sfu_api_key)?;
         text("sfu_secret_file", &mut s.sfu_secret_file)?;
-        for (k, slot) in [("guest_port", &mut s.guest_port), ("sfu_threshold", &mut s.sfu_threshold), ("sfu_max", &mut s.sfu_max), ("chat_e2ee", &mut s.chat_e2ee), ("chat_history_share", &mut s.chat_history_share)] {
+        for (k, slot) in [("guest_port", &mut s.guest_port), ("sfu_threshold", &mut s.sfu_threshold), ("sfu_max", &mut s.sfu_max), ("phone", &mut s.phone), ("chat_e2ee", &mut s.chat_e2ee), ("chat_history_share", &mut s.chat_history_share)] {
             if let Some(v) = raw.get(k) {
                 *slot = v.clone();
             }
@@ -742,6 +749,13 @@ impl Settings {
             }
         }
         s.api_listen = crate::api_listener::listen_setting(raw.get("api_listen")).map_err(|e| format!("relay settings: {e}"))?;
+        if let Some(v) = raw.get("cluster") {
+            s.cluster = Some(crate::meet_cluster::parse(v)?);
+            // the role, the replica and the moved-aside state all live in the state folder
+            if s.state_dir.trim().is_empty() {
+                return Err("relay settings: cluster needs state_dir".into());
+            }
+        }
         Ok(s)
     }
 }
@@ -1309,6 +1323,10 @@ pub fn main(argv: &[String]) -> ! {
     if matches!(argv.first().map(String::as_str), Some("enroll" | "fleet")) {
         fleet_cli(argv);
     }
+    // MR-1 2.5: `meet cluster status|promote|demote|handover --config <relay.json>`
+    if argv.first().map(String::as_str) == Some("cluster") {
+        crate::meet_cluster::cli(&argv[1..]);
+    }
     let (mut config, mut verbose) = (None, false);
     let mut i = 0;
     while i < argv.len() {
@@ -1335,7 +1353,7 @@ pub fn main(argv: &[String]) -> ! {
 }
 
 /// `--config <relay.json>` (or `--config=`) out of `args`, and the rest in order.
-fn split_config(args: &[String]) -> (Option<String>, Vec<String>) {
+pub(crate) fn split_config(args: &[String]) -> (Option<String>, Vec<String>) {
     let (mut config, mut rest, mut i) = (None, Vec::new(), 0);
     while i < args.len() {
         if let Some(v) = args[i].strip_prefix("--config=") {
@@ -1664,6 +1682,22 @@ impl crate::fleet_agent::MeetHooks for MeetFleet {
             r.pki_switched();
         }
     }
+
+    fn cluster(&self) -> Value {
+        self.relay.upgrade().and_then(|r| r.hub.cluster().map(|c| c.status())).unwrap_or(Value::Null)
+    }
+}
+
+/// API-1 revision 8 4.6: the application sessions, calendar blocks and out of office records of `org` clients that
+/// are no longer live in the map pinned here (suspended, expired, deleted or without presence.write) stop counting.
+/// Run after every pinned map and journal entry, and from the relay's upkeep (at start and every minute) so a
+/// registration that simply runs out is caught too. The snapshot is taken and its lock released before the hub's
+/// presence store is locked.
+pub(crate) fn presence_retain(hub: &Hub, org: &str) {
+    if let Some(store) = hub.api_org_snapshot(org) {
+        let now = crate::codec::now_ms() / 1000;
+        hub.presence_retain_clients(org, &|client: &str| crate::api_presence::writer_live(&store, org, client, now));
+    }
 }
 
 /// API-1d 2.4: the API ops of the link on a Meeting Hub relay (behavior unchanged from the API part of `MeetHooks`).
@@ -1673,6 +1707,11 @@ impl crate::fleet_agent::ApiHooks for MeetFleet {
     }
 
     fn api_request(&self, op: &str, body: &Value) -> Option<Result<Value, crate::fleet_wire::Refusal>> {
+        // MR-1 2.4: a standby or fenced node takes no api map, journal entry, hold or export (it would diverge)
+        let writes = matches!(op, "api-map" | "api-tighten" | "api-hold" | "api-export" | "api-export-cancel" | "api-presence-write");
+        if let Some(Err((code, words))) = self.relay.upgrade().filter(|_| writes).map(|r| r.hub.cluster_writes()) {
+            return Some(Err(crate::fleet_wire::Refusal::new(503, code, words)));
+        }
         self.relay.upgrade().map(|r| match op {
             // API-1 revision 4 2.5, 5.1, 5.2
             "api-compliance-read" | "api-hold" | "api-hold-status" => crate::api_holds_relay::request(&r, op, body),
@@ -1680,11 +1719,31 @@ impl crate::fleet_agent::ApiHooks for MeetFleet {
             "api-export" | "api-export-status" | "api-export-cancel" => crate::api_exports_relay::request(&r, op, body),
             // API-1 revision 4 13.1
             "api-directory-status" => crate::api_sso_status::request(&r, body),
+            // API-1 revision 8 5: the hub's presence views and writes
+            "api-presence" => crate::api_presence::ReadArgs::of(body).and_then(|a| r.hub.api_presence_read(&a.org, &a.people, a.after.as_deref(), a.limit)),
+            "api-presence-write" => {
+                let answer = crate::api_presence::WriteArgs::of(body).and_then(|a| {
+                    // revision 8 4.6: a write the console let through before this relay applied the client's suspension
+                    // (or saw its registration end) is judged against the map pinned here now, so it never outlives
+                    // the cleanup; an org not served falls through to the hub's `org-not-served`
+                    let now = crate::codec::now_ms() / 1000;
+                    if r.hub.api_org_snapshot(&a.org).is_some_and(|store| !crate::api_presence::writer_live(&store, &a.org, &a.client_id, now)) {
+                        return Err(crate::fleet_wire::Refusal::new(403, "suspended", "That client may not write presence for this organization."));
+                    }
+                    r.hub.api_presence_write(&a.org, &a.client_id, &a.client_name, &a.principal, &a.kind, &a.body)
+                });
+                // revision 8 7: the relay's families follow each write
+                let (writes, sessions) = r.hub.presence_metrics();
+                crate::api_catalog::counters::set_presence(writes, sessions);
+                answer
+            }
             _ => {
                 let answer = r.hub.api_fleet_request(op, body);
                 // 5.3.3: a new pin or an applied journal entry reaches the org's archive (the lock is released here)
                 if answer.is_ok() && matches!(op, "api-map" | "api-tighten") {
-                    crate::api_exports_relay::state_changed(&r, body.get("org").and_then(Value::as_str).unwrap_or_default());
+                    let org = body.get("org").and_then(Value::as_str).unwrap_or_default();
+                    crate::api_exports_relay::state_changed(&r, org);
+                    presence_retain(&r.hub, org);
                 }
                 answer
             }
@@ -1937,6 +1996,11 @@ fn serve(settings: Settings) -> ! {
     let links = Arc::new(LinkStats::new());
     let state_dir = (!settings.state_dir.is_empty()).then(|| PathBuf::from(&settings.state_dir));
     let hub = Arc::new(Hub::new(state_dir.clone(), &settings.admins, settings.history_hours, settings.mail_days, settings.channel_days, signer.clone(), links.clone()));
+    // MR-1 2.1: the node's role before anything can save or answer
+    let cluster = settings.cluster.as_ref().map(|c| crate::meet_cluster::Cluster::open(c, Path::new(&settings.state_dir)).unwrap_or_else(|e| die(&e)));
+    if let Some(c) = &cluster {
+        hub.set_cluster(c.clone());
+    }
     {
         let mut st = hub.st.lock();
         st.recording_enabled = settings.recording_enabled;
@@ -1996,16 +2060,24 @@ fn serve(settings: Settings) -> ! {
     let gate_cfg = crate::meet_license::GateConfig { state_dir: state_dir.clone(), license_file, client_ca: PathBuf::from(&settings.client_ca), audit_by_deploy };
     let gate = crate::meet_license::MeetGate::open(gate_cfg, &hub, crate::meet_time::clock()).unwrap_or_else(|e| die(&e));
     hub.set_gate(gate.clone());
+    let gate_hub = hub.clone();
     std::thread::Builder::new()
         .name("meet-gate".into())
         .spawn(move || loop {
             std::thread::sleep(std::time::Duration::from_secs(30));
-            gate.check(true);
+            // MR-1 2.4: seats change only on the node that serves people (a standby's come from the active)
+            if gate_hub.serving() {
+                gate.check(true);
+            }
             if let Err(e) = gate.time.save() {
                 log_error(&e);
             }
         })
         .unwrap_or_else(|e| die(&e.to_string()));
+    // MR-1 2.3, 2.5: the peer, the witness (checked once now) and the pull and witness loops
+    if let Some(c) = &cluster {
+        crate::meet_cluster::start(c, &settings, &hub).unwrap_or_else(|e| die(&e));
+    }
     hub.start();
     // AC-1 3.1: the Admin Console on its own port and host name (nothing when console_port is 0)
     crate::console_meet::start(&relay).unwrap_or_else(|e| die(&e));
@@ -2015,6 +2087,10 @@ fn serve(settings: Settings) -> ! {
     crate::meet_web_port::start(&settings, relay.clone()).unwrap_or_else(|e| die(&e));
     // API-1 7.2: the API listener (nothing without `api_listen`); the fleet link gives its relay id and sealed keys
     crate::api_listener::start(&relay).unwrap_or_else(|e| die(&e));
+    // PH-1 section 4: the media server's webhooks on their own TLS listener (nothing without `phone`)
+    crate::meet_hub::phone::start(&settings, hub.clone()).unwrap_or_else(|e| die(&e));
+    // PH-1 revision 2 (section 10.1): voip.ms text callbacks on their own TLS listener (nothing without `phone.sms`)
+    crate::meet_hub::sms::start(&settings, hub.clone()).unwrap_or_else(|e| die(&e));
     relay.start_upkeep();
     log_info(&format!(
         "listening on {}:{} (certificate server: {})",
@@ -2116,6 +2192,7 @@ pub(crate) fn reason_phrase(status: u16) -> &'static str {
         200 => "OK",
         301 => "Moved Permanently",
         400 => "Bad Request",
+        401 => "Unauthorized",
         403 => "Forbidden",
         404 => "Not Found",
         405 => "Method Not Allowed",
@@ -2129,6 +2206,8 @@ pub(crate) fn reason_phrase(status: u16) -> &'static str {
         431 => "Request Header Fields Too Large",
         500 => "Internal Server Error",
         501 => "Not Implemented",
+        502 => "Bad Gateway",
+        503 => "Service Unavailable",
         505 => "HTTP Version Not Supported",
         507 => "Insufficient Storage",
         _ => "",
@@ -2912,6 +2991,28 @@ mod tests {
         assert_eq!(Settings::load(&path(&file)).unwrap_err(), "relay settings: fleet_pki must be true or false");
     }
 
+    /// MR-1 2.1: `cluster` is optional, checked key by key; unknown keys refuse the start, and it needs a state folder.
+    #[test]
+    fn mr1_cluster_setting() {
+        let d = dir("settings-cluster");
+        let file = d.join("relay.json");
+        assert!(Settings::load(&path(&file).replace("relay.json", "absent.json")).is_err());
+        std::fs::write(&file, "{}").unwrap();
+        assert!(Settings::load(&path(&file)).unwrap().cluster.is_none());
+        let pin = crate::codec::b64u(&[9u8; 32]);
+        let cluster = json!({"id": "emertins-meet", "node": "lab", "role": "active", "peer": {"node": "azure", "url": "https://meet-azure.emertins.com", "spki_sha256": pin}, "client_cert": "/c.crt", "client_key": "/c.key"});
+        std::fs::write(&file, json!({"cluster": cluster}).to_string()).unwrap();
+        let c = Settings::load(&path(&file)).unwrap().cluster.unwrap();
+        // MR-1 contract revision 2: lease_s defaults to 10 (meet_cluster.rs `whole(o, "lease_s", 10, 10, 50)`).
+        assert_eq!((c.node.as_str(), c.peer.node.as_str(), c.lease_s), ("lab", "azure", 10));
+        let mut extra = cluster.clone();
+        extra["peers"] = json!([]);
+        std::fs::write(&file, json!({"cluster": extra}).to_string()).unwrap();
+        assert_eq!(Settings::load(&path(&file)).unwrap_err(), "unknown relay settings: cluster.peers");
+        std::fs::write(&file, json!({"cluster": cluster, "state_dir": ""}).to_string()).unwrap();
+        assert_eq!(Settings::load(&path(&file)).unwrap_err(), "relay settings: cluster needs state_dir");
+    }
+
     /// R2-L10, D16: a relay or signer client certificate is never a person, even one that also names a person.
     #[test]
     fn ac2b_relay_certificates_are_not_people() {
@@ -3031,6 +3132,33 @@ mod tests {
         g.welcome(Some(&id));
         assert!(!g.ca_held());
         assert!(g.meet_pki().is_null(), "meetPki is null without fleet_pki");
+    }
+
+    /// API-1 revision 8 4.6: an `api-presence-write` is judged against the map pinned on this relay now, so a client it
+    /// does not hold as a live writer (here: no map names it) is refused `suspended` and stores nothing; and the
+    /// retention the upkeep runs at start and every minute drops what such a client left behind.
+    #[test]
+    fn r8_presence_writes_and_retention_follow_the_relays_own_map() {
+        use crate::fleet_agent::ApiHooks;
+        const ANN: &str = "ann@acme.example";
+        let r = test_relay(Settings { state_dir: path(&dir("r8-presence")), ..Settings::default() });
+        r.hub.pr_test_serve("acme", ANN);
+        r.hub.pc_test_holds("acme", "acme.example");
+        let f = MeetFleet::new(&r);
+        let ooo = || f.api_request("api-presence", &json!({"org": "acme", "people": [ANN]})).unwrap().unwrap()["presence"][0]["out_of_office"].clone();
+        let write = json!({"org": "acme", "client": {"id": "c_1", "name": "Mail"}, "principal": ANN, "kind": "ooo", "body": {"on": true, "message": "Away"}});
+        let refused = f.api_request("api-presence-write", &write).unwrap().unwrap_err();
+        assert_eq!((refused.status, refused.code.as_str()), (403, "suspended"));
+        assert_eq!(ooo(), Value::Null, "nothing stored");
+        // an org this relay does not serve keeps the hub's own refusal
+        let mut other = write.clone();
+        other["org"] = json!("other");
+        assert_eq!(f.api_request("api-presence-write", &other).unwrap().unwrap_err().code, "org-not-served");
+        // a record that landed before its client stopped being live is dropped by the upkeep's retention
+        r.hub.api_presence_write("acme", "c_1", "Mail", ANN, "ooo", &json!({"on": true, "message": "Away"})).unwrap();
+        assert!(ooo().is_object());
+        presence_retain(&r.hub, "acme");
+        assert_eq!(ooo(), Value::Null);
     }
 }
 

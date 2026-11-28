@@ -129,8 +129,8 @@ const DEST_REQUIRED: &[&str] = &["id", "name", "kind", "preset", "signals", "cei
 const QUEUE_KEYS: &[&str] = &["max_bytes", "max_age_s"];
 
 /// Section 6.3: the scopes with resource routes (the 1a routes; later slices add the rows of revision 4 3.1 here as
-/// their routes land; revision 6 6.1 adds `spokes.read`).
-pub const SCOPES: [&str; 10] = [
+/// their routes land; revision 6 6.1 adds `spokes.read`, revision 8 3 `presence.read` and `presence.write`).
+pub const SCOPES: [&str; 12] = [
     "monitor.read",
     "fleet.read",
     "audit.read",
@@ -141,11 +141,14 @@ pub const SCOPES: [&str; 10] = [
     "compliance.holds.write",
     "compliance.export.request",
     "spokes.read",
+    "presence.read",
+    "presence.write",
 ];
 /// Revision 4 3.1: every scope a map may grant, as `(scope, reach, the client kind it needs or "" for any)`. Revision
 /// 6 9: `spokes.read` is for monitoring and integration clients (checked by `check_client`), `spokes.tasks.submit`
-/// for spokes_hub clients and (with `a2a`, also checked by `check_client`) agent clients.
-pub const MAP_SCOPES: [(&str, &str, &str); 13] = [
+/// for spokes_hub clients and (with `a2a`, also checked by `check_client`) agent clients. Revision 8 3: the presence
+/// scopes for integration clients.
+pub const MAP_SCOPES: [(&str, &str, &str); 15] = [
     ("monitor.read", "R0", ""),
     ("fleet.read", "R0", ""),
     ("audit.read", "R0", ""),
@@ -160,6 +163,8 @@ pub const MAP_SCOPES: [(&str, &str, &str); 13] = [
     ("content.post", "R1", ""),
     ("spokes.read", "R0", ""),
     ("spokes.tasks.submit", "R1", "spokes_hub"),
+    ("presence.read", "R0", "integration"),
+    ("presence.write", "R0", "integration"),
 ];
 const STANDARD_SCOPES: [&str; 4] = ["monitor.read", "fleet.read", "audit.read", "events.subscribe"];
 const SECRET_SCOPES: [&str; 3] = ["monitor.read", "audit.read", "events.subscribe"];
@@ -229,7 +234,7 @@ pub const RELAY_ACTIONS: [&str; 17] = [
     "client_drop_target",
 ];
 /// Revision 4 7.1: the event types of the registry a webhook may select.
-pub const EVENT_TYPES: [&str; 28] = [
+pub const EVENT_TYPES: [&str; 29] = [
     "relay.connected",
     "relay.disconnected",
     "relay.health.changed",
@@ -259,6 +264,8 @@ pub const EVENT_TYPES: [&str; 28] = [
     // API-1d 6.4
     "spoke.offline",
     "spoke.online",
+    // API-1 revision 8 4.7
+    "presence.changed",
 ];
 const FED_ALGS: [&str; 3] = ["ES256", "RS256", "PS256"];
 const OTLP_PRESETS: [&str; 14] = [
@@ -1391,6 +1398,10 @@ fn check_client(v: &Value, cx: &MapCtx) -> Res<()> {
     }
     if sensitive && !matches!(ceiling, "confidential" | "cui") {
         return fail("ceiling", "a client with a compliance or directory scope needs the ceiling confidential or cui");
+    }
+    // API-1 revision 8 3: the presence routes name people and carry the out of office message
+    if scopes.iter().any(|s| s.starts_with("presence.")) && !matches!(ceiling, "confidential" | "cui") {
+        return fail("ceiling", "a client with a presence scope needs the ceiling confidential or cui");
     }
     // revision 6 2.2 and 4.1: a spokes_hub client needs the map's `spokes` and reaches only its spokes relays (`*`: all
     // of them), never a Meet relay or the console
@@ -3662,6 +3673,29 @@ mod tests {
         assert_eq!(spokes_relays(o), ["r_21", "r_22"]);
         let plain = good_map(1);
         assert_eq!((spokes_root(plain.as_object().unwrap()), spokes_relays(plain.as_object().unwrap())), (None, Vec::<&str>::new()));
+    }
+
+    /// API-1 revision 8 3: presence.read and presence.write are R0 scopes of integration clients (`scope-kind`
+    /// otherwise), need a confidential or cui ceiling (`ceiling`), and are enterprise only (`license`).
+    #[test]
+    fn revision_8_presence_scopes_are_for_integration_clients_at_confidential() {
+        let p = policy();
+        let none = BTreeMap::new();
+        let with = |ed: Edition, kind: &str, scopes: Value, ceiling: &str| {
+            let mut m = good_map(1);
+            m["destinations"] = json!([]);
+            m["clients"][0]["kind"] = json!(kind);
+            m["clients"][0]["scopes"] = scopes;
+            m["clients"][0]["ceiling"] = json!(ceiling);
+            code(check_api_map(&m, NOW, Some(&p), ed, &none))
+        };
+        let both = || json!(["presence.read", "presence.write"]);
+        assert_eq!(with(Edition::Enterprise, "integration", both(), "confidential"), "ok");
+        assert_eq!(with(Edition::Enterprise, "monitoring", json!(["presence.read"]), "confidential"), "scope-kind");
+        assert_eq!(with(Edition::Enterprise, "integration", both(), "internal"), "ceiling");
+        assert_eq!(with(Edition::Standard, "integration", json!(["presence.read"]), "confidential"), "license");
+        assert!(MAP_SCOPES.contains(&("presence.read", "R0", "integration")) && MAP_SCOPES.contains(&("presence.write", "R0", "integration")));
+        assert!(SCOPES.contains(&"presence.read") && SCOPES.contains(&"presence.write"));
     }
 
     const AGENT: &str = "a_7c1d2e3f4a5b6c7d";

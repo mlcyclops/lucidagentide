@@ -521,7 +521,7 @@ pub struct OpSpec {
 const MANIFEST_KEYS: &[&str] = &["v", "consoleId", "caGeneration", "seq", "issuedAt", "expiresAt", "leaves", "revoked", "nextCa", "sig"];
 
 pub const OPS: &[OpSpec] = &[
-    OpSpec { op: "hello", kind: Kind::Evt, to: Some(Side::Console), keys: &["relayId", "version", "fips", "profile", "os", "localConsole", "scopes", "scopeGeneration", "readOnly", "confirm", "bootstrap", "policySeq", "rosterSeq", "trustSeq", "pins", "certNotAfter"], opt: &["meetRoots", "meetCrl", "meetPki"] },
+    OpSpec { op: "hello", kind: Kind::Evt, to: Some(Side::Console), keys: &["relayId", "version", "fips", "profile", "os", "localConsole", "scopes", "scopeGeneration", "readOnly", "confirm", "bootstrap", "policySeq", "rosterSeq", "trustSeq", "pins", "certNotAfter"], opt: &["meetRoots", "meetCrl", "meetPki", "cluster"] },
     OpSpec { op: "welcome", kind: Kind::Evt, to: Some(Side::Relay), keys: &["consoleId", "time", "policySeq", "rosterSeq", "trustSeq"], opt: &["meetCaId"] },
     OpSpec { op: "trust", kind: Kind::Evt, to: Some(Side::Relay), keys: MANIFEST_KEYS, opt: &[] },
     OpSpec { op: "ca-distrust", kind: Kind::Evt, to: Some(Side::Relay), keys: &["generation", "sig"], opt: &[] },
@@ -537,7 +537,7 @@ pub const OPS: &[OpSpec] = &[
     OpSpec { op: "metrics", kind: Kind::Evt, to: Some(Side::Console), keys: &["v", "seq", "ts", "interval", "m"], opt: &[] },
     OpSpec { op: "attention", kind: Kind::Evt, to: Some(Side::Console), keys: &["items"], opt: &[] },
     OpSpec { op: "audit", kind: Kind::Evt, to: Some(Side::Console), keys: &["entries"], opt: &[] },
-    OpSpec { op: "state", kind: Kind::Evt, to: Some(Side::Console), keys: &["readOnly", "confirm", "scopes", "scopeGeneration", "scopeRequest", "profile", "bootstrap", "held", "unattested", "pins", "trustSeq", "version", "license"], opt: &["meetCrl", "meetPki"] },
+    OpSpec { op: "state", kind: Kind::Evt, to: Some(Side::Console), keys: &["readOnly", "confirm", "scopes", "scopeGeneration", "scopeRequest", "profile", "bootstrap", "held", "unattested", "pins", "trustSeq", "version", "license"], opt: &["meetCrl", "meetPki", "cluster"] },
     OpSpec { op: "confirm-done", kind: Kind::Evt, to: Some(Side::Console), keys: &["id", "result", "answer"], opt: &[] },
     // AC-2b-D 9.3: Meeting Hub relay certificates and the organization CA's revocation list.
     OpSpec { op: "meet-cert", kind: Kind::Req, to: Some(Side::Console), keys: &["csr", "signerCsr"], opt: &[] },
@@ -599,6 +599,10 @@ pub const OPS: &[OpSpec] = &[
     // relay's own state (`spokes.read`).
     OpSpec { op: "api-orgs", kind: Kind::Req, to: Some(Side::Relay), keys: &["orgs", "generation"], opt: &["release_roots"] },
     OpSpec { op: "api-spokes", kind: Kind::Req, to: Some(Side::Relay), keys: &["org", "view", "query", "people"], opt: &[] },
+    // API-1 revision 8 5: the relay's presence views of covered people (`people`, or `after` + `limit`), and a
+    // presence write (`client` `{id, name}`, `kind` session, clear, calendar or ooo) applied to its stores.
+    OpSpec { op: "api-presence", kind: Kind::Req, to: Some(Side::Relay), keys: &["org"], opt: &["people", "after", "limit"] },
+    OpSpec { op: "api-presence-write", kind: Kind::Req, to: Some(Side::Relay), keys: &["org", "client", "principal", "kind", "body"], opt: &[] },
 ];
 
 pub fn op_spec(op: &str) -> Option<&'static OpSpec> {
@@ -662,6 +666,9 @@ pub fn op_frame_max(op: &str) -> Option<usize> {
         // API-1d 2.4: 2 KiB and 1 KiB in (the `api-spokes` answer is at most 1 MiB, the console's frame limit)
         "api-orgs" => Some(2 * 1024),
         "api-spokes" => Some(1024),
+        // revision 8 5: 32 KiB in (1 MiB out, the console's frame limit) and 64 KiB in
+        "api-presence" => Some(32 * 1024),
+        "api-presence-write" => Some(64 * 1024),
         _ => None,
     }
 }
@@ -1333,6 +1340,25 @@ mod tests {
         assert_eq!(parse_frame(&req_text(1, "api-map", json!({"org": "acme", "map": {}, "roots": {}})), Side::Relay).err().unwrap().why, "body");
     }
 
+    /// API-1 revision 8 5: `api-presence` (32 KiB in: 100 long principals fit) and `api-presence-write` (64 KiB in) go
+    /// console to relay.
+    #[test]
+    fn api_presence_ops_go_console_to_relay_within_their_limits() {
+        let read = json!({"org": "acme", "people": ["ann@acme.example"]});
+        assert!(matches!(parse_frame(&req_text(1, "api-presence", read.clone()), Side::Relay), Ok(Frame::Req { op: "api-presence", .. })));
+        assert_eq!(parse_frame(&req_text(1, "api-presence", read), Side::Console).err().unwrap().why, "op");
+        assert!(matches!(parse_frame(&req_text(1, "api-presence", json!({"org": "acme", "after": "a@acme.example", "limit": 500})), Side::Relay), Ok(Frame::Req { .. })));
+        assert_eq!(parse_frame(&req_text(1, "api-presence", json!({"people": []})), Side::Relay).err().unwrap().why, "body");
+        let many: Vec<String> = (0..100).map(|i| format!("person-{i:03}-{}@acme.example", "x".repeat(200))).collect();
+        assert!(matches!(parse_frame(&req_text(1, "api-presence", json!({"org": "acme", "people": many})), Side::Relay), Ok(Frame::Req { .. })));
+        let huge: Vec<String> = (0..100).map(|i| format!("person-{i:03}-{}@acme.example", "x".repeat(400))).collect();
+        assert_eq!(parse_frame(&req_text(1, "api-presence", json!({"org": "acme", "people": huge})), Side::Relay).err().unwrap().why, "size");
+        let write = json!({"org": "acme", "client": {"id": "c_1", "name": "mail"}, "principal": "ann@acme.example", "kind": "calendar", "body": {"blocks": []}});
+        assert!(matches!(parse_frame(&req_text(1, "api-presence-write", write), Side::Relay), Ok(Frame::Req { op: "api-presence-write", .. })));
+        assert_eq!(parse_frame(&req_text(1, "api-presence-write", json!({"org": "acme", "principal": "ann@acme.example"})), Side::Relay).err().unwrap().why, "body");
+        assert_eq!(op_frame_max("api-presence-write"), Some(64 * 1024));
+    }
+
     #[test]
     fn export_parts_pass_the_console_cap_and_nothing_else_does() {
         // revision 4 2.5: a 4 MiB part in base64 fits `api-export-part`; every other frame to the console keeps 1 MiB
@@ -1481,6 +1507,9 @@ mod tests {
         meet["meetRoots"] = json!(["m_0123456789abcdef0123456789abcdef"]);
         meet["meetCrl"] = json!({"source": "none", "thisUpdate": null, "number": null, "issuer": null, "sha256": null, "pending": null});
         meet["meetPki"] = Value::Null;
+        assert!(parse_frame(&evt_text("hello", meet.clone()), Side::Console).is_ok());
+        // MR-1 2.4: a cluster node also names its cluster
+        meet["cluster"] = json!({"ok": true, "cluster": "emertins-meet", "node": "lab", "role": "active", "epoch": 1});
         assert!(parse_frame(&evt_text("hello", meet.clone()), Side::Console).is_ok());
         meet["meetSomething"] = json!(1);
         assert_eq!(parse_frame(&evt_text("hello", meet), Side::Console).err().unwrap().why, "body");

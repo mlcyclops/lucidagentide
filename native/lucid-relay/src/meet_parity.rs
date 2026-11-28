@@ -574,8 +574,9 @@ impl State {
         row.and_then(|r| r.get("role").and_then(Value::as_str).map(str::to_owned)).unwrap_or_default()
     }
 
-    /// Revision 4 7.1: a call event, kept for the event thread (the oldest goes past `CALL_EVENTS_MAX`).
-    fn pa_event(&mut self, kind: &'static str, data: Value, owner: String) {
+    /// Revision 4 7.1: a call event, kept for the event thread (the oldest goes past `CALL_EVENTS_MAX`). Revision 8
+    /// 4.7: also `presence.changed` (meet_hub's `pr_flush`).
+    pub(super) fn pa_event(&mut self, kind: &'static str, data: Value, owner: String) {
         if self.pa.events.len() >= CALL_EVENTS_MAX {
             self.pa.events.remove(0);
         }
@@ -1315,7 +1316,7 @@ mod tests {
         let (sb, sc) = (session(&h, &ben), session(&h, &cy));
         let start = json!(pj::now() + 3600.0);
         let end = json!(pj::now() + 7200.0);
-        let create = |cohosts: Value| h.meeting_create(&sb, &ben, Some(&json!("Plan")), Some(&start), Some(&end), Some(&json!(["cy@x"])), None, None, None, Some(&cohosts));
+        let create = |cohosts: Value| h.meeting_create(&sb, &ben, Some(&json!("Plan")), Some(&start), Some(&end), Some(&json!(["cy@x"])), None, None, None, Some(&cohosts), None);
         assert_eq!(error(create(json!("cy@x"))), "cohosts must be a list of people");
         let many: Vec<String> = (0..11).map(|i| format!("p{i}@x")).collect();
         assert_eq!(error(create(json!(many))), MEETING_COHOSTS_FULL);

@@ -746,6 +746,33 @@ impl ConsoleApi {
         }
     }
 
+    /// API-1 revision 8 4.2, 4.6 on the front door: `op` (`api-presence` or `api-presence-write`) with `body` to every
+    /// Meet relay of the org's set that is connected, reports `presence` and that `reaches` (the client's relays), all
+    /// at once and in id order. Spokes relays report the shared feature list but serve no presence op, so they are
+    /// never asked. A relay silent for `api_presence::CALL_MS` (or whose link fails) is None; its own refusal is passed
+    /// on. Err 409 `relay-outdated` while `presence` is closed for the org (a relay of its set stopped reporting it),
+    /// checked right before anything is sent.
+    pub fn presence_fanout(&self, link: Option<&dyn FleetLink>, org: &str, reaches: &dyn Fn(&str) -> bool, op: &str, body: &Value) -> Result<Vec<crate::api_presence::Outcome>, crate::api_presence::Problem> {
+        use crate::fleet_wire::Refusal;
+        self.gate(org, &[crate::api_features::PRESENCE]).map_err(|e| (409, crate::api_features::OUTDATED, e.message))?;
+        let Some(link) = link else { return Ok(Vec::new()) };
+        let relays: Vec<String> = self.relay_set(org).into_keys().filter(|r| reaches(r.as_str()) && !self.is_spokes(r) && link.connected(r) && self.relay_has(r, crate::api_features::PRESENCE)).collect();
+        Ok(std::thread::scope(|s| {
+            let asks: Vec<_> = relays
+                .iter()
+                .map(|relay| {
+                    let body = body.clone();
+                    s.spawn(move || match link.request(relay, op, body, crate::api_presence::CALL_MS) {
+                        Ok(v) => Some(Ok(v)),
+                        Err(LinkError::Refused { status, code, error }) => Some(Err(Refusal::new(status, &code, &error))),
+                        Err(_) => None,
+                    })
+                })
+                .collect();
+            relays.iter().cloned().zip(asks).map(|(relay, h)| (relay, h.join().unwrap_or(None))).collect()
+        }))
+    }
+
     /// API-1d 4.2: the CRL tokens the spokes relays bound to `org` hold now (their `relays` view, `crl.token`), for the
     /// check of a pasted service hub certificate. A relay that does not answer gives none.
     pub fn spokes_crls(&self, link: Option<&dyn FleetLink>, org: &str) -> Vec<String> {
@@ -3351,6 +3378,40 @@ mod tests {
         assert!(lines.lock().iter().any(|l| l.contains("api.relay-outdated")));
         assert_eq!(api.gate("acme", &[crate::api_features::MAP_V2]).unwrap_err().code, "relay-outdated");
         assert_eq!(api.outdated().len(), 1);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// API-1 revision 8 4.2, 4.6: presence goes only to the Meet relays of the org that report `presence`; a spokes
+    /// relay (it reports the shared feature list but has no presence handler) is never asked, and once a relay of the
+    /// set is rolled back the fan-out refuses `relay-outdated` before anything is sent.
+    #[test]
+    fn r8_presence_fanout_skips_spokes_relays_and_refuses_while_the_gate_is_closed() {
+        let d = temp("r8-presence-fanout");
+        let (log, _) = logger();
+        let meet = Arc::new(FakeRelay::new(RELAY, "acme", &d.join("meet"), log.clone()));
+        let spokes = Arc::new(FakeRelay::new(OTHER, "acme", &d.join("spokes"), log.clone()));
+        let link: Arc<dyn FleetLink> = Arc::new(Fleet(vec![meet.clone(), spokes.clone()]));
+        let api = Arc::new(ConsoleApi::open(Some(&d.join("console")), log, vault()));
+        assert!(!api.spokes_bind(None, OTHER, "acme", true, NOW).unwrap(), "recorded, not sent");
+        for r in [RELAY, OTHER] {
+            api.on_welcomed(r);
+            api.sync(&*link, r, NOW);
+        }
+        assert!(api.relay_set("acme").contains_key(OTHER));
+        assert!(api.relay_has(OTHER, crate::api_features::PRESENCE), "a spokes relay reports the shared list");
+        let all = |_: &str| true;
+        let body = json!({"org": "acme", "people": ["ann@acme.example"]});
+        let asked = |r: &FakeRelay| r.sent.lock().iter().filter(|(op, _)| op.starts_with("api-presence")).count();
+        let out = api.presence_fanout(Some(&*link), "acme", &all, "api-presence", &body).unwrap();
+        assert_eq!(out.iter().map(|(r, _)| r.as_str()).collect::<Vec<_>>(), [RELAY]);
+        assert_eq!((asked(&*meet), asked(&*spokes)), (1, 0));
+        // the Meet relay is rolled back: `presence` closes for the org and nothing is sent
+        *meet.features.lock() = Some(Value::Null);
+        api.on_welcomed(RELAY);
+        api.sync(&*link, RELAY, NOW);
+        let (status, code, _) = api.presence_fanout(Some(&*link), "acme", &all, "api-presence-write", &body).unwrap_err();
+        assert_eq!((status, code), (409, crate::api_features::OUTDATED));
+        assert_eq!((asked(&*meet), asked(&*spokes)), (1, 0));
         let _ = std::fs::remove_dir_all(&d);
     }
 

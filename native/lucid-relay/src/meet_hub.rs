@@ -55,6 +55,12 @@ mod control;
 #[path = "meet_sfu.rs"]
 mod sfu;
 pub use sfu::{E2EE_BODY_MAX, E2EE_ROSTER_BODY_MAX};
+// PH-1 (docs/phone/contract.md): phone numbers for people and a conference number, through LiveKit SIP.
+#[path = "meet_phone.rs"]
+pub mod phone;
+// PH-1 revision 2 (docs/phone/contract.md section 10): texts from a person's phone number through the provider's API.
+#[path = "meet_sms.rs"]
+pub mod sms;
 #[path = "meet_guests.rs"]
 pub mod guests;
 #[path = "meet_bridge.rs"]
@@ -476,8 +482,8 @@ pub fn parse_active(v: Option<&Value>, absent: Option<bool>) -> R<bool> {
     }
 }
 
-/// (online, room, devices, presence, mobile).
-type PState = (bool, String, Vec<(String, String, String)>, &'static str, bool);
+/// (online, room, devices, presence, mobile, and API-1 revision 8 1.4's availability, activity and out_of_office).
+type PState = (bool, String, Vec<(String, String, String)>, &'static str, bool, PrView);
 
 pub struct State {
     pub peers: IndexMap<String, Peer>,
@@ -573,6 +579,24 @@ pub struct State {
     pc_docs: pc_docs::DocsRate,
     /// In memory: WA-1's settings, web port sessions and challenges, guest conflicts (persisted state: ext["wa"]).
     wa: wa::Wa,
+    /// API-1 revision 8 1.2 items 4 to 6, principal -> calendar blocks, application sessions and out of office
+    /// (persisted state: ext["presence"], written by `snapshot`).
+    presence: IndexMap<String, PrPerson>,
+    /// In memory, r8 1.4: the view each person was last announced with in a `presence` event (absent: offline).
+    pr_shown: HashMap<String, PrView>,
+    /// When (wall seconds) the r8 1.4 check last looked for time-driven changes.
+    pr_checked: f64,
+    /// In memory, r8 4.7: per person the triple last raised as `presence.changed` and when (wall seconds), and the
+    /// people whose change waits for the end of their 5 s window.
+    pr_emitted: HashMap<String, (PrTriple, f64)>,
+    pr_pending: HashSet<String>,
+    /// In memory, r8 7: the API presence writes by kind.
+    pr_writes: HashMap<String, u64>,
+    /// In memory: PH-1's settings, phone-capable sessions, phone stays and webhook ids (persisted state: the meetings'
+    /// `phone_pin` and ext["phone"]).
+    ph: phone::Phone,
+    /// In memory: PH-1 revision 2's texting settings and outbound rate book (persisted state: ext["sms"]).
+    sms: sms::Sms,
 }
 
 /// _empty_stage. `spotlight`: the peer everyone sees large ("" for none); `cohosts`: the co-organizers' principals.
@@ -861,12 +885,21 @@ impl State {
             ("status", self.status_of(principal)),
             ("presence", Value::from(state.3)),
             ("mobile", Value::Bool(state.4)),
+            // API-1 revision 8 1.4
+            ("availability", Value::from(state.5.availability)),
+            ("activity", Value::from(state.5.activity)),
+            ("out_of_office", state.5.ooo_device()),
         ])
     }
 
     /// _tell_presence: a `presence` event about this person to every session (their status or organization
     /// changed).
     fn tell_presence(&mut self, principal: &str) {
+        self.tell_presence_at(principal, wall_ms());
+    }
+
+    /// `tell_presence` with the person's state at `now` (ms; API-1 revision 8 1.4's check runs with its own clock).
+    fn tell_presence_at(&mut self, principal: &str, now: i64) {
         let name = match self.directory.get(principal).and_then(Value::as_object) {
             Some(e) => {
                 let n = pj::s(e, "name");
@@ -874,11 +907,12 @@ impl State {
             }
             None => principal.to_string(),
         };
-        let state = self.pstate(principal);
+        let state = self.pstate_at(principal, now);
         let event = self.presence_event(principal, &name, &state);
         for s in self.sessions.values_mut() {
             push(&mut s.seq, &mut s.events, &event);
         }
+        self.pr_note(principal, &state.5, now as f64 / 1000.0);
     }
 
     // ── the stage: host, presenter, requests to present, raised hands ──
@@ -916,6 +950,14 @@ impl State {
         self.pa_attend_roles(room);
         let event = obj([("type", Value::from("stage")), ("room", Value::from(room)), ("stage", self.stage_view_ext(room)), ("why", Value::from(why)), ("by", Value::from(by))]);
         self.broadcast(room, &event, skip);
+        // API-1 revision 8 1.2 item 3: the presenter changed (joins and leaves are announced by their own route)
+        if matches!(why, "present" | "stop" | "grant") {
+            let people: Vec<String> = self.peers.values().filter(|p| p.room == room && pr_person_like(&p.who)).map(|p| p.who.principal.clone()).collect();
+            let now = wall_ms();
+            for p in people {
+                self.pr_recheck(&p, now);
+            }
+        }
     }
 
     /// _stage_entry.
@@ -1092,19 +1134,30 @@ impl State {
     }
 
     fn pstate(&self, principal: &str) -> PState {
+        self.pstate_at(principal, wall_ms())
+    }
+
+    /// `pstate` at `now` (ms).
+    fn pstate_at(&self, principal: &str, now: i64) -> PState {
         let devices = self.devices(principal);
-        let (presence, mobile) = self.presence_of(principal);
+        let (presence, mobile) = self.presence_of_at(principal, now as f64 / 1000.0);
+        let view = self.presence_view(principal, now);
         if let Some(p) = self.peers.values().find(|p| p.who.principal == principal) {
-            return (true, p.room.clone(), devices, presence, mobile);
+            return (true, p.room.clone(), devices, presence, mobile, view);
         }
         if self.sessions.values().any(|s| s.who.principal == principal) {
-            return (true, String::new(), devices, presence, mobile);
+            return (true, String::new(), devices, presence, mobile, view);
         }
-        (false, String::new(), devices, presence, mobile)
+        (false, String::new(), devices, presence, mobile, view)
     }
 
     /// PR-1 1.2: a person's automatic `(presence, mobile)`.
     fn presence_of(&self, principal: &str) -> (&'static str, bool) {
+        self.presence_of_at(principal, pj::now())
+    }
+
+    /// `presence_of` at `now` (wall seconds).
+    fn presence_of_at(&self, principal: &str, now: f64) -> (&'static str, bool) {
         if self.peers.values().any(|p| p.who.principal == principal) {
             return ("available", false);
         }
@@ -1112,7 +1165,7 @@ impl State {
         if live.peek().is_some() {
             return if live.any(|s| s.active) { ("available", false) } else { ("away", false) };
         }
-        if self.pu_on() && self.mobile_seen(principal) >= pj::now() - PRESENCE_MOBILE_DAYS * 86400.0 {
+        if self.pu_on() && self.mobile_seen(principal) >= now - PRESENCE_MOBILE_DAYS * 86400.0 {
             return ("away", true);
         }
         ("offline", false)
@@ -1181,6 +1234,7 @@ impl State {
         for s in self.sessions.values_mut() {
             push(&mut s.seq, &mut s.events, &event);
         }
+        self.pr_note(&who.principal, &after.5, pj::now());
     }
 
     /// CD-1: `proof` if it names a live presence session of this principal and device, else "".
@@ -1254,6 +1308,8 @@ impl State {
         for s in self.sessions.values() {
             add(&s.who, s.since, "");
         }
+        let now = wall_ms();
+        let busy = self.pr_meeting_people(now);
         for (principal, e) in out.iter_mut() {
             e.insert("devices".into(), Self::devices_value(&self.devices(principal)));
             e.insert("org".into(), self.org(principal));
@@ -1261,6 +1317,7 @@ impl State {
             let (presence, mobile) = self.presence_of(principal);
             e.insert("presence".into(), Value::from(presence));
             e.insert("mobile".into(), Value::Bool(mobile));
+            self.pr_view(principal, now, busy.contains(principal)).insert_into(e);
         }
         out
     }
@@ -1591,7 +1648,7 @@ impl State {
             ("emoji", Value::Object(self.emoji.clone())),
             ("attendance", Value::Object(self.attendance.clone())),
             ("push_tokens", Value::Object(self.push_tokens.clone())),
-            ("ext", Value::Object(self.ext.clone())),
+            ("ext", Value::Object(self.pr_ext())),
         ]));
         pj::dumps(&v)
     }
@@ -1630,6 +1687,7 @@ impl State {
         self.breakout_room_empty(room);
         self.control_room_empty(room);
         self.sfu_room_empty(room);
+        self.phone_room_empty(room);
         self.guests_room_empty(room);
         self.wa_room_empty(room);
     }
@@ -1641,6 +1699,8 @@ impl State {
         self.breakout_prune(now);
         self.control_prune();
         self.sfu_prune();
+        self.phone_prune(now);
+        self.sms_prune(now);
         self.guests_sweep();
         self.bridge_prune(now);
         self.ce_prune(now);
@@ -1687,6 +1747,7 @@ impl Hub {
         let mut st = self.st.lock();
         st.files.configure(s.file_max_mb, s.files_quota_gb);
         st.sfu_configure(s)?;
+        st.phone_configure(s)?;
         st.guests_configure(s)?;
         st.bridge_configure(s)?;
         st.pa_configure(s);
@@ -1902,6 +1963,8 @@ pub struct Hub {
     denied_until: Mutex<HashMap<String, f64>>,
     /// AC-1 2.4 (R4-1, R4-2): the Meeting Hub service gate and seats, installed at start before the ports listen.
     gate: Mutex<Option<Arc<crate::meet_license::MeetGate>>>,
+    /// MR-1 2.4: this relay's node of a cluster (set once at start; none for a single relay).
+    cluster: std::sync::OnceLock<Arc<crate::meet_cluster::Cluster>>,
 }
 
 /// What the Admin Console wants to hear from the hub (contract 3.2 latching, 3.8 observation).
@@ -2000,8 +2063,16 @@ impl Hub {
             pc: pc::Pc::new(state_dir.as_deref()),
             pc_docs: pc_docs::DocsRate::default(),
             wa: wa::Wa::new(),
+            presence: IndexMap::new(),
+            pr_shown: HashMap::new(),
+            pr_checked: pj::now(),
+            pr_emitted: HashMap::new(),
+            pr_pending: HashSet::new(),
+            pr_writes: HashMap::new(),
+            ph: phone::Phone::default(),
+            sms: sms::Sms::default(),
         };
-        let hub = Hub { st: Mutex::new(st), cond: Condvar::new(), signer, links, state_dir, save_lock: Mutex::new(()), stop: AtomicBool::new(false), console_hooks: Mutex::new(None), denied_until: Mutex::new(HashMap::new()), gate: Mutex::new(None) };
+        let hub = Hub { st: Mutex::new(st), cond: Condvar::new(), signer, links, state_dir, save_lock: Mutex::new(()), stop: AtomicBool::new(false), console_hooks: Mutex::new(None), denied_until: Mutex::new(HashMap::new()), gate: Mutex::new(None), cluster: std::sync::OnceLock::new() };
         if hub.state_dir.is_some() {
             hub.load();
         }
@@ -2115,6 +2186,7 @@ impl Hub {
             .collect();
         // each wave-3 slice validates its own part when it first reads it
         st.ext = only_objects(raw.get("ext"));
+        st.pr_load(wall_ms());
         st.pa_load(&raw);
         st.pu_load(&raw);
         st.prune(pj::now());
@@ -2142,6 +2214,10 @@ impl Hub {
     pub fn save_synced(&self) -> Result<(), String> {
         let Some(path) = self.path() else { return Ok(()) };
         let _g = self.save_lock.lock();
+        // MR-1 2.3: a standby's state.json is the active's copy; its own Hub never writes over it
+        if self.cluster().is_some_and(|c| !c.saves_allowed()) {
+            return Ok(());
+        }
         let data = {
             let mut st = self.st.lock();
             st.dirty = false;
@@ -2178,11 +2254,55 @@ impl Hub {
         result.map_err(|e| {
             self.st.lock().dirty = true;
             format!("cannot write {}: {e}", path.display())
-        })
+        })?;
+        // MR-1 2.3: a new replica generation for the standby
+        if let Some(c) = self.cluster() {
+            c.note_saved();
+        }
+        Ok(())
+    }
+
+    /// MR-1 2.4: wait for a save in progress (a node turning standby stops saving first).
+    pub fn save_barrier(&self) {
+        drop(self.save_lock.lock());
+    }
+
+    pub fn set_cluster(&self, c: Arc<crate::meet_cluster::Cluster>) {
+        let _ = self.cluster.set(c);
+    }
+
+    pub fn cluster(&self) -> Option<&Arc<crate::meet_cluster::Cluster>> {
+        self.cluster.get()
+    }
+
+    /// MR-1 2.4: whether this relay serves people now (always without a cluster; else the active node, not handing
+    /// over). The loops that change state run only then.
+    pub fn serving(&self) -> bool {
+        self.cluster().is_none_or(|c| c.serving())
+    }
+
+    /// MR-1 2.4: the one check before a change that does not come through a client route (the console, the fleet
+    /// link, an upkeep): Err the refusal's code and words while this node does not serve people, so a standby or
+    /// fenced node never takes state it would diverge on.
+    pub fn cluster_writes(&self) -> Result<(), (&'static str, &'static str)> {
+        match self.cluster() {
+            Some(c) if !c.serving() => Err(c.not_serving()),
+            _ => Ok(()),
+        }
+    }
+
+    /// MR-1 2.4: `/healthz`, with the node's role, epoch and id when it is in a cluster.
+    pub fn health(&self) -> Obj {
+        match self.cluster() {
+            Some(c) => c.health(),
+            None => obj([("ok", Value::Bool(true))]),
+        }
     }
 
     /// Background upkeep: the NT-1 ring timer and delayed pushes every NT_TICK s (at most 1 s late), reap every
-    /// REAP_EVERY s, save at most every SAVE_EVERY s when something changed.
+    /// REAP_EVERY s, save at most every SAVE_EVERY s when something changed. MR-1 2.4: on a node that does not serve
+    /// people only the save runs (a fenced node keeps what it has; a standby saves nothing); the active lists its
+    /// replica set at the same pace, so writers other than the save are seen too.
     pub fn start(self: &Arc<Self>) {
         let hub = self.clone();
         let _ = std::thread::Builder::new().name("relay-upkeep".into()).spawn(move || {
@@ -2194,8 +2314,11 @@ impl Hub {
                     return;
                 }
                 let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    hub.push_tick();
-                    if pj::mono() - last_reap >= REAP_EVERY {
+                    let serving = hub.serving();
+                    if serving {
+                        hub.push_tick();
+                    }
+                    if serving && pj::mono() - last_reap >= REAP_EVERY {
                         last_reap = pj::mono();
                         hub.reap();
                         hub.wave3_tick();
@@ -2204,6 +2327,9 @@ impl Hub {
                         last_save = pj::mono();
                         if hub.st.lock().dirty {
                             hub.save();
+                        }
+                        if let Some(c) = hub.cluster() {
+                            c.note_saved();
                         }
                     }
                 }));
@@ -2247,6 +2373,9 @@ impl Hub {
         st.pa_status_sweep();
         st.mobile_expire();
         let wall = pj::now();
+        // API-1 revision 8 1.4 and 4.7: time-driven presence changes (every 15 s), then the presence.changed events due
+        st.pr_check(wall);
+        st.pr_flush(wall);
         // ID-1 2.11: a stale status or a suspension closes sessions itself
         st.pc_id_sweep(wall);
         let rooms: Vec<String> = st.stages.keys().cloned().collect();
@@ -3553,6 +3682,9 @@ impl Hub {
             st.announce(who, &before);
             let now = pj::now();
             let online = st.online();
+            // API-1 revision 8 1.4: each entry's availability, activity and out of office
+            let now_ms = wall_ms();
+            let busy = st.pr_meeting_people(now_ms);
             let mut people: Vec<(&String, &Value)> = st.directory.iter().collect();
             people.sort_by(|a, b| a.0.cmp(b.0));
             let people: Vec<Value> = people
@@ -3563,7 +3695,7 @@ impl Hub {
                     let on = online.get(p);
                     let name = pj::s(&e, "name");
                     let (presence, mobile) = st.presence_of(p);
-                    Value::Object(obj([
+                    let mut entry = obj([
                         ("principal", Value::from(p.clone())),
                         ("name", Value::from(if name.is_empty() { p.clone() } else { name })),
                         ("last_seen", if on.is_some() { f(now) } else { e.get("last_seen").cloned().unwrap_or(Value::from(0)) }),
@@ -3573,7 +3705,9 @@ impl Hub {
                         ("status", st.status_of(p)),
                         ("presence", Value::from(presence)),
                         ("mobile", Value::Bool(mobile)),
-                    ]))
+                    ]);
+                    st.pr_view(p, now_ms, busy.contains(p.as_str())).insert_into(&mut entry);
+                    Value::Object(entry)
                 })
                 .collect();
             let invites: Vec<Value> = st.invites.get(&who.principal).map(|l| l.iter().filter(|i| pj::num(i, "ts") > now - INVITE_TTL && hears_invite(&client, i)).map(|i| Value::Object(i.clone())).collect()).unwrap_or_default();
@@ -3687,12 +3821,16 @@ impl Hub {
         };
         st.announce(who, &before);
         let (presence, mobile) = st.presence_of(&who.principal);
+        let view = st.presence_view(&who.principal, wall_ms());
         drop(st);
         self.wake();
         if changed {
             log_info(&format!("activity principal={} session={session} active={}", who.principal, if active { "yes" } else { "no" }));
         }
-        Ok(obj([("ok", Value::Bool(true)), ("presence", Value::from(presence)), ("mobile", Value::Bool(mobile))]))
+        let mut out = obj([("ok", Value::Bool(true)), ("presence", Value::from(presence)), ("mobile", Value::Bool(mobile))]);
+        // API-1 revision 8 1.4
+        view.insert_into(&mut out);
+        Ok(out)
     }
 
     // ── direct messages and reactions ────────────────────────────────────────────────────────────────────────
@@ -5073,6 +5211,887 @@ impl Hub {
     }
 }
 
+// ── PR-2: presence for integrations (API-1 revision 8, docs/api/contract-r8-1f.md) ────────────────────────────
+
+/// r8 1.1: availabilities from the lowest rank to the highest (1.3 step 3; `offline` lowest, as 4.2's merge).
+const PR_AVAILABILITY_RANK: [&str; 5] = ["offline", "away", "available", "busy", "dnd"];
+/// r8 1.3 step 3: activities from the lowest rank to the highest, for a tie on availability (`offline` and
+/// `out_of_office`, which no candidate carries, lowest).
+const PR_ACTIVITY_RANK: [&str; 9] = ["offline", "out_of_office", "away", "available", "busy", "dnd", "in_meeting", "in_call", "presenting"];
+/// r8 1.2 item 5: what an application session may show (never `in_meeting` or `out_of_office`).
+const PR_SESSION_AVAILABILITY: [&str; 4] = ["available", "busy", "dnd", "away"];
+const PR_SESSION_ACTIVITY: [&str; 6] = ["available", "away", "busy", "dnd", "in_call", "presenting"];
+/// r8 1.2 limits (times in ms).
+const PR_BLOCKS_MAX: usize = 200;
+const PR_BLOCK_SPAN_MS: i64 = 14 * 86_400_000;
+const PR_BLOCK_PAST_MS: i64 = 86_400_000;
+const PR_BLOCK_AHEAD_MS: i64 = 30 * 86_400_000;
+const PR_SESSIONS_PER_CLIENT: usize = 8;
+const PR_SESSIONS_MAX: usize = 64;
+const PR_OOO_TEXT_MAX: usize = 280;
+const PR_OOO_SPAN_MS: i64 = 366 * 86_400_000;
+/// r8 4.3: an application session lasts `expires_in` seconds, from 300 (the default) to 14400.
+const PR_EXPIRES_MIN: i64 = 300;
+const PR_EXPIRES_MAX: i64 = 14_400;
+/// r8 1.4: time-driven changes are looked for this often (seconds).
+const PR_CHECK_EVERY: f64 = 15.0;
+/// r8 4.7: at most one `presence.changed` per person this often (seconds).
+const PR_EVENT_EVERY: f64 = 5.0;
+/// r8 4.3 to 4.5: the kinds of `api-presence-write`, in the order section 7's metrics list them.
+const PR_WRITE_KINDS: [&str; 4] = ["session", "clear", "calendar", "ooo"];
+/// The state.json `ext` slot of the r8 1.2 stores.
+const PR_EXT: &str = "presence";
+/// r8 1.2 item 4 and 2.2: the origin of the person's own Hub, and the `by` of what the person set.
+const PR_SELF: &str = "self";
+
+/// r8 4.7: (availability, activity, out of office on).
+type PrTriple = (&'static str, &'static str, bool);
+const PR_OFFLINE: PrTriple = ("offline", "offline", false);
+
+/// int(time.time() * 1000).
+fn wall_ms() -> i64 {
+    (pj::now() * 1000.0) as i64
+}
+
+/// The people `presence` events are about: not the console, web guests, bridge connectors or services.
+fn pr_person_like(who: &Identity) -> bool {
+    !(who.is_console() || who.guest || who.connector || who.is_service())
+}
+
+fn pr_at(list: &[&str], v: &str) -> usize {
+    list.iter().position(|x| *x == v).unwrap_or(0)
+}
+
+/// r8 1.3 step 3 (and 4.2's merge): the rank of a view, availability first (dnd > busy > available > away >
+/// offline), then activity on a tie (presenting > in_call > in_meeting > dnd > busy > available > away).
+pub fn presence_rank(availability: &str, activity: &str) -> (usize, usize) {
+    (pr_at(&PR_AVAILABILITY_RANK, availability), pr_at(&PR_ACTIVITY_RANK, activity))
+}
+
+/// The entry of `list` that `v` names.
+fn pr_interned(list: &[&'static str], v: Option<&Value>) -> Option<&'static str> {
+    let v = v?.as_str()?;
+    list.iter().copied().find(|x| *x == v)
+}
+
+/// r8 4.2 and 4.6: `org`'s newest current policy covers `principal`, a person and not a service (the rule of API
+/// holds, `pc_holds_prepare_api`).
+fn pr_covers(policy: Option<&Obj>, principal: &str) -> bool {
+    policy.is_some_and(|p| pc::service_kind(principal).is_empty() && crate::meet_org_policy::covers(p, principal))
+}
+
+/// r8 1.2 and 4.3 to 4.5: why a presence write is refused. The API answers 400 `bad-body`, 422 `presence-value` or
+/// 422 `presence-limit`; a device route (2.1, 2.2) answers 400 with the same words.
+#[derive(Debug)]
+enum PrErr {
+    Body(String),
+    Value(String),
+    Limit(String),
+}
+
+impl From<PrErr> for E {
+    fn from(e: PrErr) -> E {
+        match e {
+            PrErr::Body(w) | PrErr::Value(w) | PrErr::Limit(w) => E::Bad(w),
+        }
+    }
+}
+
+impl From<PrErr> for crate::fleet_wire::Refusal {
+    fn from(e: PrErr) -> crate::fleet_wire::Refusal {
+        match e {
+            PrErr::Body(w) => crate::fleet_wire::Refusal::new(400, "bad-body", &w),
+            PrErr::Value(w) => crate::fleet_wire::Refusal::new(422, "presence-value", &w),
+            PrErr::Limit(w) => crate::fleet_wire::Refusal::new(422, "presence-limit", &w),
+        }
+    }
+}
+
+/// r8 4.3 to 4.5: an API body names only these fields (a calendar's titles, attendees and bodies are never accepted).
+fn pr_keys(body: &Obj, allowed: &[&str]) -> Result<(), PrErr> {
+    match body.keys().find(|k| !allowed.contains(&k.as_str())) {
+        Some(k) => Err(PrErr::Body(format!("{k} is not a field of this body ({})", allowed.join(", ")))),
+        None => Ok(()),
+    }
+}
+
+/// r8 2.1 and 4.4: one calendar block `{start, end, show}` (ms; `show` busy or oof).
+fn pr_block(v: &Value) -> Result<PrBlock, PrErr> {
+    let shape = || PrErr::Body("a calendar block is {start, end, show}: start and end in ms, show busy or oof".into());
+    let o = v.as_object().ok_or_else(shape)?;
+    if o.keys().any(|k| !["start", "end", "show"].contains(&k.as_str())) {
+        return Err(shape());
+    }
+    let (Some(start), Some(end)) = (pj::as_int(o.get("start")), pj::as_int(o.get("end"))) else { return Err(shape()) };
+    let oof = match o.get("show").and_then(Value::as_str) {
+        Some("busy") => false,
+        Some("oof") => true,
+        _ => return Err(shape()),
+    };
+    Ok(PrBlock { start, end, oof })
+}
+
+/// r8 2.1 and 4.4: the blocks of a write, within the 1.2 limits at `now` (ms).
+fn pr_blocks(v: Option<&Value>, now: i64) -> Result<Vec<PrBlock>, PrErr> {
+    let Some(Value::Array(list)) = v else { return Err(PrErr::Body("blocks must be a list of {start, end, show}".into())) };
+    if list.len() > PR_BLOCKS_MAX {
+        return Err(PrErr::Limit(format!("a calendar sends at most {PR_BLOCKS_MAX} blocks")));
+    }
+    let mut out = Vec::with_capacity(list.len());
+    for v in list {
+        let b = pr_block(v)?;
+        if b.start >= b.end {
+            return Err(PrErr::Limit("a calendar block must end after it starts".into()));
+        }
+        if b.end.saturating_sub(b.start) > PR_BLOCK_SPAN_MS {
+            return Err(PrErr::Limit("a calendar block is at most 14 days long".into()));
+        }
+        if b.end <= now - PR_BLOCK_PAST_MS || b.start >= now + PR_BLOCK_AHEAD_MS {
+            return Err(PrErr::Limit("a calendar block must end after a day ago and start within 30 days".into()));
+        }
+        out.push(b);
+    }
+    Ok(out)
+}
+
+/// r8 4.3: a session id, `[A-Za-z0-9_-]{1,64}`.
+fn pr_session_id(s: &str) -> bool {
+    (1..=64).contains(&s.len()) && s.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
+}
+
+fn pr_session_of(body: &Obj) -> Result<String, PrErr> {
+    body.get("session").and_then(Value::as_str).filter(|s| pr_session_id(s)).map(str::to_string).ok_or_else(|| PrErr::Body("session must be 1 to 64 of A-Z, a-z, 0-9, _ and -".into()))
+}
+
+/// r8 4.3 `{session, availability, activity, expires_in?}`: (session, availability, activity, seconds).
+fn pr_app_session(body: &Obj) -> Result<(String, &'static str, &'static str, i64), PrErr> {
+    pr_keys(body, &["session", "availability", "activity", "expires_in"])?;
+    let session = pr_session_of(body)?;
+    let value = |key: &str, list: &[&'static str]| -> Result<&'static str, PrErr> {
+        let words = format!("{key} must be one of {}", list.join(", "));
+        match body.get(key) {
+            Some(Value::String(_)) => pr_interned(list, body.get(key)).ok_or(PrErr::Value(words)),
+            _ => Err(PrErr::Body(words)),
+        }
+    };
+    let availability = value("availability", &PR_SESSION_AVAILABILITY[..])?;
+    let activity = value("activity", &PR_SESSION_ACTIVITY[..])?;
+    let expires_in = match body.get("expires_in") {
+        None | Some(Value::Null) => PR_EXPIRES_MIN,
+        v => match pj::as_int(v) {
+            Some(s) if (PR_EXPIRES_MIN..=PR_EXPIRES_MAX).contains(&s) => s,
+            Some(_) => return Err(PrErr::Limit(format!("expires_in must be {PR_EXPIRES_MIN} to {PR_EXPIRES_MAX} seconds"))),
+            None => return Err(PrErr::Body("expires_in must be a whole number of seconds".into())),
+        },
+    };
+    Ok((session, availability, activity, expires_in))
+}
+
+/// r8 2.2 and 4.5 `{on, message?, from?, until?}` at `now` (ms): None for `on: false`, else (message, from, until)
+/// with `from` now when absent.
+fn pr_ooo(body: &Obj, now: i64) -> Result<Option<(String, i64, Option<i64>)>, PrErr> {
+    let on = match body.get("on") {
+        Some(Value::Bool(b)) => *b,
+        _ => return Err(PrErr::Body("on must be true or false".into())),
+    };
+    if !on {
+        return Ok(None);
+    }
+    let message = match body.get("message") {
+        None | Some(Value::Null) => String::new(),
+        Some(Value::String(s)) => pj::squash(s),
+        Some(_) => return Err(PrErr::Body("message must be a short text".into())),
+    };
+    if pj::char_len(&message) > PR_OOO_TEXT_MAX || !pj::printable(&message) {
+        return Err(PrErr::Limit(format!("an out of office message is at most {PR_OOO_TEXT_MAX} printable characters")));
+    }
+    let time = |key: &str| -> Result<Option<i64>, PrErr> {
+        match body.get(key) {
+            None | Some(Value::Null) => Ok(None),
+            v => pj::as_int(v).filter(|t| *t >= 0).map(Some).ok_or_else(|| PrErr::Body(format!("{key} must be a time in ms"))),
+        }
+    };
+    let from = time("from")?.unwrap_or(now);
+    let until = time("until")?;
+    if let Some(u) = until {
+        if u <= from {
+            return Err(PrErr::Limit("until must be after from".into()));
+        }
+        if u - from > PR_OOO_SPAN_MS {
+            return Err(PrErr::Limit("an out of office lasts at most 366 days".into()));
+        }
+    }
+    Ok(Some((message, from, until)))
+}
+
+/// r8 1.2 item 4: one calendar block (ms); `oof` for `show: oof`, else `busy`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PrBlock {
+    start: i64,
+    end: i64,
+    oof: bool,
+}
+
+impl PrBlock {
+    fn live(&self, now: i64) -> bool {
+        self.start <= now && now < self.end
+    }
+
+    fn value(&self) -> Value {
+        let show = if self.oof { "oof" } else { "busy" };
+        serde_json::json!({"start": self.start, "end": self.end, "show": show})
+    }
+}
+
+/// r8 1.2 item 4: the blocks of one origin (`self` or an API client id): the name an `oof` block shows as `by` (`self`
+/// or the client's name), the client's org ("" for `self`) and when they were written (ms).
+#[derive(Clone, Debug)]
+struct PrCalendar {
+    name: String,
+    org: String,
+    set_at: i64,
+    blocks: Vec<PrBlock>,
+}
+
+/// r8 1.2 item 5: an application session an API client keeps for a person (`expires` in ms).
+#[derive(Clone, Debug)]
+struct PrSession {
+    client: String,
+    name: String,
+    org: String,
+    session: String,
+    availability: &'static str,
+    activity: &'static str,
+    expires: i64,
+}
+
+/// r8 1.2 item 6: out of office (ms). `by` is `self` or the client's name; `client` and `org` name the API client
+/// that set it ("" when the person did, or for an `oof` block of `self`).
+#[derive(Clone, Debug, PartialEq)]
+struct PrOoo {
+    message: String,
+    from: Option<i64>,
+    until: Option<i64>,
+    by: String,
+    client: String,
+    org: String,
+    set_at: i64,
+}
+
+impl PrOoo {
+    /// On at `now`: `from <= now < until`, absent bounds open.
+    fn on(&self, now: i64) -> bool {
+        self.from.is_none_or(|f| f <= now) && self.until.is_none_or(|u| now < u)
+    }
+
+    /// r8 1.1, what devices see: `{message?, until?, by}`.
+    fn device(&self) -> Value {
+        let mut out = Obj::new();
+        if !self.message.is_empty() {
+            out.insert("message".into(), Value::from(self.message.clone()));
+        }
+        if let Some(u) = self.until {
+            out.insert("until".into(), Value::from(u));
+        }
+        out.insert("by".into(), Value::from(self.by.clone()));
+        Value::Object(out)
+    }
+
+    /// r8 4.1 and 5 (`api-presence`): `{message?, from?, until?, by, set_at}`.
+    fn api(&self) -> Value {
+        let mut out = Obj::new();
+        if !self.message.is_empty() {
+            out.insert("message".into(), Value::from(self.message.clone()));
+        }
+        if let Some(t) = self.from {
+            out.insert("from".into(), Value::from(t));
+        }
+        if let Some(u) = self.until {
+            out.insert("until".into(), Value::from(u));
+        }
+        out.insert("by".into(), Value::from(self.by.clone()));
+        out.insert("set_at".into(), Value::from(self.set_at));
+        Value::Object(out)
+    }
+
+    /// state.json.
+    fn stored(&self) -> Value {
+        let mut out = obj([("message", Value::from(self.message.clone()))]);
+        if let Some(t) = self.from {
+            out.insert("from".into(), Value::from(t));
+        }
+        if let Some(u) = self.until {
+            out.insert("until".into(), Value::from(u));
+        }
+        out.insert("by".into(), Value::from(self.by.clone()));
+        out.insert("client".into(), Value::from(self.client.clone()));
+        out.insert("org".into(), Value::from(self.org.clone()));
+        out.insert("set_at".into(), Value::from(self.set_at));
+        Value::Object(out)
+    }
+
+    fn of_stored(o: &Obj) -> PrOoo {
+        PrOoo {
+            message: pj::text_of(o, "message"),
+            from: pj::as_int(o.get("from")),
+            until: pj::as_int(o.get("until")),
+            by: pj::text_of(o, "by"),
+            client: pj::text_of(o, "client"),
+            org: pj::text_of(o, "org"),
+            set_at: pj::as_int(o.get("set_at")).unwrap_or(0),
+        }
+    }
+}
+
+/// r8 1.2 items 4 to 6 of one person: calendar blocks by origin, application sessions, out of office.
+#[derive(Clone, Debug, Default)]
+struct PrPerson {
+    calendars: IndexMap<String, PrCalendar>,
+    sessions: Vec<PrSession>,
+    ooo: Option<PrOoo>,
+}
+
+impl PrPerson {
+    fn is_empty(&self) -> bool {
+        self.calendars.is_empty() && self.sessions.is_empty() && self.ooo.is_none()
+    }
+
+    fn size(&self) -> usize {
+        self.calendars.values().map(|c| c.blocks.len()).sum::<usize>() + self.sessions.len() + usize::from(self.ooo.is_some())
+    }
+
+    /// r8 1.2: what ended by `now` (ms) goes (blocks past their end, sessions past `expires`, out of office past
+    /// `until`); true when something went.
+    fn expire(&mut self, now: i64) -> bool {
+        let before = self.size();
+        for c in self.calendars.values_mut() {
+            c.blocks.retain(|b| b.end > now);
+        }
+        self.calendars.retain(|_, c| !c.blocks.is_empty());
+        self.sessions.retain(|s| s.expires > now);
+        if self.ooo.as_ref().is_some_and(|o| o.until.is_some_and(|u| u <= now)) {
+            self.ooo = None;
+        }
+        self.size() != before
+    }
+
+    /// state.json `ext.presence[principal]`.
+    fn value(&self) -> Value {
+        let mut out = Obj::new();
+        if !self.calendars.is_empty() {
+            let calendars: Obj = self
+                .calendars
+                .iter()
+                .map(|(origin, c)| {
+                    let blocks: Vec<Value> = c.blocks.iter().map(PrBlock::value).collect();
+                    (origin.clone(), serde_json::json!({"name": c.name, "org": c.org, "set_at": c.set_at, "blocks": blocks}))
+                })
+                .collect();
+            out.insert("calendars".into(), Value::Object(calendars));
+        }
+        if !self.sessions.is_empty() {
+            let sessions: Vec<Value> = self
+                .sessions
+                .iter()
+                .map(|s| serde_json::json!({"client": s.client, "name": s.name, "org": s.org, "session": s.session, "availability": s.availability, "activity": s.activity, "expires": s.expires}))
+                .collect();
+            out.insert("sessions".into(), Value::Array(sessions));
+        }
+        if let Some(r) = &self.ooo {
+            out.insert("ooo".into(), r.stored());
+        }
+        Value::Object(out)
+    }
+
+    /// `value` read back; None when any part is unreadable.
+    fn of_value(v: &Value) -> Option<PrPerson> {
+        let o = v.as_object()?;
+        let mut out = PrPerson::default();
+        for (origin, c) in as_obj(o.get("calendars")).into_iter().flatten() {
+            let c = c.as_object()?;
+            let blocks = c.get("blocks")?.as_array()?.iter().map(|b| pr_block(b).ok()).collect::<Option<Vec<PrBlock>>>()?;
+            out.calendars.insert(origin.clone(), PrCalendar { name: pj::text_of(c, "name"), org: pj::text_of(c, "org"), set_at: pj::as_int(c.get("set_at")).unwrap_or(0), blocks });
+        }
+        for s in o.get("sessions").and_then(Value::as_array).into_iter().flatten() {
+            let s = s.as_object()?;
+            out.sessions.push(PrSession {
+                client: pj::text_of(s, "client"),
+                name: pj::text_of(s, "name"),
+                org: pj::text_of(s, "org"),
+                session: pj::text_of(s, "session"),
+                availability: pr_interned(&PR_SESSION_AVAILABILITY, s.get("availability"))?,
+                activity: pr_interned(&PR_SESSION_ACTIVITY, s.get("activity"))?,
+                expires: pj::as_int(s.get("expires"))?,
+            });
+        }
+        out.ooo = as_obj(o.get("ooo")).map(PrOoo::of_stored);
+        Some(out)
+    }
+}
+
+/// r8 1.3: what is shown of a person (`presence_view`): availability, activity and the out of office on now.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct PrView {
+    availability: &'static str,
+    activity: &'static str,
+    ooo: Option<PrOoo>,
+}
+
+impl PrView {
+    fn offline() -> PrView {
+        PrView { availability: "offline", activity: "offline", ooo: None }
+    }
+
+    fn triple(&self) -> PrTriple {
+        (self.availability, self.activity, self.ooo.is_some())
+    }
+
+    /// r8 1.1 for devices: null, or `{message?, until?, by}`.
+    fn ooo_device(&self) -> Value {
+        self.ooo.as_ref().map(PrOoo::device).unwrap_or(Value::Null)
+    }
+
+    /// r8 4.1 for the API: null, or `{message?, from?, until?, by, set_at}`.
+    fn ooo_api(&self) -> Value {
+        self.ooo.as_ref().map(PrOoo::api).unwrap_or(Value::Null)
+    }
+
+    /// r8 1.4: `availability`, `activity` and `out_of_office` of a hello entry or the `/v1/activity` answer.
+    fn insert_into(&self, out: &mut Obj) {
+        out.insert("availability".into(), Value::from(self.availability));
+        out.insert("activity".into(), Value::from(self.activity));
+        out.insert("out_of_office".into(), self.ooo_device());
+    }
+}
+
+impl State {
+    /// r8 1.3 `presence_view(principal, now)` (ms).
+    pub(crate) fn presence_view(&self, principal: &str, now: i64) -> PrView {
+        self.pr_view(principal, now, self.pr_in_meeting(principal, now))
+    }
+
+    /// r8 1.3, told whether a Lucid meeting occurrence holds the person at `now` (callers showing many people find
+    /// those once, `pr_meeting_people`).
+    fn pr_view(&self, principal: &str, now: i64, in_meeting: bool) -> PrView {
+        let mut best: Option<(&'static str, &'static str)> = None;
+        let mut offer = |pair: (&'static str, &'static str)| {
+            if best.is_none_or(|b| presence_rank(pair.0, pair.1) > presence_rank(b.0, b.1)) {
+                best = Some(pair);
+            }
+        };
+        // PR-1: available, away, or no candidate when offline
+        match self.presence_of_at(principal, now as f64 / 1000.0).0 {
+            "available" => offer(("available", "available")),
+            "away" => offer(("away", "away")),
+            _ => {}
+        }
+        // 1.2 item 3: a room
+        for p in self.peers.values().filter(|p| p.who.principal == principal) {
+            offer(self.pr_room(p));
+        }
+        // 1.2 item 4: a `busy` block or a Lucid meeting occurrence in progress
+        let kept = self.presence.get(principal);
+        if in_meeting || kept.is_some_and(|k| k.calendars.values().any(|c| c.blocks.iter().any(|b| !b.oof && b.live(now)))) {
+            offer(("busy", "in_meeting"));
+        }
+        // 1.2 item 5: each live application session
+        for s in kept.into_iter().flat_map(|k| k.sessions.iter()).filter(|s| s.expires > now) {
+            offer((s.availability, s.activity));
+        }
+        let (availability, mut activity) = match best {
+            // step 1
+            None => ("offline", "offline"),
+            Some(pair) => {
+                // step 2: the state the person sets wins over every session; step 3: the highest ranked candidate
+                let manual = self.statuses.get(principal).filter(|s| parity::status_live(s, now)).and_then(|s| pr_interned(&STATUS_STATES, s.get("state")));
+                match manual {
+                    Some(state) => (state, state),
+                    None => pair,
+                }
+            }
+        };
+        // step 4: the record, else an `oof` block in progress
+        let ooo = kept.and_then(|k| k.ooo.as_ref()).filter(|o| o.on(now)).cloned().or_else(|| {
+            kept.and_then(|k| k.calendars.iter().find(|(_, c)| c.blocks.iter().any(|b| b.oof && b.live(now)))).map(|(origin, c)| PrOoo {
+                message: String::new(),
+                from: None,
+                until: None,
+                by: c.name.clone(),
+                client: if origin.as_str() == PR_SELF { String::new() } else { origin.clone() },
+                org: c.org.clone(),
+                set_at: c.set_at,
+            })
+        });
+        if ooo.is_some() && matches!(activity, "available" | "away" | "offline") {
+            activity = "out_of_office";
+        }
+        PrView { availability, activity, ooo }
+    }
+
+    /// r8 1.2 item 3: a peer's candidate: presenting when it is the room's stage presenter, else in a meeting when the
+    /// room is a scheduled meeting's, else in a call.
+    fn pr_room(&self, p: &Peer) -> (&'static str, &'static str) {
+        let presenter = self.stages.get(&p.room).and_then(|s| s.get("presenter")).filter(|v| v.is_object()).map(entry_peer);
+        if presenter == Some(p.peer_id.as_str()) {
+            ("dnd", "presenting")
+        } else if self.meetings.contains_key(&p.room) {
+            ("busy", "in_meeting")
+        } else {
+            ("busy", "in_call")
+        }
+    }
+
+    /// r8 1.2 item 4: an occurrence of a meeting the person organizes or accepted is in progress at `now` (ms).
+    fn pr_in_meeting(&self, principal: &str, now: i64) -> bool {
+        let t = now as f64 / 1000.0;
+        self.meetings.values().filter_map(Value::as_object).any(|m| meetings::meeting_accepted(m).iter().any(|p| p == principal) && meetings::meeting_in_progress(m, t))
+    }
+
+    /// r8 1.2 item 4: everyone a Lucid meeting occurrence holds at `now` (ms).
+    fn pr_meeting_people(&self, now: i64) -> HashSet<String> {
+        let t = now as f64 / 1000.0;
+        self.meetings.values().filter_map(Value::as_object).filter(|m| meetings::meeting_in_progress(m, t)).flat_map(meetings::meeting_accepted).collect()
+    }
+
+    /// r8 1.4 and 4.7: `view` was announced for this person at `now` (wall seconds). A change of the 4.7 triple
+    /// raises `presence.changed` at once, or at the end of the person's 5 s window with the latest state.
+    fn pr_note(&mut self, principal: &str, view: &PrView, now: f64) {
+        let old = if *view == PrView::offline() { self.pr_shown.remove(principal) } else { self.pr_shown.insert(principal.to_string(), view.clone()) };
+        if old.map(|v| v.triple()).unwrap_or(PR_OFFLINE) != view.triple() {
+            self.pr_pending.insert(principal.to_string());
+            self.pr_flush(now);
+        }
+    }
+
+    /// r8 4.7: the `presence.changed` events due at `now` (wall seconds), owned by the person, so the org whose policy
+    /// covers them gets it (none is raised for a person no current policy covers).
+    fn pr_flush(&mut self, now: f64) {
+        let due: Vec<String> = self.pr_pending.iter().filter(|p| self.pr_emitted.get(p.as_str()).is_none_or(|(_, at)| now - at >= PR_EVENT_EVERY)).cloned().collect();
+        if due.is_empty() {
+            return;
+        }
+        let policies = self.pc_current();
+        for p in due {
+            self.pr_pending.remove(&p);
+            let current = self.pr_shown.get(&p).map(PrView::triple).unwrap_or(PR_OFFLINE);
+            let sent = self.pr_emitted.get(&p).map(|(t, _)| *t).unwrap_or(PR_OFFLINE);
+            if current == sent || pc::covering(&policies, &p).is_none() {
+                continue;
+            }
+            let data = serde_json::json!({"principal": p, "availability": current.0, "activity": current.1, "out_of_office": current.2});
+            self.pa_event("presence.changed", data, p.clone());
+            self.pr_emitted.insert(p, (current, now));
+        }
+        self.pr_emitted.retain(|_, (t, at)| *t != PR_OFFLINE || now - *at < PR_EVENT_EVERY);
+    }
+
+    /// r8 1.4: a `presence` event about this person when what 1.3 shows at `now` (ms) is not what was last announced.
+    fn pr_recheck(&mut self, principal: &str, now: i64) {
+        let view = self.presence_view(principal, now);
+        if self.pr_shown.get(principal).cloned().unwrap_or_else(PrView::offline) != view {
+            self.tell_presence_at(principal, now);
+        }
+    }
+
+    /// r8 1.4 (the reaper, at most every 15 s; `now` in wall seconds): what ended goes (1.2), then everyone whose view
+    /// changed with time alone (a block, an occurrence, a session or an out of office starting or ending) is announced.
+    fn pr_check(&mut self, now: f64) {
+        if now - self.pr_checked < PR_CHECK_EVERY {
+            return;
+        }
+        self.pr_checked = now;
+        let ms = (now * 1000.0) as i64;
+        let mut people = self.pr_expire(ms);
+        let busy = self.pr_meeting_people(ms);
+        people.extend(self.pr_shown.keys().cloned());
+        people.extend(self.presence.keys().cloned());
+        people.extend(busy.iter().cloned());
+        people.sort();
+        people.dedup();
+        for p in people {
+            let view = self.pr_view(&p, ms, busy.contains(&p));
+            if self.pr_shown.get(&p).cloned().unwrap_or_else(PrView::offline) != view {
+                self.tell_presence_at(&p, ms);
+            }
+        }
+    }
+
+    /// r8 1.2: what ended by `now` (ms) goes; the people it touched.
+    fn pr_expire(&mut self, now: i64) -> Vec<String> {
+        let mut touched = Vec::new();
+        for (p, k) in self.presence.iter_mut() {
+            if k.expire(now) {
+                touched.push(p.clone());
+            }
+        }
+        self.presence.retain(|_, k| !k.is_empty());
+        if !touched.is_empty() {
+            self.dirty = true;
+        }
+        touched
+    }
+
+    /// r8 1.2: the stores from state.json `ext.presence`, without what ended while the relay was down.
+    fn pr_load(&mut self, now: i64) {
+        for (principal, v) in as_obj(self.ext.get(PR_EXT)).into_iter().flatten() {
+            match PrPerson::of_value(v) {
+                Some(mut k) => {
+                    k.expire(now);
+                    if !k.is_empty() {
+                        self.presence.insert(principal.clone(), k);
+                    }
+                }
+                None => log_warn(&format!("state file: presence of {} unreadable; ignored", kv(principal))),
+            }
+        }
+    }
+
+    /// state.json `ext`, with the r8 stores in `ext.presence` (absent while there are none).
+    fn pr_ext(&self) -> Obj {
+        let mut ext = self.ext.clone();
+        if self.presence.is_empty() {
+            ext.shift_remove(PR_EXT);
+        } else {
+            ext.insert(PR_EXT.into(), Value::Object(self.presence.iter().map(|(p, k)| (p.clone(), k.value())).collect()));
+        }
+        ext
+    }
+
+    /// A person's stores changed: an empty entry goes, and state.json is written.
+    fn pr_tidy(&mut self, principal: &str) {
+        if self.presence.get(principal).is_some_and(PrPerson::is_empty) {
+            self.presence.shift_remove(principal);
+        }
+        self.dirty = true;
+    }
+
+    /// r8 2.1 and 4.4: the blocks of `origin` replaced (an empty list clears them).
+    fn pr_put_calendar(&mut self, principal: &str, origin: &str, name: &str, org: &str, blocks: Vec<PrBlock>, now: i64) {
+        let k = self.presence.entry(principal.to_string()).or_default();
+        if blocks.is_empty() {
+            k.calendars.shift_remove(origin);
+        } else {
+            k.calendars.insert(origin.to_string(), PrCalendar { name: name.to_string(), org: org.to_string(), set_at: now, blocks });
+        }
+        self.pr_tidy(principal);
+    }
+
+    /// r8 4.3: an application session set; an existing (client, session) is replaced and renewed. 1.2's 8 per client
+    /// and 64 per person count the live ones at `now` (ms).
+    fn pr_put_session(&mut self, principal: &str, row: PrSession, now: i64) -> Result<(), PrErr> {
+        let k = self.presence.entry(principal.to_string()).or_default();
+        k.sessions.retain(|s| s.expires > now);
+        let r = match k.sessions.iter().position(|s| s.client == row.client && s.session == row.session) {
+            Some(i) => {
+                k.sessions[i] = row;
+                Ok(())
+            }
+            None if k.sessions.iter().filter(|s| s.client == row.client).count() >= PR_SESSIONS_PER_CLIENT => {
+                Err(PrErr::Limit(format!("a client keeps at most {PR_SESSIONS_PER_CLIENT} sessions for a person")))
+            }
+            None if k.sessions.len() >= PR_SESSIONS_MAX => Err(PrErr::Limit(format!("a person has at most {PR_SESSIONS_MAX} application sessions"))),
+            None => {
+                k.sessions.push(row);
+                Ok(())
+            }
+        };
+        self.pr_tidy(principal);
+        r
+    }
+
+    /// r8 4.3 `clear`: whether the client's session was there.
+    fn pr_drop_session(&mut self, principal: &str, client: &str, session: &str) -> bool {
+        let Some(k) = self.presence.get_mut(principal) else { return false };
+        let before = k.sessions.len();
+        k.sessions.retain(|s| !(s.client == client && s.session == session));
+        let cleared = k.sessions.len() != before;
+        self.pr_tidy(principal);
+        cleared
+    }
+
+    /// r8 2.2 and 4.5: the out of office set (last writer wins) or cleared, whoever set it.
+    fn pr_put_ooo(&mut self, principal: &str, record: Option<PrOoo>) {
+        self.presence.entry(principal.to_string()).or_default().ooo = record;
+        self.pr_tidy(principal);
+    }
+
+    /// r8 4.2, 4.6 and 5: `org`'s newest current policy (None: it covers nobody), once `org` is one this relay
+    /// serves (403 `org-not-served`, as every api op: `api_fleet_request`).
+    fn pr_org_policy(&mut self, org: &str) -> Result<Option<Obj>, crate::fleet_wire::Refusal> {
+        if !self.organizations.values().any(|v| v.get("id").and_then(Value::as_str) == Some(org)) {
+            return Err(crate::fleet_wire::Refusal::new(403, "org-not-served", "This relay does not serve that organization."));
+        }
+        Ok(self.pc_current().into_iter().find(|p| p.get("org").and_then(Value::as_str) == Some(org)))
+    }
+
+    /// r8 4.1 and 5 `api-presence`: one person's object (the console adds `relay`).
+    fn pr_api_view(&self, principal: &str, now: i64) -> Value {
+        let view = self.presence_view(principal, now);
+        let (presence, mobile) = self.presence_of_at(principal, now as f64 / 1000.0);
+        let status = self.statuses.get(principal).filter(|s| s.is_object() && parity::status_live(s, now)).cloned().unwrap_or(Value::Null);
+        let ooo = view.ooo_api();
+        serde_json::json!({"principal": principal, "availability": view.availability, "activity": view.activity, "out_of_office": ooo, "status": status, "presence": presence, "mobile": mobile})
+    }
+}
+
+impl Hub {
+    /// r8 2.1 `POST /v1/presence/calendar {session, blocks}`: the caller's own `self` blocks replaced (an empty list
+    /// clears them) -> `{ok, blocks}`. Every session hears `presence` when what the person shows changed.
+    pub fn presence_calendar(&self, session: &str, who: &Identity, blocks: Body) -> R<Obj> {
+        let now = wall_ms();
+        let blocks = pr_blocks(blocks, now)?;
+        let count = blocks.len();
+        let mut st = self.st.lock();
+        st.session(session, who)?;
+        let before = st.pstate(&who.principal);
+        st.pr_put_calendar(&who.principal, PR_SELF, PR_SELF, "", blocks, now);
+        st.presence_changed(&who.principal, &before);
+        drop(st);
+        self.wake();
+        Ok(obj([("ok", Value::Bool(true)), ("blocks", Value::from(count))]))
+    }
+
+    /// r8 2.2 `POST /v1/ooo {session, on, message?, from?, until?}`: `on: false` clears the person's out of office
+    /// (whoever set it); `on: true` sets it `by: "self"` -> `{ok, out_of_office}` (null when it is not on now).
+    pub fn presence_ooo(&self, session: &str, who: &Identity, body: &Obj) -> R<Obj> {
+        let now = wall_ms();
+        let record = pr_ooo(body, now)?;
+        let on = record.is_some();
+        let mut st = self.st.lock();
+        st.session(session, who)?;
+        let before = st.pstate(&who.principal);
+        st.pr_put_ooo(&who.principal, record.map(|(message, from, until)| PrOoo { message, from: Some(from), until, by: PR_SELF.into(), client: String::new(), org: String::new(), set_at: now }));
+        st.presence_changed(&who.principal, &before);
+        let shown = st.presence_view(&who.principal, now).ooo_device();
+        drop(st);
+        self.wake();
+        log_info(&format!("ooo principal={} on={}", who.principal, if on { "yes" } else { "no" }));
+        Ok(obj([("ok", Value::Bool(true)), ("out_of_office", shown)]))
+    }
+
+    /// Tests: `principal` is a person of `org`, so this hub serves `org` (r8 5 `org-not-served`).
+    #[cfg(test)]
+    pub(crate) fn pr_test_serve(&self, org: &str, principal: &str) {
+        self.st.lock().organizations.insert(principal.to_string(), serde_json::json!({"id": org, "label": org}));
+    }
+
+    /// r8 4.2 / 5 `api-presence`: 1.3 views of people `org`'s pinned policy covers. `people` non-empty: those (uncovered ones omitted); else every covered directory person sorted by principal after `after`, at most `limit`.
+    /// Answer {"presence": [{"principal","availability","activity","out_of_office": null | {"message"?,"from"?,"until"?,"by","set_at"},"status": null | {...},"presence","mobile"}], "next"?: "<last principal>"}
+    pub fn api_presence_read(&self, org: &str, people: &[String], after: Option<&str>, limit: usize) -> Result<serde_json::Value, crate::fleet_wire::Refusal> {
+        let now = wall_ms();
+        let mut st = self.st.lock();
+        let policy = st.pr_org_policy(org)?;
+        let covered = |p: &str| pr_covers(policy.as_ref(), p);
+        let mut next = None;
+        let chosen: Vec<String> = if people.is_empty() {
+            let mut all: Vec<String> = st.directory.keys().filter(|p| after.is_none_or(|a| p.as_str() > a) && covered(p.as_str())).cloned().collect();
+            all.sort();
+            if all.len() > limit {
+                all.truncate(limit);
+                next = all.last().cloned();
+            }
+            all
+        } else {
+            people.iter().map(|p| p.trim().to_lowercase()).filter(|p| covered(p.as_str())).collect()
+        };
+        let list: Vec<Value> = chosen.iter().map(|p| st.pr_api_view(p, now)).collect();
+        drop(st);
+        let mut out = serde_json::json!({ "presence": list });
+        if let Some(n) = next {
+            out["next"] = Value::from(n);
+        }
+        Ok(out)
+    }
+
+    /// r8 4.3 to 4.5 / 5 `api-presence-write`: kind "session" | "clear" | "calendar" | "ooo"; `body` is the API body (for "clear": {"session"}). Refusals: 403 not-covered, 403 org-not-served (as every api op), 422 presence-value / presence-limit, 400 bad-body. Answer: the per-route answer fields without "relays"/"partial".
+    pub fn api_presence_write(&self, org: &str, client_id: &str, client_name: &str, principal: &str, kind: &str, body: &serde_json::Value) -> Result<serde_json::Value, crate::fleet_wire::Refusal> {
+        let principal = principal.trim().to_lowercase();
+        let Some(body) = body.as_object() else { return Err(PrErr::Body("the body must be a JSON object".into()).into()) };
+        let now = wall_ms();
+        let mut st = self.st.lock();
+        let policy = st.pr_org_policy(org)?;
+        if !pr_covers(policy.as_ref(), &principal) {
+            return Err(crate::fleet_wire::Refusal::new(403, "not-covered", "A principal is not covered by the organization's policy."));
+        }
+        let before = st.pstate(&principal);
+        let answer = match kind {
+            "session" => {
+                let (session, availability, activity, seconds) = pr_app_session(body)?;
+                let expires = now + seconds * 1000;
+                let row = PrSession { client: client_id.to_string(), name: client_name.to_string(), org: org.to_string(), session: session.clone(), availability, activity, expires };
+                st.pr_put_session(&principal, row, now)?;
+                serde_json::json!({"session": session, "expires": expires})
+            }
+            "clear" => {
+                pr_keys(body, &["session"])?;
+                let session = pr_session_of(body)?;
+                let cleared = st.pr_drop_session(&principal, client_id, &session);
+                serde_json::json!({"cleared": cleared})
+            }
+            "calendar" => {
+                pr_keys(body, &["blocks"])?;
+                let blocks = pr_blocks(body.get("blocks"), now)?;
+                let count = blocks.len();
+                st.pr_put_calendar(&principal, client_id, client_name, org, blocks, now);
+                serde_json::json!({"blocks": count})
+            }
+            "ooo" => {
+                pr_keys(body, &["on", "message", "from", "until"])?;
+                let record = pr_ooo(body, now)?;
+                st.pr_put_ooo(&principal, record.map(|(message, from, until)| PrOoo { message, from: Some(from), until, by: client_name.to_string(), client: client_id.to_string(), org: org.to_string(), set_at: now }));
+                let shown = st.presence_view(&principal, now).ooo_api();
+                serde_json::json!({"out_of_office": shown})
+            }
+            _ => return Err(PrErr::Body(format!("kind must be one of {}", PR_WRITE_KINDS.join(", "))).into()),
+        };
+        *st.pr_writes.entry(kind.to_string()).or_insert(0) += 1;
+        st.presence_changed(&principal, &before);
+        drop(st);
+        self.wake();
+        log_info(&format!("presence_write org={org} client={client_id} principal={principal} kind={kind}"));
+        Ok(answer)
+    }
+
+    /// r8 4.6: drop application sessions, calendar blocks and out of office records of `org` clients for which `live(client_id)` is false (suspended, expired, deleted, or lost presence.write).
+    pub fn presence_retain_clients(&self, org: &str, live: &dyn Fn(&str) -> bool) {
+        let gone = |o: &str, client: &str| o == org && !client.is_empty() && !live(client);
+        let mut st = self.st.lock();
+        let people: Vec<String> = st
+            .presence
+            .iter()
+            .filter(|(_, k)| {
+                k.calendars.iter().any(|(origin, c)| gone(c.org.as_str(), origin.as_str()))
+                    || k.sessions.iter().any(|s| gone(s.org.as_str(), s.client.as_str()))
+                    || k.ooo.as_ref().is_some_and(|r| gone(r.org.as_str(), r.client.as_str()))
+            })
+            .map(|(p, _)| p.clone())
+            .collect();
+        for p in people {
+            let before = st.pstate(&p);
+            if let Some(k) = st.presence.get_mut(&p) {
+                k.calendars.retain(|origin, c| !gone(c.org.as_str(), origin.as_str()));
+                k.sessions.retain(|s| !gone(s.org.as_str(), s.client.as_str()));
+                if k.ooo.as_ref().is_some_and(|r| gone(r.org.as_str(), r.client.as_str())) {
+                    k.ooo = None;
+                }
+            }
+            st.pr_tidy(&p);
+            st.presence_changed(&p, &before);
+        }
+        drop(st);
+        self.wake();
+    }
+
+    /// r8 7: (writes by kind, live application sessions) for the relay's metrics exposition.
+    pub fn presence_metrics(&self) -> (Vec<(String, u64)>, u64) {
+        let now = wall_ms();
+        let st = self.st.lock();
+        let writes: Vec<(String, u64)> = PR_WRITE_KINDS.iter().map(|k| (k.to_string(), st.pr_writes.get(*k).copied().unwrap_or(0))).collect();
+        let live = st.presence.values().flat_map(|k| k.sessions.iter()).filter(|s| s.expires > now).count() as u64;
+        (writes, live)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5482,5 +6501,444 @@ mod tests {
         assert_eq!(refusal(h.hello_resume(&ben, "203.0.113.9", &Obj::new(), true, &other_device)), COPY);
         assert_eq!(refusal(h.join("ops", &ben, "203.0.113.9", false, Some(&body(&theirs)))), COPY);
         assert!(conflicts(&h) > 0);
+    }
+
+    // ── API-1 revision 8: presence for integrations (contract r8 section 8, Relay) ─────────────────────────────
+
+    const ANN: &str = "ann@acme.example";
+    const BEN: &str = "ben@acme.example";
+    const CY: &str = "cy@acme.example";
+    const DEE: &str = "dee@acme.example";
+
+    /// A hub serving org `acme`, whose current policy covers `acme.example` (API writes, `presence.changed`).
+    fn acme_hub() -> Hub {
+        let h = hub();
+        h.st.lock().organizations = json!({ANN: {"id": "acme", "label": "Acme"}}).as_object().unwrap().clone();
+        h.pc_test_holds("acme", "acme.example");
+        h
+    }
+
+    fn api_write(h: &Hub, client: &str, p: &str, kind: &str, body: Value) -> Result<Value, crate::fleet_wire::Refusal> {
+        h.api_presence_write("acme", client, &format!("Mail {client}"), p, kind, &body)
+    }
+
+    fn code<T>(r: Result<T, crate::fleet_wire::Refusal>) -> String {
+        match r {
+            Ok(_) => "ok".into(),
+            Err(r) => format!("{} {}", r.status, r.code),
+        }
+    }
+
+    fn block(start: i64, end: i64, show: &str) -> Value {
+        json!({"start": start, "end": end, "show": show})
+    }
+
+    /// (availability, activity) of `p` now.
+    fn shown(h: &Hub, p: &str) -> (&'static str, &'static str) {
+        let v = h.st.lock().presence_view(p, wall_ms());
+        (v.availability, v.activity)
+    }
+
+    fn ooo_of(h: &Hub, p: &str) -> Value {
+        h.st.lock().presence_view(p, wall_ms()).ooo_device()
+    }
+
+    fn presence_events(h: &Hub, session: &str) -> Vec<Obj> {
+        h.st.lock().sessions[session].events.iter().filter(|e| pj::text_of(e, "type") == "presence").cloned().collect()
+    }
+
+    /// A scheduled meeting (times in seconds) as `meetings` keeps it; `attendees` are (principal, response).
+    fn meeting(id: &str, organizer: &str, attendees: &[(&str, &str)], start: f64, end: f64, recurrence: &str, canceled: Value) -> Value {
+        let rows: Vec<Value> = attendees.iter().map(|(p, r)| json!({"principal": p, "name": p, "response": r})).collect();
+        json!({"id": id, "room": id, "title": "Review", "description": "", "start": start, "end": end, "recurrence": recurrence, "tz": "UTC",
+            "organizer": {"principal": organizer, "name": organizer}, "attendees": rows, "cohosts": [], "created": start, "updated": start, "canceled": canceled})
+    }
+
+    /// r8 1.3: each candidate alone (none: offline).
+    #[test]
+    fn r8_each_candidate_alone() {
+        let h = acme_hub();
+        let (ann, ben, cy, dee) = (who(ANN, "aaaaaaaaaaaaaaaa"), who(BEN, "bbbbbbbbbbbbbbbb"), who(CY, "cccccccccccccccc"), who(DEE, "dddddddddddddddd"));
+        assert_eq!(shown(&h, ANN), ("offline", "offline"));
+        // PR-1: available, away
+        h.hello(&ann, "", &Obj::new()).unwrap();
+        assert_eq!(shown(&h, ANN), ("available", "available"));
+        h.hello_active(&ben, "", &Obj::new(), false).unwrap();
+        assert_eq!(shown(&h, BEN), ("away", "away"));
+        // a room: a call, presenting, a scheduled meeting's room
+        let c = peer_of(&h.join("ops", &cy, "", false, None).unwrap());
+        assert_eq!(shown(&h, CY), ("busy", "in_call"));
+        act(&h, &c, &cy, "present", None).unwrap();
+        assert_eq!(shown(&h, CY), ("dnd", "presenting"));
+        let now = pj::now();
+        h.st.lock().meetings.insert("m-eeeeeeeeee".into(), meeting("m-eeeeeeeeee", "zed@acme.example", &[], now + 3600.0, now + 7200.0, "none", Value::Null));
+        h.join("m-eeeeeeeeee", &dee, "", false, None).unwrap();
+        assert_eq!(shown(&h, DEE), ("busy", "in_meeting"));
+        // calendar busy time alone counts, as Outlook free/busy does
+        let t = wall_ms();
+        api_write(&h, "c_1", "eve@acme.example", "calendar", json!({"blocks": [block(t - 60_000, t + 3_600_000, "busy")]})).unwrap();
+        assert_eq!(shown(&h, "eve@acme.example"), ("busy", "in_meeting"));
+        // an application session alone
+        api_write(&h, "c_1", "fay@acme.example", "session", json!({"session": "s1", "availability": "busy", "activity": "in_call"})).unwrap();
+        assert_eq!(shown(&h, "fay@acme.example"), ("busy", "in_call"));
+    }
+
+    /// r8 1.3 steps 2 and 3: the manual status over a call, presenting over a busy session, a dnd session over a
+    /// meeting, the tie order, and no candidate staying offline whatever the status.
+    #[test]
+    fn r8_status_ranks_and_ties() {
+        let h = acme_hub();
+        let ann = who(ANN, "aaaaaaaaaaaaaaaa");
+        let sa = sid(&h.hello(&ann, "", &Obj::new()).unwrap());
+        let a = peer_of(&h.join("ops", &ann, "", false, None).unwrap());
+        assert_eq!(shown(&h, ANN), ("busy", "in_call"));
+        // a tie on busy: in_call over busy and over in_meeting
+        let t = wall_ms();
+        api_write(&h, "c_1", ANN, "session", json!({"session": "s1", "availability": "busy", "activity": "busy"})).unwrap();
+        api_write(&h, "c_1", ANN, "calendar", json!({"blocks": [block(t - 60_000, t + 3_600_000, "busy")]})).unwrap();
+        assert_eq!(shown(&h, ANN), ("busy", "in_call"));
+        // presenting (dnd) over a busy session; a tie on dnd: presenting over a dnd session
+        act(&h, &a, &ann, "present", None).unwrap();
+        assert_eq!(shown(&h, ANN), ("dnd", "presenting"));
+        api_write(&h, "c_1", ANN, "session", json!({"session": "s2", "availability": "dnd", "activity": "dnd"})).unwrap();
+        assert_eq!(shown(&h, ANN), ("dnd", "presenting"));
+        // the state the person sets wins over the call and every session
+        h.set_status(&sa, &ann, Some(&json!("away")), None, None).unwrap();
+        assert_eq!(shown(&h, ANN), ("away", "away"));
+        h.set_status(&sa, &ann, Some(&json!("auto")), None, None).unwrap();
+        assert_eq!(shown(&h, ANN), ("dnd", "presenting"));
+        // a dnd session over a meeting
+        api_write(&h, "c_1", BEN, "calendar", json!({"blocks": [block(t - 60_000, t + 3_600_000, "busy")]})).unwrap();
+        assert_eq!(shown(&h, BEN), ("busy", "in_meeting"));
+        api_write(&h, "c_1", BEN, "session", json!({"session": "s1", "availability": "dnd", "activity": "dnd"})).unwrap();
+        assert_eq!(shown(&h, BEN), ("dnd", "dnd"));
+        // an expired session counts no more (300 s by default)
+        let later = h.st.lock().presence_view(BEN, t + 301_000);
+        assert_eq!((later.availability, later.activity), ("busy", "in_meeting"));
+        // no candidate: offline, even with a manual status
+        h.st.lock().statuses.insert(CY.into(), json!({"state": "dnd", "text": ""}));
+        assert_eq!(shown(&h, CY), ("offline", "offline"));
+    }
+
+    /// r8 1.3 step 4: out of office with available, away, offline and a call; an `oof` block; `on: false` clears it
+    /// whoever set it; one that starts later is not on now.
+    #[test]
+    fn r8_out_of_office() {
+        let h = acme_hub();
+        let (ann, ben) = (who(ANN, "aaaaaaaaaaaaaaaa"), who(BEN, "bbbbbbbbbbbbbbbb"));
+        let sa = sid(&h.hello(&ann, "", &Obj::new()).unwrap());
+        h.hello_active(&ben, "", &Obj::new(), false).unwrap();
+        let until = wall_ms() + 86_400_000;
+        let set = h.presence_ooo(&sa, &ann, &obj([("on", json!(true)), ("message", json!("  Back   Monday ")), ("until", json!(until))])).unwrap();
+        assert_eq!(Value::Object(set), json!({"ok": true, "out_of_office": {"message": "Back Monday", "until": until, "by": "self"}}));
+        assert_eq!(shown(&h, ANN), ("available", "out_of_office"));
+        api_write(&h, "c_1", BEN, "ooo", json!({"on": true})).unwrap();
+        assert_eq!(shown(&h, BEN), ("away", "out_of_office"));
+        assert_eq!(ooo_of(&h, BEN), json!({"by": "Mail c_1"}));
+        let answer = api_write(&h, "c_1", CY, "ooo", json!({"on": true, "message": "On leave"})).unwrap();
+        assert_eq!(answer["out_of_office"]["by"], json!("Mail c_1"));
+        assert!(answer["out_of_office"]["set_at"].is_i64() && answer["out_of_office"]["from"].is_i64());
+        assert_eq!(shown(&h, CY), ("offline", "out_of_office"));
+        // a call keeps in_call (Teams: "In a call, out of office")
+        h.join("ops", &ann, "", false, None).unwrap();
+        assert_eq!(shown(&h, ANN), ("busy", "in_call"));
+        assert_eq!(ooo_of(&h, ANN)["message"], json!("Back Monday"));
+        // off, whoever set it
+        let off = h.presence_ooo(&sa, &ann, &obj([("on", json!(false))])).unwrap();
+        assert_eq!(off["out_of_office"], Value::Null);
+        api_write(&h, "c_2", CY, "ooo", json!({"on": false})).unwrap();
+        assert_eq!((shown(&h, CY), ooo_of(&h, CY)), (("offline", "offline"), Value::Null));
+        // one that starts later is not on now
+        let later = api_write(&h, "c_1", BEN, "ooo", json!({"on": true, "from": wall_ms() + 3_600_000})).unwrap();
+        assert_eq!(later["out_of_office"], Value::Null);
+        assert_eq!(shown(&h, BEN), ("away", "away"));
+        // an `oof` block in progress turns it on, by the block's origin
+        let t = wall_ms();
+        api_write(&h, "c_2", DEE, "calendar", json!({"blocks": [block(t - 60_000, t + 3_600_000, "oof")]})).unwrap();
+        assert_eq!((shown(&h, DEE), ooo_of(&h, DEE)), (("offline", "out_of_office"), json!({"by": "Mail c_2"})));
+    }
+
+    /// r8 1.2 item 4: a Lucid meeting occurrence in progress for its organizer and the attendees who accepted; not
+    /// for tentative, declined or unanswered, nor for a canceled meeting.
+    #[test]
+    fn r8_lucid_meetings_for_the_organizer_and_accepting_attendees() {
+        let h = acme_hub();
+        let now = pj::now();
+        {
+            let mut st = h.st.lock();
+            let people = [(BEN, "accept"), (CY, "tentative"), (DEE, "decline"), ("eve@acme.example", "none")];
+            st.meetings.insert("m-aaaaaaaaaa".into(), meeting("m-aaaaaaaaaa", ANN, &people, now - 600.0, now + 600.0, "none", Value::Null));
+            st.meetings.insert("m-bbbbbbbbbb".into(), meeting("m-bbbbbbbbbb", "fay@acme.example", &[("gus@acme.example", "accept")], now - 600.0, now + 600.0, "none", json!(now)));
+            // a daily meeting that began yesterday at this time: today's occurrence is in progress
+            st.meetings.insert("m-cccccccccc".into(), meeting("m-cccccccccc", "hal@acme.example", &[], now - 86_400.0 - 600.0, now - 86_400.0 + 600.0, "daily", Value::Null));
+            st.meetings.insert("m-dddddddddd".into(), meeting("m-dddddddddd", "ivy@acme.example", &[], now + 600.0, now + 1200.0, "none", Value::Null));
+        }
+        for p in [ANN, BEN, "hal@acme.example"] {
+            assert_eq!(shown(&h, p), ("busy", "in_meeting"), "{p}");
+        }
+        for p in [CY, DEE, "eve@acme.example", "fay@acme.example", "gus@acme.example", "ivy@acme.example"] {
+            assert_eq!(shown(&h, p), ("offline", "offline"), "{p}");
+        }
+        assert_eq!(h.st.lock().presence_view("ivy@acme.example", ((now + 700.0) * 1000.0) as i64).activity, "in_meeting");
+        let busy = h.st.lock().pr_meeting_people(wall_ms());
+        let mut busy: Vec<String> = busy.into_iter().collect();
+        busy.sort();
+        assert_eq!(busy, [ANN, BEN, "hal@acme.example"]);
+    }
+
+    /// r8 1.2 limits: 400 on the device route, 422 `presence-limit` (or `presence-value`, `bad-body`) on the API.
+    #[test]
+    fn r8_limits_of_section_1_2() {
+        let h = acme_hub();
+        let ann = who(ANN, "aaaaaaaaaaaaaaaa");
+        let sa = sid(&h.hello(&ann, "", &Obj::new()).unwrap());
+        let t = wall_ms();
+        let day: i64 = 86_400_000;
+        let cal = |blocks: Value| code(api_write(&h, "c_1", ANN, "calendar", json!({"blocks": blocks})));
+        let many: Vec<Value> = (0..201).map(|i| block(t + i * 60_000, t + i * 60_000 + 30_000, "busy")).collect();
+        assert_eq!(cal(json!(many)), "422 presence-limit");
+        assert_eq!(cal(json!(many[..200])), "ok");
+        assert_eq!(cal(json!([block(t, t + 14 * day + 1, "busy")])), "422 presence-limit");
+        assert_eq!(cal(json!([block(t - 3 * day, t - day - 1, "busy")])), "422 presence-limit");
+        assert_eq!(cal(json!([block(t + 30 * day + 1000, t + 30 * day + 2000, "busy")])), "422 presence-limit");
+        assert_eq!(cal(json!([block(t + 2000, t + 1000, "busy")])), "422 presence-limit");
+        assert_eq!(cal(json!([{"start": t, "end": t + 1000, "show": "busy", "title": "Board"}])), "400 bad-body");
+        assert_eq!(cal(json!([block(t, t + 1000, "tentative")])), "400 bad-body");
+        assert_eq!(code(api_write(&h, "c_1", ANN, "calendar", json!({"blocks": [], "attendees": []}))), "400 bad-body");
+        assert_eq!(cal(json!([])), "ok");
+        // the device route answers 400 with the limit's words
+        assert_eq!(refusal(h.presence_calendar(&sa, &ann, Some(&json!([block(t, t + 14 * day + 1, "busy")])))), "400 a calendar block is at most 14 days long");
+        assert_eq!(refusal(h.presence_calendar(&sa, &ann, Some(&json!("busy")))), "400 blocks must be a list of {start, end, show}");
+        assert_eq!(Value::Object(h.presence_calendar(&sa, &ann, Some(&json!([block(t, t + 1000, "oof")]))).unwrap()), json!({"ok": true, "blocks": 1}));
+        // sessions: 8 per client, 64 per person; the same session again is a renewal
+        let session = |client: &str, s: &str| code(api_write(&h, client, ANN, "session", json!({"session": s, "availability": "busy", "activity": "busy", "expires_in": 600})));
+        for i in 0..8 {
+            assert_eq!(session("c_1", &format!("s{i}")), "ok");
+        }
+        assert_eq!(session("c_1", "s8"), "422 presence-limit");
+        assert_eq!(session("c_1", "s0"), "ok");
+        for c in 2..=8 {
+            for i in 0..8 {
+                assert_eq!(session(&format!("c_{c}"), &format!("s{i}")), "ok");
+            }
+        }
+        assert_eq!(session("c_9", "s0"), "422 presence-limit");
+        assert_eq!(h.presence_metrics().1, 64);
+        // values outside 1.2 item 5, expires_in, a bad session id
+        let one = |b: Value| code(api_write(&h, "c_1", BEN, "session", b));
+        assert_eq!(one(json!({"session": "x", "availability": "busy", "activity": "in_meeting"})), "422 presence-value");
+        assert_eq!(one(json!({"session": "x", "availability": "busy", "activity": "out_of_office"})), "422 presence-value");
+        assert_eq!(one(json!({"session": "x", "availability": "offline", "activity": "busy"})), "422 presence-value");
+        assert_eq!(one(json!({"session": "x", "availability": "busy", "activity": "busy", "expires_in": 299})), "422 presence-limit");
+        assert_eq!(one(json!({"session": "x", "availability": "busy", "activity": "busy", "expires_in": 14_401})), "422 presence-limit");
+        assert_eq!(one(json!({"session": "no spaces", "availability": "busy", "activity": "busy"})), "400 bad-body");
+        assert_eq!(one(json!({"session": "x", "availability": 3, "activity": "busy"})), "400 bad-body");
+        assert_eq!(one(json!({"session": "x", "availability": "busy", "activity": "busy", "note": "hi"})), "400 bad-body");
+        // out of office: 280 printable characters, at most 366 days, until after from
+        let ooo = |b: Value| code(api_write(&h, "c_1", BEN, "ooo", b));
+        assert_eq!(ooo(json!({"on": true, "message": "a".repeat(281)})), "422 presence-limit");
+        assert_eq!(ooo(json!({"on": true, "message": "a".repeat(280)})), "ok");
+        assert_eq!(ooo(json!({"on": true, "message": "bell\u{7}"})), "422 presence-limit");
+        assert_eq!(ooo(json!({"on": true, "from": t, "until": t + 366 * day + 1})), "422 presence-limit");
+        assert_eq!(ooo(json!({"on": true, "from": t, "until": t + 366 * day})), "ok");
+        assert_eq!(ooo(json!({"on": true, "from": t, "until": t})), "422 presence-limit");
+        assert_eq!(ooo(json!({"on": "yes"})), "400 bad-body");
+        assert_eq!(refusal(h.presence_ooo(&sa, &ann, &obj([("on", json!(true)), ("message", json!("a".repeat(281)))]))), "400 an out of office message is at most 280 printable characters");
+        // who: an org this relay does not serve, a person its policy does not cover, an unknown kind
+        assert_eq!(code(h.api_presence_write("other", "c_1", "Mail", ANN, "ooo", &json!({"on": false}))), "403 org-not-served");
+        assert_eq!(code(api_write(&h, "c_1", "zed@elsewhere.example", "ooo", json!({"on": false}))), "403 not-covered");
+        assert_eq!(code(api_write(&h, "c_1", ANN, "nap", json!({}))), "400 bad-body");
+    }
+
+    /// r8 1.4: a change that comes with time alone (a block starting, then ending) is announced by the check that runs
+    /// every 15 s, so within 30 s; the check runs here on an injected clock. Each change also raises `presence.changed`.
+    #[test]
+    fn r8_time_driven_changes_are_announced_within_30_s() {
+        let h = acme_hub();
+        let ann = who(ANN, "aaaaaaaaaaaaaaaa");
+        let sa = sid(&h.hello(&ann, "", &Obj::new()).unwrap());
+        let checked = h.st.lock().pr_checked;
+        let start = ((checked + 50.0) * 1000.0) as i64;
+        api_write(&h, "c_1", BEN, "calendar", json!({"blocks": [block(start, start + 3_600_000, "busy")]})).unwrap();
+        let about_ben = |h: &Hub| presence_events(h, &sa).into_iter().filter(|e| e["principal"] == json!(BEN)).collect::<Vec<Obj>>();
+        assert!(about_ben(&h).is_empty(), "a block ahead changes nothing now");
+        h.st.lock().pr_check(checked + 45.0);
+        assert!(about_ben(&h).is_empty());
+        // started at +50 s; the check at +55 s is inside the 15 s and does not look, the one at +60 s announces it
+        h.st.lock().pr_check(checked + 55.0);
+        assert!(about_ben(&h).is_empty());
+        h.st.lock().pr_check(checked + 60.0);
+        let told = about_ben(&h);
+        assert_eq!(told.len(), 1);
+        assert_eq!((&told[0]["online"], &told[0]["availability"], &told[0]["activity"], &told[0]["out_of_office"]), (&json!(false), &json!("busy"), &json!("in_meeting"), &Value::Null));
+        // it ends at +3650 s: announced by the next check, and the block is gone from the store
+        h.st.lock().pr_check(checked + 3660.0);
+        let told = about_ben(&h);
+        assert_eq!(told.len(), 2);
+        assert_eq!((&told[1]["availability"], &told[1]["activity"]), (&json!("offline"), &json!("offline")));
+        assert!(!h.st.lock().presence.contains_key(BEN));
+        let changed: Vec<Value> = h.api_pending_events().into_iter().filter(|e| e.kind == "presence.changed" && e.owner == BEN).map(|e| e.data).collect();
+        assert_eq!(
+            changed,
+            [
+                json!({"principal": BEN, "availability": "busy", "activity": "in_meeting", "out_of_office": false}),
+                json!({"principal": BEN, "availability": "offline", "activity": "offline", "out_of_office": false}),
+            ]
+        );
+    }
+
+    /// r8 1.4: the `presence` event, each `online` and `people` entry of the hello answer and the `/v1/activity` answer
+    /// carry availability, activity and out_of_office after the PR-1 fields, which keep their meaning.
+    #[test]
+    fn r8_presence_events_hello_and_activity_carry_the_view() {
+        let h = acme_hub();
+        let (ann, ben, cy) = (who(ANN, "aaaaaaaaaaaaaaaa"), who(BEN, "bbbbbbbbbbbbbbbb"), who(CY, "cccccccccccccccc"));
+        let sa = sid(&h.hello(&ann, "", &Obj::new()).unwrap());
+        let sb = sid(&h.hello(&ben, "", &Obj::new()).unwrap());
+        let e = presence_events(&h, &sa).pop().unwrap();
+        assert_eq!(keys(&e), ["type", "principal", "name", "online", "room", "devices", "org", "status", "presence", "mobile", "availability", "activity", "out_of_office", "seq"]);
+        assert_eq!((&e["principal"], &e["online"], &e["room"], &e["presence"], &e["mobile"]), (&json!(BEN), &json!(true), &json!(""), &json!("available"), &json!(false)));
+        assert_eq!((&e["availability"], &e["activity"], &e["out_of_office"]), (&json!("available"), &json!("available"), &Value::Null));
+        // a call: the PR-1 fields as before, the view says in a call
+        let b = peer_of(&h.join("ops", &ben, "", false, None).unwrap());
+        let e = presence_events(&h, &sa).pop().unwrap();
+        assert_eq!((&e["online"], &e["room"], &e["presence"], &e["availability"], &e["activity"]), (&json!(true), &json!("ops"), &json!("available"), &json!("busy"), &json!("in_call")));
+        // presenting is announced at once
+        act(&h, &b, &ben, "present", None).unwrap();
+        assert_eq!(presence_events(&h, &sa).pop().unwrap()["activity"], json!("presenting"));
+        // out of office, set by the person
+        let until = wall_ms() + 86_400_000;
+        let set = h.presence_ooo(&sb, &ben, &obj([("on", json!(true)), ("message", json!("Back Monday")), ("until", json!(until))])).unwrap();
+        assert_eq!(set["out_of_office"], json!({"message": "Back Monday", "until": until, "by": "self"}));
+        let e = presence_events(&h, &sa).pop().unwrap();
+        assert_eq!((&e["activity"], &e["out_of_office"]), (&json!("presenting"), &set["out_of_office"]));
+        // another device's hello
+        let hello = h.hello(&cy, "", &Obj::new()).unwrap();
+        for list in ["online", "people"] {
+            let e = hello[list].as_array().unwrap().iter().find(|p| p["principal"] == json!(BEN)).cloned().unwrap();
+            assert_eq!((&e["presence"], &e["mobile"]), (&json!("available"), &json!(false)), "{list}");
+            assert_eq!((&e["availability"], &e["activity"], &e["out_of_office"]), (&json!("dnd"), &json!("presenting"), &set["out_of_office"]), "{list}");
+        }
+        // /v1/activity: the caller's own
+        let answer = h.activity(&sb, &ben, Some(&json!(false))).unwrap();
+        assert_eq!(keys(&answer), ["ok", "presence", "mobile", "availability", "activity", "out_of_office"]);
+        assert_eq!((&answer["presence"], &answer["availability"], &answer["activity"]), (&json!("available"), &json!("dnd"), &json!("presenting")));
+    }
+
+    /// r8 4.7: `presence.changed` when the triple changes, at most once per person every 5 s with the latest state,
+    /// owned by the person, only for people a current policy covers, and within the event registry.
+    #[test]
+    fn r8_presence_changed_is_coalesced_per_person() {
+        let h = acme_hub();
+        let view = |availability: &'static str, activity: &'static str, on: bool| PrView {
+            availability,
+            activity,
+            ooo: on.then(|| PrOoo { message: String::new(), from: None, until: None, by: "self".into(), client: String::new(), org: String::new(), set_at: 0 }),
+        };
+        let changed = |h: &Hub, p: &str| h.api_pending_events().into_iter().filter(|e| e.kind == "presence.changed" && e.owner == p).map(|e| e.data).collect::<Vec<Value>>();
+        let t = pj::now() + 1000.0;
+        {
+            let mut st = h.st.lock();
+            st.pr_note(CY, &view("busy", "in_call", false), t);
+            st.pr_note(CY, &view("dnd", "presenting", false), t + 1.0);
+            st.pr_note(CY, &view("available", "out_of_office", true), t + 2.0);
+            st.pr_flush(t + 4.9);
+        }
+        assert_eq!(changed(&h, CY), [json!({"principal": CY, "availability": "busy", "activity": "in_call", "out_of_office": false})]);
+        h.st.lock().pr_flush(t + 5.5);
+        let got = changed(&h, CY);
+        assert_eq!(got.len(), 2);
+        assert_eq!(got[1], json!({"principal": CY, "availability": "available", "activity": "out_of_office", "out_of_office": true}));
+        // a change and its undoing inside the window raise nothing
+        {
+            let mut st = h.st.lock();
+            st.pr_note(CY, &view("busy", "in_call", false), t + 6.0);
+            st.pr_note(CY, &view("available", "out_of_office", true), t + 7.0);
+            st.pr_flush(t + 11.0);
+        }
+        assert_eq!(changed(&h, CY).len(), 2);
+        // the message and status text never ride along; a person no current policy covers raises none
+        h.st.lock().pr_note("zed@elsewhere.example", &view("busy", "in_call", false), t);
+        assert!(changed(&h, "zed@elsewhere.example").is_empty());
+        for data in changed(&h, CY) {
+            crate::api_events::check_emit("r_00000000000000a1", "presence.changed", &data).unwrap_or_else(|why| panic!("{why}"));
+        }
+    }
+
+    /// r8 1.2: the stores are in state.json (`ext.presence`) and what ended is dropped at load; r8 4.6: the entries of
+    /// a client no longer live go at once; r8 7: the metrics.
+    #[test]
+    fn r8_stores_persist_and_dead_clients_are_dropped() {
+        let dir = std::env::temp_dir().join(format!("meet-presence-{}", pj::token_hex(4)));
+        std::fs::create_dir_all(&dir).unwrap();
+        let h = Hub::new(Some(dir.clone()), &[], 1e9, 1e9, 1e9, None, Arc::new(LinkStats::new()));
+        h.st.lock().organizations = json!({ANN: {"id": "acme", "label": "Acme"}}).as_object().unwrap().clone();
+        h.pc_test_holds("acme", "acme.example");
+        let t = wall_ms();
+        api_write(&h, "c_1", ANN, "calendar", json!({"blocks": [block(t - 60_000, t + 3_600_000, "busy")]})).unwrap();
+        api_write(&h, "c_1", ANN, "session", json!({"session": "s1", "availability": "dnd", "activity": "dnd", "expires_in": 3600})).unwrap();
+        api_write(&h, "c_2", ANN, "ooo", json!({"on": true, "message": "Away"})).unwrap();
+        api_write(&h, "c_2", BEN, "session", json!({"session": "s1", "availability": "busy", "activity": "in_call"})).unwrap();
+        let (writes, live) = h.presence_metrics();
+        assert_eq!(writes, [("session".to_string(), 2), ("clear".to_string(), 0), ("calendar".to_string(), 1), ("ooo".to_string(), 1)]);
+        assert_eq!(live, 2);
+        // ended while the relay was down: dropped at load
+        h.st.lock().presence.get_mut(BEN).unwrap().sessions[0].expires = t - 1;
+        h.save();
+        assert!(std::fs::read_to_string(dir.join("state.json")).unwrap().contains("\"presence\""));
+        let again = Hub::new(Some(dir.clone()), &[], 1e9, 1e9, 1e9, None, Arc::new(LinkStats::new()));
+        {
+            let (a, b) = (h.st.lock(), again.st.lock());
+            assert_eq!(b.presence[ANN].value(), a.presence[ANN].value());
+            assert!(!b.presence.contains_key(BEN));
+        }
+        // c_1 is no longer live: its session and blocks go, c_2's out of office stays
+        h.presence_retain_clients("acme", &|c: &str| c != "c_1");
+        {
+            let st = h.st.lock();
+            let k = &st.presence[ANN];
+            assert!(k.calendars.is_empty() && k.sessions.is_empty());
+            assert_eq!(k.ooo.as_ref().map(|o| o.by.as_str()), Some("Mail c_2"));
+        }
+        assert_eq!(shown(&h, ANN), ("offline", "out_of_office"));
+        // another org's sweep leaves acme's clients alone
+        h.presence_retain_clients("other", &|_: &str| false);
+        assert!(h.st.lock().presence.contains_key(ANN));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// r8 4.2 / 5 `api-presence`: covered people only (a covered person never seen is offline), in the order asked or
+    /// by principal with a cursor; r8 4.3 `clear`.
+    #[test]
+    fn r8_api_reads_name_covered_people_only() {
+        let h = acme_hub();
+        let (ann, ben, cy) = (who(ANN, "aaaaaaaaaaaaaaaa"), who(BEN, "bbbbbbbbbbbbbbbb"), who(CY, "cccccccccccccccc"));
+        h.hello(&ann, "", &Obj::new()).unwrap();
+        let sb = sid(&h.hello(&ben, "", &Obj::new()).unwrap());
+        h.hello(&cy, "", &Obj::new()).unwrap();
+        h.hello(&who("zed@elsewhere.example", "ffffffffffffffff"), "", &Obj::new()).unwrap();
+        h.set_status(&sb, &ben, Some(&json!("busy")), Some(&json!("Quarterly review")), None).unwrap();
+        let asked = vec![BEN.to_string(), "zed@elsewhere.example".to_string(), DEE.to_string()];
+        assert_eq!(
+            h.api_presence_read("acme", &asked, None, 100).unwrap(),
+            json!({"presence": [
+                {"principal": BEN, "availability": "busy", "activity": "busy", "out_of_office": null, "status": {"state": "busy", "text": "Quarterly review"}, "presence": "available", "mobile": false},
+                {"principal": DEE, "availability": "offline", "activity": "offline", "out_of_office": null, "status": null, "presence": "offline", "mobile": false}
+            ]})
+        );
+        let names = |v: &Value| v["presence"].as_array().unwrap().iter().map(|p| p["principal"].as_str().unwrap().to_string()).collect::<Vec<String>>();
+        let page = h.api_presence_read("acme", &[], None, 2).unwrap();
+        assert_eq!(names(&page), [ANN, BEN]);
+        assert_eq!(page["next"], json!(BEN));
+        let rest = h.api_presence_read("acme", &[], Some(BEN), 2).unwrap();
+        assert_eq!(names(&rest), [CY]);
+        assert!(rest.get("next").is_none());
+        assert_eq!(code(h.api_presence_read("other", &[], None, 10)), "403 org-not-served");
+        // clear: whether the client's session was there
+        api_write(&h, "c_1", CY, "session", json!({"session": "s1", "availability": "dnd", "activity": "dnd"})).unwrap();
+        assert_eq!(shown(&h, CY), ("dnd", "dnd"));
+        assert_eq!(api_write(&h, "c_2", CY, "clear", json!({"session": "s1"})).unwrap(), json!({"cleared": false}));
+        assert_eq!(api_write(&h, "c_1", CY, "clear", json!({"session": "s1"})).unwrap(), json!({"cleared": true}));
+        assert_eq!(shown(&h, CY), ("available", "available"));
     }
 }

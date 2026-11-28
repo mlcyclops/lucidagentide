@@ -1,17 +1,36 @@
-/* Lucid Meet password sign-in (account.html): the Lucid brand of the Meeting Hub (src/icon.svg and the
- * dashboard's lucid-dark palette: magenta #c64bd6 / #e07bf0, cyan #46c8dc, near-black #0a0b0f) on one
- * narrow column that fits a phone. Served under style-src 'self': no inline styles anywhere, everything
- * lives here. */
+/* Lucid Meet password sign-in (account.html): the standard Lucid theme of contract TH-1 section 2 (the
+ * Lucid pi mark of src/icon.svg and the lucid-dark tokens, lucid-light under prefers-color-scheme: light)
+ * on one narrow column that fits a phone. An organization's brand (TH-1 5) overrides --accent, --accent-2
+ * and --on-accent through the CSSOM and may force the mode with html[data-mode]. Served under
+ * style-src 'self': no inline styles anywhere, everything lives here. */
 
 :root {
-  --bg: #0a0b0f; --glow: #16101f; --ink: #edeff6; --dim: #aeb4c6;
-  --mag: #c64bd6; --mag2: #e07bf0; --cyan: #46c8dc;
-  --amber: #e8b23c; --red: #ef5f5f;
-  --line: #252a3a;
-  --panel: #0f1117; --field: #1b1f2b; --field-line: #323a4f;
+  --bg: #0a0b0f; --panel: #0f1117; --field: #1b1f2b; --line: #252a3a;
+  --text: #edeff6; --muted: #aeb4c6;
+  --accent: #c64bd6; --accent-2: #e07bf0; --on-accent: #ffffff;
+  --link: #46c8dc; --ok: #46d27e; --danger: #ef5f5f; --warn: #e8b23c; --focus: #ffd34d;
+  --glow: #16101f; --field-line: #323a4f; --hover: #222736; --heading: #ffffff; --code: rgba(255, 255, 255, .07);
   --mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
   --sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   color-scheme: dark;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-mode="dark"]) {
+    --bg: #f5f6fa; --panel: #ffffff; --field: #ffffff; --line: #b8c0d4;
+    --text: #141826; --muted: #4a5268;
+    --accent: #8e1fa6; --accent-2: #7a1890; --on-accent: #ffffff;
+    --link: #0b6e80; --ok: #16683f; --danger: #b3172a; --warn: #8a5a00; --focus: #0b57d0;
+    --glow: #eceef5; --field-line: #b8c0d4; --hover: #e9ebf2; --heading: #141826; --code: rgba(20, 24, 38, .07);
+    color-scheme: light;
+  }
+}
+:root[data-mode="light"] {
+  --bg: #f5f6fa; --panel: #ffffff; --field: #ffffff; --line: #b8c0d4;
+  --text: #141826; --muted: #4a5268;
+  --accent: #8e1fa6; --accent-2: #7a1890; --on-accent: #ffffff;
+  --link: #0b6e80; --ok: #16683f; --danger: #b3172a; --warn: #8a5a00; --focus: #0b57d0;
+  --glow: #eceef5; --field-line: #b8c0d4; --hover: #e9ebf2; --heading: #141826; --code: rgba(20, 24, 38, .07);
+  color-scheme: light;
 }
 
 * { box-sizing: border-box; }
@@ -21,19 +40,18 @@ body {
   margin: 0;
   min-height: 100vh;
   padding: 24px 16px 48px;
-  color: var(--ink);
+  color: var(--text);
   font: 16px/1.55 var(--sans);
   -webkit-font-smoothing: antialiased;
   background:
     radial-gradient(70vw 60vh at 100% 0%, var(--glow), transparent 70%),
-    radial-gradient(50vw 50vh at 0% 100%, rgba(70, 200, 220, .05), transparent 70%),
     var(--bg);
   background-attachment: fixed;
 }
 
-a { color: var(--cyan); }
-a:hover { color: var(--mag2); }
-:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; border-radius: 6px; }
+a { color: var(--link); }
+a:hover { color: var(--accent-2); }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 6px; }
 p { margin: 0; }
 
 .sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
@@ -43,7 +61,7 @@ p { margin: 0; }
   padding: 28px 24px;
   border: 1px solid var(--line); border-radius: 22px;
   background: var(--panel);
-  box-shadow: 0 18px 50px rgba(0, 0, 0, .5);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, .25);
   display: flex; flex-direction: column; gap: 16px;
 }
 @media (max-width: 420px) {
@@ -53,27 +71,29 @@ p { margin: 0; }
 
 .head { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
 .mark { width: 44px; height: 44px; }
+/* an organization's logo keeps its shape within the mark's height */
+img.mark { width: auto; max-width: 176px; object-fit: contain; }
 .eyebrow {
-  font-family: var(--mono); font-size: 11px; letter-spacing: .16em; text-transform: uppercase;
-  color: var(--cyan);
+  font-family: var(--mono); font-size: 12px; letter-spacing: .16em; text-transform: uppercase;
+  color: var(--link);
 }
-h1 { margin: 0; font-size: 26px; line-height: 1.2; letter-spacing: -.02em; font-weight: 750; color: #fff; }
+h1 { margin: 0; font-size: 26px; line-height: 1.2; letter-spacing: -.02em; font-weight: 750; color: var(--heading); }
 h1:focus { outline: none; }
-h1:focus-visible { outline: 2px solid var(--cyan); }
+h1:focus-visible { outline: 2px solid var(--focus); }
 
 section { display: flex; flex-direction: column; gap: 14px; }
 section[hidden], [hidden] { display: none !important; }
-.lede { color: var(--ink); }
-.hint { color: var(--dim); font-size: 14px; }
+.lede { color: var(--text); }
+.hint { color: var(--muted); font-size: 14px; }
 
 .message {
   padding: 12px 14px; border-radius: 12px;
-  border: 1px solid rgba(239, 95, 95, .45); background: rgba(239, 95, 95, .1);
-  color: #ffd2ce;
+  border: 1px solid var(--danger); background: var(--field);
+  color: var(--text);
 }
 .note {
   padding: 12px 14px; border-radius: 12px;
-  border: 1px solid rgba(232, 178, 60, .4); background: rgba(232, 178, 60, .08);
+  border: 1px solid var(--warn); background: var(--field);
 }
 
 .stack { display: flex; flex-direction: column; gap: 8px; }
@@ -81,16 +101,17 @@ section[hidden], [hidden] { display: none !important; }
 label { font-weight: 600; font-size: 15px; }
 label.check { display: flex; align-items: center; gap: 10px; font-weight: 500; padding: 6px 0; }
 
-input[type="text"], input[type="password"], textarea {
+/* TH-1 2: every text field shares one style */
+input[type="text"], input[type="email"], input[type="url"], input[type="password"], input[type="search"], textarea {
   width: 100%;
   min-height: 46px;
   padding: 10px 12px;
   border: 1px solid var(--field-line); border-radius: 10px;
-  background: var(--field); color: var(--ink);
+  background: var(--field); color: var(--text);
   font: inherit;
 }
-input[readonly] { color: var(--dim); }
-input[type="checkbox"], input[type="radio"] { width: 20px; height: 20px; accent-color: var(--mag); flex: none; }
+input[readonly] { color: var(--muted); }
+input[type="checkbox"], input[type="radio"] { width: 20px; height: 20px; accent-color: var(--accent); flex: none; }
 textarea {
   font-family: var(--mono); font-size: 13px; line-height: 1.45;
   word-break: break-all; resize: vertical;
@@ -103,22 +124,29 @@ button, .button {
   display: inline-flex; align-items: center; justify-content: center;
   min-height: 46px; padding: 10px 18px;
   border: 1px solid var(--line); border-radius: 10px;
-  background: var(--field); color: var(--ink);
+  background: var(--field); color: var(--text);
   font: inherit; font-weight: 650; text-decoration: none; cursor: pointer;
 }
-button:hover, .button:hover { background: #222736; color: #fff; }
+button:hover, .button:hover { background: var(--hover); color: var(--heading); }
 button.primary, .button.primary {
-  border: 0; color: #fff;
-  background: linear-gradient(180deg, var(--mag2), var(--mag));
-  box-shadow: 0 1px 8px -2px rgba(198, 75, 214, .5);
+  border: 0; color: var(--on-accent);
+  background: var(--accent);
 }
-button.primary:hover, .button.primary:hover { color: #fff; filter: brightness(1.08); }
+button.primary:hover, .button.primary:hover { color: var(--on-accent); background: var(--accent-2); }
 button:disabled { opacity: .6; cursor: progress; }
 .stack button { margin-top: 8px; }
 
 .steps { margin: 0; padding-left: 22px; display: flex; flex-direction: column; gap: 8px; }
 code {
   font-family: var(--mono); font-size: 14px;
-  padding: 1px 6px; border-radius: 6px; background: rgba(255, 255, 255, .07);
+  padding: 1px 6px; border-radius: 6px; background: var(--code);
   word-break: break-all;
 }
+
+/* TH-1 5: whose page this is, always unbranded */
+.foot {
+  display: flex; flex-direction: column; gap: 4px;
+  padding-top: 14px; border-top: 1px solid var(--line);
+  color: var(--muted); font-size: 13px;
+}
+.foot a { align-self: flex-start; font-weight: 600; }

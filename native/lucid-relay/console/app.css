@@ -449,6 +449,9 @@ label { display: inline-flex; flex-direction: column; gap: 4px; font-size: 14px;
 label.inline { flex-direction: row; align-items: center; gap: 8px; }
 .field { display: flex; flex-direction: column; gap: 4px; margin: 12px 0; }
 .field input, .field select, .field textarea { width: 100%; }
+/* Meet > Branding (TH-1 6): the accent picker and the guest setup card preview, drawn on a canvas */
+.field input[type="color"] { width: 64px; min-height: 40px; padding: 2px; border-radius: 6px; border: 1px solid var(--ac-border); background: var(--bg-primary); }
+.brand-preview { display: block; width: 100%; max-width: 420px; height: auto; border: 1px solid var(--border); border-radius: 12px; }
 .count-note, .note { font-size: 13px; color: var(--text-secondary); }
 
 /* ---- Header ---- */

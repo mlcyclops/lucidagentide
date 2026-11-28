@@ -304,7 +304,12 @@ fn one(port: &Port, reader: &mut BufReader<Tls>, address: &str) -> std::io::Resu
     let length = head.header("content-length").and_then(|l| l.trim().parse::<usize>().ok()).unwrap_or(0);
     // The MDS3 upload takes up to 16 MiB (contract 3.1, 3.5), as on the main port (server.rs); the console checks each
     // route's own limit after this.
-    let cap = if path == "/console/api/settings/mds" { crate::console::MDS_BODY_MAX.max(BODY_MAX) } else { BODY_MAX };
+    // TH-1 6: the brand logo comes as base64 JSON of up to 256 KiB of image.
+    let cap = match path.as_str() {
+        "/console/api/settings/mds" => crate::console::MDS_BODY_MAX.max(BODY_MAX),
+        "/console/api/meet/brand/logo" => crate::meet_brand::LOGO_BODY_MAX.max(BODY_MAX),
+        _ => BODY_MAX,
+    };
     if head.header("transfer-encoding").is_some() || length > cap {
         // 413 without reading the body; the connection closes
         write_reply(reader.get_mut(), &plain(413, "The request is too large."), true)?;

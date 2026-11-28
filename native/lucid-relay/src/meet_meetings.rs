@@ -241,6 +241,32 @@ fn organizer_of(m: &Obj) -> String {
     m.get("organizer").and_then(|o| o.get("principal")).and_then(Value::as_str).unwrap_or_default().to_string()
 }
 
+/// API-1 revision 8 1.2 item 3: the people a scheduled meeting can show in a meeting: its organizer and the attendees
+/// whose `response` is `accept` (none for a canceled meeting).
+pub(super) fn meeting_accepted(m: &Obj) -> Vec<String> {
+    if pj::truthy(m.get("canceled")) {
+        return Vec::new();
+    }
+    let mut out = vec![organizer_of(m)];
+    out.extend(
+        m.get("attendees")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|a| a.get("response").and_then(Value::as_str) == Some("accept"))
+            .filter_map(|a| a.get("principal").and_then(Value::as_str))
+            .map(str::to_string),
+    );
+    out
+}
+
+/// API-1 revision 8 1.2 item 3: an occurrence of this meeting (not canceled) is in progress at `t` (s): it started
+/// at or before `t` and ends after it.
+pub(super) fn meeting_in_progress(m: &Obj, t: f64) -> bool {
+    !pj::truthy(m.get("canceled"))
+        && meeting_occurrences(pj::num(m, "start"), pj::num(m, "end"), &pj::text_of(m, "recurrence"), &pj::text_of(m, "tz"), t, t, 4).iter().any(|(s, e)| *s <= t && t < *e)
+}
+
 impl State {
     /// _meeting_person: a person as a meeting names them, with the name the directory has now.
     fn meeting_person(&self, principal: &str, name: &str) -> Obj {
@@ -263,7 +289,7 @@ impl State {
                 Value::Object(with(&self.meeting_person(&pj::text_of(a, "principal"), &pj::s(a, "name")), obj([("response", response)])))
             })
             .collect();
-        obj([
+        let mut view = obj([
             ("id", m.get("id").cloned().unwrap_or(Value::Null)),
             ("room", m.get("room").cloned().unwrap_or(Value::Null)),
             ("title", m.get("title").cloned().unwrap_or(Value::Null)),
@@ -278,7 +304,12 @@ impl State {
             ("created", m.get("created").cloned().unwrap_or_else(|| Value::from(0))),
             ("updated", m.get("updated").cloned().unwrap_or_else(|| Value::from(0))),
             ("canceled", m.get("canceled").cloned().unwrap_or(Value::Null)),
-        ])
+        ]);
+        // PH-1 section 6: a meeting that allows phone callers shows its dial-in numbers and PIN to its members
+        if let Some(phone) = self.phone_meeting_view(m) {
+            view.insert("phone".into(), phone);
+        }
+        view
     }
 
     /// _meeting: the id of a meeting on this relay.
@@ -333,9 +364,10 @@ impl State {
 impl Hub {
     /// meeting_create (`POST /v1/meetings`): schedule a meeting in a new room; every attendee (who must be in the
     /// directory) and the organizer's other sessions hear `meeting` `invite`. `cohosts` (people in the directory)
-    /// become co-organizers of its calls when they join.
+    /// become co-organizers of its calls when they join. `phone` (PH-1 section 6): true gives it a dial-in PIN
+    /// (revision 3: absent or null means true on a relay with a conference number).
     #[allow(clippy::too_many_arguments)]
-    pub fn meeting_create(&self, session: &str, who: &Identity, title: Body, start: Body, end: Body, attendees_v: Body, description: Body, recurrence_v: Body, tz: Body, cohosts_v: Body) -> R<Obj> {
+    pub fn meeting_create(&self, session: &str, who: &Identity, title: Body, start: Body, end: Body, attendees_v: Body, description: Body, recurrence_v: Body, tz: Body, cohosts_v: Body, phone_v: Body) -> R<Obj> {
         let title = meeting_title(title)?;
         let (start, end) = (meeting_time(start, "start")?, meeting_time(end, "end")?);
         meeting_span(start, end)?;
@@ -344,6 +376,7 @@ impl Hub {
         let tz = time_zone(tz)?;
         let people = attendees(attendees_v)?;
         let chosen = cohosts(cohosts_v)?;
+        let dial_in = phone::flag(phone_v)?;
         let mut st = self.st.lock();
         let r = (|| -> R<(Obj, String, usize)> {
             st.session(session, who)?;
@@ -360,7 +393,7 @@ impl Hub {
                 .iter()
                 .map(|p| Value::Object(obj([("principal", Value::from(p.clone())), ("name", st.meeting_person(p, "")["name"].clone()), ("response", Value::from("none"))])))
                 .collect();
-            let m = obj([
+            let mut m = obj([
                 ("id", Value::from(room.clone())),
                 ("room", Value::from(room.clone())),
                 ("title", Value::from(title.clone())),
@@ -376,6 +409,9 @@ impl Hub {
                 ("updated", f(now)),
                 ("canceled", Value::Null),
             ]);
+            // PH-1 revision 3 (section 11.1): without `phone`, a relay with a conference number gives a PIN
+            let dial_in = dial_in.or_else(|| st.phone_conference().then_some(true));
+            st.phone_meeting_set(&mut m, dial_in)?;
             st.meetings.insert(room.clone(), Value::Object(m.clone()));
             st.dirty = true;
             st.tell_meeting(&people_of(&m), "invite", &m, &who.principal, Some(session));
@@ -403,6 +439,7 @@ impl Hub {
         let tz = given("tz").map(|v| time_zone(Some(v))).transpose()?;
         let people = given("attendees").map(|v| attendees(Some(v))).transpose()?;
         let chosen = given("cohosts").map(|v| cohosts(Some(v))).transpose()?;
+        let dial_in = phone::flag(given("phone"))?;
         let mut st = self.st.lock();
         let r = (|| -> R<(Obj, String, usize, usize, usize, bool)> {
             st.session(session, who)?;
@@ -431,6 +468,8 @@ impl Hub {
                 st.meeting_known(&list)?;
                 m.insert("cohosts".into(), Value::Array(list.into_iter().map(Value::from).collect()));
             }
+            // PH-1 section 6: phone callers turned on (a PIN) or off (the PIN goes)
+            st.phone_meeting_set(&mut m, dial_in)?;
             let retime = (new_start, new_end) != (old_start, old_end)
                 || recurrence.as_ref().map(|r| *r != pj::text_of(&m, "recurrence")).unwrap_or(false)
                 || tz.as_ref().map(|t| *t != pj::text_of(&m, "tz")).unwrap_or(false);

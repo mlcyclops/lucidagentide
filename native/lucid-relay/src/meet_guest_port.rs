@@ -224,6 +224,16 @@ pub(crate) fn json(w: &mut Tls, csp: &str, status: u16, payload: &Obj, extra: &[
     write(w, csp, status, "application/json", "no-store", extra, pj::dumps(&Value::Object(payload.clone())).as_bytes())
 }
 
+/// TH-1 4: a brand read with the page's headers (CSP, nosniff): the JSON `no-cache`, the logo with its stored type.
+fn brand_answer(w: &mut Tls, csp: &str, answer: crate::meet_brand::Answer) -> std::io::Result<()> {
+    use crate::meet_brand::{Answer, JSON_CACHE, NO_LOGO};
+    match answer {
+        Answer::Json(v) => write(w, csp, 200, "application/json", JSON_CACHE, &[], pj::dumps(&v).as_bytes()),
+        Answer::Logo { ctype, cache, bytes } => write(w, csp, 200, ctype, cache, &[], &bytes),
+        Answer::NoLogo => json(w, csp, 404, &obj([("error", Value::from(NO_LOGO))]), &[]),
+    }
+}
+
 /// One request: Ok(false) when the connection closes after it.
 fn one(port: &Port, reader: &mut BufReader<Tls>, address: &str) -> std::io::Result<bool> {
     let Some(head) = read_head(reader)? else { return Ok(false) };
@@ -246,6 +256,11 @@ fn one(port: &Port, reader: &mut BufReader<Tls>, address: &str) -> std::io::Resu
             let sent = write(reader.get_mut(), &port.csp, 301, "text/plain", "no-store", &[("Location", "/g/".to_string())], b"");
             return Ok(sent.is_ok() && !close);
         }
+        // TH-1 4: the organization's brand, like the page files (no session, before the gate and MR-1's admission)
+        if let Some(answer) = crate::meet_brand::port_read(&port.settings.state_dir, "/g/", &head.method, &path, &query) {
+            let sent = brand_answer(reader.get_mut(), &port.csp, answer);
+            return Ok(sent.is_ok() && !close);
+        }
         if let Some((file, ctype)) = static_file(&GUEST_STATIC, "/g/", &path) {
             let sent = match std::fs::read(&file) {
                 Ok(data) => write(reader.get_mut(), &port.csp, 200, ctype, "no-cache", &[], &data),
@@ -263,6 +278,20 @@ fn one(port: &Port, reader: &mut BufReader<Tls>, address: &str) -> std::io::Resu
         let sent = json(reader.get_mut(), &port.csp, 404, &obj([("error", Value::from(UNKNOWN))]), &[]);
         return Ok(sent.is_ok() && !close && !post);
     }
+    // MR-1 2.4: a standby or fenced node refuses guests as it refuses members; on the active a guest's write is
+    // counted until it is answered, so a handover can wait for it
+    let _admitted = match port.hub.cluster().cloned().map(|c| c.admit(&head.method, &path)) {
+        Some(Err((status, body))) => {
+            let post = head.method == "POST";
+            if post {
+                m::drain_unread(reader, &head, false);
+            }
+            let sent = json(reader.get_mut(), &port.csp, status, &body, &[]);
+            return Ok(sent.is_ok() && !close && !post);
+        }
+        Some(Ok(admitted)) => admitted,
+        None => None,
+    };
     // AC-1 2.4 (R42-1): every guest route serves people, so it answers `license-inactive` while service is stopped
     let refused = port.hub.gate().and_then(|g| g.admits_guest(&head.method, &path).err());
     let mut req = Req { port, head: &head, query: m::parse_query(&query), reader: &mut *reader, address, body_read: false, close: false };

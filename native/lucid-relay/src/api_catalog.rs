@@ -749,7 +749,7 @@ pub mod counters {
     use std::sync::LazyLock;
 
     /// The 10.1 families, in exposition order.
-    pub const FAMILIES: [&str; 33] = [
+    pub const FAMILIES: [&str; 35] = [
         "lucid_api_requests_total",
         "lucid_api_refusals_total",
         "lucid_api_tokens_issued_total",
@@ -788,6 +788,9 @@ pub mod counters {
         "lucid_a2a_streams_open",
         "lucid_a2a_push_total",
         "lucid_a2a_cards_signed_total",
+        // API-1 revision 8 7 (each relay's, from its hub)
+        "lucid_presence_writes_total",
+        "lucid_presence_sessions",
     ];
     /// Revision 5 13.1: the families a connector reports in each `POST I/v1/connector/ack` as `"metrics"`, with the
     /// labels a series carries there and whether the console adds the `connector` label (the connector's id). A family
@@ -836,6 +839,8 @@ pub mod counters {
         /// (org, destination) to the last successful delivery (s).
         success: BTreeMap<(String, String), i64>,
         mode: Option<String>,
+        /// API-1 revision 8 7: this relay's presence writes by kind and live application sessions (every org).
+        presence: Option<(Vec<(String, u64)>, u64)>,
         /// Revision 5 13.1: (org, connector) to its latest ack's time (s) and series.
         reports: BTreeMap<(String, String), (i64, Vec<Reported>)>,
     }
@@ -1148,6 +1153,12 @@ pub mod counters {
         STATE.lock().mode = Some(mode.to_owned());
     }
 
+    /// API-1 revision 8 7: this relay's `lucid_presence_writes_total{kind}` and `lucid_presence_sessions` as its hub
+    /// counts them (`Hub::presence_metrics`), for every org.
+    pub fn set_presence(writes: Vec<(String, u64)>, sessions: u64) {
+        STATE.lock().presence = Some((writes, sessions));
+    }
+
     /// Every series of `org` (None: every org, equal series summed) at `now_s`, in `FAMILIES` order, then by labels.
     pub fn rows(org: Option<&str>, now_s: i64) -> Vec<Row> {
         let mine = |o: &str| org.is_none_or(|x| x == o);
@@ -1201,6 +1212,12 @@ pub mod counters {
                     merged.insert(("lucid_relay_mode", vec![("mode".into(), mode.into())]), f64::from(u8::from(m == mode)));
                 }
             }
+            if let Some((writes, sessions)) = &s.presence {
+                for (kind, n) in writes {
+                    merged.insert(("lucid_presence_writes_total", vec![("kind".into(), kind.clone())]), *n as f64);
+                }
+                merged.insert(("lucid_presence_sessions", Vec::new()), *sessions as f64);
+            }
         }
         let mut out: Vec<Row> = merged.into_iter().map(|((prom, labels), value)| Row { prom, labels, value }).collect();
         out.sort_by_key(|r| FAMILIES.iter().position(|f| *f == r.prom));
@@ -1229,8 +1246,8 @@ mod tests {
     fn the_embedded_catalog_parses_strictly() {
         let c = cat();
         assert_eq!(c.json()["version"], 1);
-        assert_eq!(c.families().len(), 68);
-        assert_eq!(catalog().families().len(), 68, "the process catalog is the embedded one");
+        assert_eq!(c.families().len(), 70);
+        assert_eq!(catalog().families().len(), 70, "the process catalog is the embedded one");
         assert_eq!(c.resource_attributes(), ["service.name", "service.version", "service.instance.id", "lucid.org", "lucid.relay.id", "lucid.region", "deployment.environment"]);
         assert!(no_dashes(SOURCE));
         // each malformation refuses the whole catalog
@@ -1296,7 +1313,7 @@ mod tests {
     #[test]
     fn the_families_of_10_1_are_listed_with_their_types_and_labels() {
         let c = cat();
-        let want: [(&str, MetricKind, &[(&str, Tag)]); 33] = [
+        let want: [(&str, MetricKind, &[(&str, Tag)]); 35] = [
             ("lucid_api_requests_total", MetricKind::Counter, &[("client", Tag::Client), ("result", Tag::Plain)]),
             ("lucid_api_refusals_total", MetricKind::Counter, &[("check", Tag::Plain)]),
             ("lucid_api_tokens_issued_total", MetricKind::Counter, &[("client", Tag::Client), ("issuer", Tag::Plain)]),
@@ -1334,6 +1351,9 @@ mod tests {
             ("lucid_a2a_streams_open", MetricKind::Gauge, &[]),
             ("lucid_a2a_push_total", MetricKind::Counter, &[("result", Tag::Plain)]),
             ("lucid_a2a_cards_signed_total", MetricKind::Counter, &[("agent", Tag::Plain)]),
+            // API-1 revision 8 7
+            ("lucid_presence_writes_total", MetricKind::Counter, &[("kind", Tag::Plain)]),
+            ("lucid_presence_sessions", MetricKind::Gauge, &[]),
         ];
         assert_eq!(want.map(|w| w.0), counters::FAMILIES);
         for (i, (prom, kind, labels)) in want.iter().enumerate() {
@@ -1541,6 +1561,8 @@ mod tests {
             "content.notice.skipped", "connector.stale.on", "connector.stale.off", "connector.store.purged",
             // API-1d 11 (the connector's chains; `a2a.card.signed` the console's)
             "a2a.task", "a2a.approval", "a2a.push", "a2a.card.signed",
+            // API-1 revision 8 7 (the console's chain)
+            "presence.write",
         ];
         let audit: Vec<&RecordType> = c.records().iter().filter(|r| r.kind == RecordKind::Audit).collect();
         assert_eq!(audit.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), actions);
@@ -1708,7 +1730,7 @@ mod tests {
     fn the_registry_lists_every_event_type_of_7_1() {
         let c = cat();
         use Ceiling::{Confidential as C, Internal as I, Public as P};
-        let want: [(&str, &[&str], &str, Ceiling, &[(&str, Tag)]); 28] = [
+        let want: [(&str, &[&str], &str, Ceiling, &[(&str, Tag)]); 29] = [
             ("relay.connected", &["console"], "fleet.read", I, &[("relay", Tag::Plain), ("version", Tag::Plain)]),
             ("relay.disconnected", &["console"], "fleet.read", I, &[("relay", Tag::Plain), ("version", Tag::Plain)]),
             ("relay.health.changed", &["console"], "monitor.read", I, &[("relay", Tag::Plain), ("from", Tag::Plain), ("to", Tag::Plain)]),
@@ -1738,6 +1760,8 @@ mod tests {
             // API-1d 6.4
             ("spoke.offline", &["relay"], "spokes.read", I, &[("relay", Tag::Plain), ("node", Tag::Device), ("label", Tag::FreeText), ("last_poll_at", Tag::Plain)]),
             ("spoke.online", &["relay"], "spokes.read", I, &[("relay", Tag::Plain), ("node", Tag::Device), ("label", Tag::FreeText), ("last_poll_at", Tag::Plain)]),
+            // API-1 revision 8 4.7
+            ("presence.changed", &["relay"], "presence.read", C, &[("principal", Tag::Principal), ("availability", Tag::Plain), ("activity", Tag::Plain), ("out_of_office", Tag::Plain)]),
         ];
         let names: Vec<&str> = c.events().map(|e| e.name.as_str()).collect();
         assert_eq!(names, want.map(|w| w.0));

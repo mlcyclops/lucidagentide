@@ -1831,6 +1831,53 @@
       caState: { ok: "OK", lost: "Key cannot be opened", unreadable: "Records do not read back" }, confirms: "Confirms", disagrees: "Disagrees",
       certPem: "The ended certificate (PEM)", dismiss: "Dismiss", saveDays: "Save", open: "Open",
     },
+    // MR-1 section 4: a Meeting Hub relay cluster (one active relay, one standby) and its signed relay directory.
+    cluster: {
+      col: "Cluster",
+      id: "Cluster",
+      node: "Cluster node",
+      role: "Cluster role",
+      roles: { active: "Active", standby: "Standby", fenced: "Fenced" },
+      epoch: "Epoch",
+      generation: "Replica generation",
+      lag: "Replica lag",
+      peer: "Peer node",
+      witness: "Witness lease",
+      autoPromote: "Standby promotes itself",
+      short: "epoch <epoch>, generation <generation>",
+      lagShort: "lag <lag>",
+      seconds: "<n> s",
+      directory: "Relay directory",
+      directoryShort: "version <version>, ends <time>",
+      promote: "Promote",
+      demote: "Make standby",
+      handover: "Hand over",
+      force: "Promote even if the other relay still answers as active",
+      dlg: {
+        promote: { title: "Promote <name> to the active relay of <cluster>?", body: ["<name> starts serving people with a new epoch. Do this only when the active relay is down: while it still answers as active the relay refuses unless you choose to force it, and two active relays would split the cluster's data."], button: ["Promote"] },
+        demote: { title: "Make <name> a standby of <cluster>?", body: ["<name> stops serving people and copies the active relay. Until another relay of the cluster is active, people cannot connect. Calls in progress drop."], button: ["Make standby"] },
+        handover: { title: "Hand over <cluster> from <name>?", body: ["<name> stops taking changes, waits until the standby has every change, then the standby becomes the active relay and <name> becomes the standby. People reconnect on their own; calls in progress drop and rejoin."], button: ["Hand over"] },
+      },
+      dir: {
+        title: "Relay directory of <cluster>",
+        version: "Version",
+        issued: "Issued",
+        expires: "Ends",
+        nodes: "Nodes",
+        server: "Server",
+        address: "Connects to",
+        port: "Port",
+        region: "Region",
+        priority: "Priority",
+        from: "As <relay> holds it.",
+        none: "<relay> holds no signed relay directory. Sign one with meet_pki.py relay-directory on the signer and post it to the active relay.",
+        unreadable: "The relay directory could not be read from <relay>: <message>",
+      },
+      attention: {
+        "relay-directory-expiring": "The relay directory of cluster <cluster> ends in <days> days. Sign a new one and post it to the active relay.",
+        "relay-directory-expired": "The relay directory of cluster <cluster> has ended. Apps connect only to the relay they enrolled with until a new one is posted.",
+      },
+    },
     // ADR-0343: the Lucid Meet password accounts this console keeps (moved from the old Meet console, ADR-0347).
     accounts: {
       title: "Lucid Meet accounts",
@@ -1890,7 +1937,7 @@
 
   const PAGES = {
     spokes: ["hubs", "spokes", "relays", "seats", "license", "logs", "requests"],
-    meet: ["people", "seats", "enrollments", "organizations", "signer", "bridges", "holds", "releases", "push", "identity", "calls", "servers", "license", "logs", "requests", "ai", "support"],
+    meet: ["people", "seats", "enrollments", "organizations", "signer", "bridges", "holds", "releases", "push", "identity", "calls", "servers", "license", "logs", "requests", "ai", "support", "branding"],
     admins: ["people", "sessions", "audit", "settings", "account"],
   };
   // Settings > AI (contract AI-1 section 9). The contract's own words are verbatim; the rest are the page's labels.
@@ -1934,6 +1981,8 @@
   PAGE_LABEL.meet.ai = AIW.page;
   // SE-1: the page is named for its tickets; the AC-2a fleet nav keeps the one-word support group for a later phase
   PAGE_LABEL.meet.support = "Support tickets";
+  // TH-1 6: the organization's brand on the guest portal, the web sign-in and the account pages
+  PAGE_LABEL.meet.branding = "Branding";
   // What each role below admin may open (2.3, 7.2): user managers the people lists and seats, viewers health and lists.
   const ROLE_PAGES = {
     "user-manager": { spokes: ["hubs", "spokes", "seats"], meet: ["people", "seats"], admins: ["people", "account"] },
@@ -3714,7 +3763,7 @@
       // AC-2a 8.1: the fleet's own kinds have fleet words; a relay's pushed item is an AC-1 kind (any other kind is
       // dropped), shown as "<relay name>: <words>" with the console's own name for the relay.
       // The console's relay-* kinds (revision 3.4 license items among them) name their relay in the words.
-      const own = fleet() && (!it.relay || String(it.kind).startsWith("relay-")) ? FW["attention." + it.kind] : null;
+      const own = fleet() && (!it.relay || String(it.kind).startsWith("relay-")) ? FW["attention." + it.kind] || FMSG.cluster.attention[it.kind] : null;
       const tpl = own || W["attention." + it.kind];
       if (typeof tpl !== "string") continue;
       const sev = it.severity === "bad" ? "bad" : it.severity === "warn" ? "warn" : "info";
@@ -4318,7 +4367,7 @@
     }
     if (!d.enabled) {
       return section("meet-accounts-h", MA.title, el("p", null, MA.off), el("p", null, MA.offHow, " ", el("code", { class: "cmd" }, MA.importCmd)),
-        el("p", null, MA.offCheck, " ", el("code", { class: "cmd" }, MA.statusCmd)));
+        el("p", null, MA.offCheck, " ", el("code", { class: "cmd" }, MA.statusCmd)), brandingLink());
     }
     const admin = isAdmin();
     const relay = d.relay || {};
@@ -4349,6 +4398,7 @@
       pairs([[MA.signIn, onOff(true)], [MA.org, code(d.org)], [MA.relay, relay.configured ? relay.name : MA.relayNone],
         [MA.testflight, onOff(d.testflight && d.testflight.on)], [MA.always, always.length ? always.join(", ") : undefined],
         [MA.approval, admin ? undefined : modeWord(d.approval)]]),
+      brandingLink(),
       approval,
       admin ? el("div", { class: "page-head" }, btn(MA.inviteBtn, inviteAccount, "primary")) : null,
       el("div", { id: "meet-accounts-out" }),
@@ -4533,6 +4583,7 @@
     if (typeof v === "object") {
       return Object.entries(v).filter(([, x]) => x != null && x !== "").map(([a, x]) => fieldWord(a) + ": " + plainValue(a, x)).join(", ");
     }
+    if (k === "platform" && typeof v === "string") return clean(platformWord(v));
     if (typeof v === "number" && /_s$/.test(k)) return span(v);
     if (TIME_KEY.test(k) && (typeof v === "number" ? v > 1e8 : DATE_TEXT.test(String(v).trim())) && dateOf(v, "any")) return whenAny(v);
     return clean(String(v));
@@ -5303,6 +5354,275 @@
     }, "primary");
     return panel("Publish a release", box, publish);
   }
+
+  // ---- Meet > Branding (contract TH-1 section 6) ----
+  // The organization's name, accent color, mode, welcome text, help link and logo on the guest portal and the web
+  // sign-in, and from a Lucid Admin Console on its account pages too. Without a brand every page shows the standard
+  // Lucid theme. The preview is drawn on a canvas: this page sets no style, and the console's CSP takes no image data.
+  const BRW = {
+    intro: "Your organization's name, color and logo on the guest page, the web sign-in and the account pages. Without a brand every page shows the standard Lucid theme.",
+    introFleet: "Saving here keeps this console's copy for its account pages, then sends the same change to every Meeting Hub relay, each with its own confirmation.",
+    standard: "Standard Lucid theme",
+    current: "Brand", changed: "Last change", by: "Changed by", edit: "Name and color",
+    name: "Organization name", accent: "Accent color", mode: "Mode", welcome: "Welcome text on the guest setup page",
+    support: "Help link: it must start with https:// or mailto:",
+    modes: [["auto", "Follow the browser"], ["dark", "Dark"], ["light", "Light"]],
+    save: "Save the branding",
+    logo: "Logo", logoPick: "Logo file: PNG, JPEG or WebP, at most 256 KiB, 32 to 1024 pixels a side",
+    logoNow: "Current logo: <type>, <w> by <h> pixels, <n> bytes.", logoNone: "No logo: the Lucid mark shows.",
+    logoUpload: "Upload the logo", logoRemove: "Remove the logo",
+    reset: "Reset to the Lucid theme", preview: "Preview of the guest setup card",
+    previewJoin: "Join", previewPowered: "Powered by Lucid Meet", previewHelp: "Help",
+    textOn: "Button text in <color>: <ratio>:1, and 4.5:1 is needed.", onDark: "The color on the dark background: <ratio>:1, and 3:1 is needed.",
+    white: "white", dark: "near-black", passes: "Readable", fails: "Too faint",
+    nameNeeded: "The name is 1 to 60 characters.", faint: "Choose a color with more contrast: both lines above must pass.",
+    badSupport: "The help link must start with https:// or mailto:", tooBig: "The logo is larger than 256 KiB.",
+    notImage: "Choose a PNG, JPEG or WebP image. SVG logos are refused.", pickFirst: "Choose a logo file first.",
+    saveFirst: "Save the name and color before the logo.",
+    consoleCopy: "Saved for this console's account pages.", relays: "Relays: <list>.", relayOk: "<name> saved",
+    relayFailed: "<name> not saved (<words>)", noRelays: "No Meeting Hub relay is enrolled yet.",
+    open: "Branding of the guest page, the web sign-in and the account pages",
+    dlg: {
+      save: { title: "Save the branding of <name>?", body: ["Guests and members see it the next time a page opens."], button: ["Save"] },
+      logo: { title: "Upload this logo?", body: ["It replaces the Lucid mark in the page header."], button: ["Upload the logo"] },
+      removeLogo: { title: "Remove the logo?", body: ["The Lucid mark shows again; the name and color stay."], button: ["Remove the logo"] },
+      reset: { title: "Reset to the Lucid theme?", body: ["The brand and its logo are removed, and every page shows the standard Lucid theme."], button: ["Reset to the Lucid theme"] },
+    },
+  };
+  const LOGO_MAX = 256 * 1024;
+  const HEX6 = /^#[0-9a-f]{6}$/;
+  const brandingLink = () => (isAdmin() ? el("p", null, el("a", { href: "#/meet/branding" }, BRW.open)) : null);
+  // WCAG 2 relative luminance and contrast, as the relay checks them (TH-1 3).
+  function luminanceOf(hex) {
+    const n = parseInt(hex.slice(1), 16);
+    const lin = (v) => {
+      const s = v / 255;
+      return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+    };
+    return 0.2126 * lin(n >> 16) + 0.7152 * lin((n >> 8) & 255) + 0.0722 * lin(n & 255);
+  }
+  function contrastOf(a, b) {
+    const x = luminanceOf(a);
+    const y = luminanceOf(b);
+    return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+  }
+  // The better of white and near-black text (white on a tie) must reach 4.5:1; the color itself 3:1 on #0a0b0f.
+  function accentCheck(accent) {
+    const white = contrastOf(accent, "#ffffff");
+    const dark = contrastOf(accent, "#0a0b0f");
+    const best = Math.max(white, dark);
+    return { on: white >= dark ? "#ffffff" : "#0a0b0f", best, dark, ok: best >= 4.5 && dark >= 3 };
+  }
+  // Two decimals, rounded down, so a ratio just under a threshold never reads as reaching it.
+  const ratioText = (x) => (Math.floor(x * 100) / 100).toFixed(2);
+  // The logo's type by its magic bytes, as the relay reads it; "" for anything else (SVG among them).
+  function sniffImage(b) {
+    const ascii = (from, to) => String.fromCharCode.apply(null, Array.from(b.subarray(from, to)));
+    if (b.length >= 24 && b[0] === 0x89 && ascii(1, 4) === "PNG") return "image/png";
+    if (b.length >= 4 && b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "image/jpeg";
+    if (b.length >= 16 && ascii(0, 4) === "RIFF" && ascii(8, 12) === "WEBP") return "image/webp";
+    return "";
+  }
+  function base64Of(bytes) {
+    let s = "";
+    for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + 0x8000)));
+    return btoa(s);
+  }
+  // The guest setup card in the chosen colors: the logo (or a mark in the accent), the name, the welcome text, the
+  // Join button and the unbranded footer.
+  function drawBrandPreview(canvas, v, bitmap) {
+    const ctx = canvas.getContext && canvas.getContext("2d");
+    if (!ctx) return;
+    const t = v.mode === "light" ? { bg: "#f5f6fa", panel: "#ffffff", line: "#b8c0d4", text: "#141826", muted: "#4a5268", link: "#0b6e80" }
+      : { bg: "#0a0b0f", panel: "#0f1117", line: "#252a3a", text: "#edeff6", muted: "#aeb4c6", link: "#46c8dc" };
+    const w = canvas.width;
+    const h = canvas.height;
+    const box = (x, y, bw, bh, r) => {
+      ctx.beginPath();
+      if (ctx.roundRect) ctx.roundRect(x, y, bw, bh, r);
+      else ctx.rect(x, y, bw, bh);
+    };
+    const font = (size, weight) => weight + " " + size + "px system-ui, sans-serif";
+    ctx.fillStyle = t.bg;
+    ctx.fillRect(0, 0, w, h);
+    box(16, 16, w - 32, h - 32, 16);
+    ctx.fillStyle = t.panel;
+    ctx.fill();
+    ctx.strokeStyle = t.line;
+    ctx.stroke();
+    if (bitmap) {
+      const s = Math.min(160 / bitmap.width, 44 / bitmap.height);
+      ctx.drawImage(bitmap, 36, 36, bitmap.width * s, bitmap.height * s);
+    } else {
+      box(36, 36, 44, 44, 10);
+      ctx.fillStyle = v.accent;
+      ctx.fill();
+    }
+    ctx.fillStyle = t.text;
+    ctx.font = font(20, 650);
+    ctx.fillText(v.name || "Lucid Meet", 36, 110, w - 72);
+    ctx.fillStyle = t.muted;
+    ctx.font = font(14, 400);
+    const words = (v.welcome || "").split(" ");
+    let line = "";
+    let y = 136;
+    for (const word of words) {
+      const next = line ? line + " " + word : word;
+      if (ctx.measureText(next).width > w - 72 && line) {
+        ctx.fillText(line, 36, y);
+        y += 20;
+        line = word;
+        if (y > 176) break;
+      } else line = next;
+    }
+    if (line && y <= 176) ctx.fillText(line, 36, y);
+    box(36, h - 116, w - 72, 44, 10);
+    ctx.fillStyle = v.accent;
+    ctx.fill();
+    ctx.fillStyle = v.on;
+    ctx.font = font(16, 650);
+    ctx.textAlign = "center";
+    ctx.fillText(BRW.previewJoin, w / 2, h - 88);
+    ctx.textAlign = "left";
+    ctx.fillStyle = t.muted;
+    ctx.font = font(12, 400);
+    ctx.fillText(BRW.previewPowered, 36, h - 44);
+    if (v.support) {
+      ctx.fillStyle = t.link;
+      ctx.textAlign = "right";
+      ctx.fillText(BRW.previewHelp, w - 36, h - 44);
+      ctx.textAlign = "left";
+    }
+  }
+  // One Branding page: view is GET's {brand, public}; o.save, o.logo and o.reset take the body and run the write;
+  // o.canSave, o.canReset; o.intro an extra line; o.done after a write.
+  function brandingPage(view, o) {
+    const b = view && view.brand ? view.brand : null;
+    const id = () => uid("brand");
+    const f = {};
+    const ids = { name: id(), accent: id(), mode: id(), welcome: id(), support: id(), logo: id() };
+    f.name = el("input", { id: ids.name, type: "text", maxlength: "60", autocomplete: "organization", spellcheck: "false" });
+    f.accent = el("input", { id: ids.accent, type: "color", "aria-describedby": ids.accent + "-c" });
+    f.mode = el("select", { id: ids.mode }, BRW.modes.map(([v, w]) => el("option", { value: v }, w)));
+    f.welcome = el("textarea", { id: ids.welcome, maxlength: "200" });
+    f.support = el("input", { id: ids.support, type: "url", maxlength: "300", autocomplete: "off", spellcheck: "false" });
+    f.logo = el("input", { id: ids.logo, type: "file", accept: "image/png,image/jpeg,image/webp" });
+    f.name.value = b ? b.name : "";
+    f.accent.value = b ? b.accent : "#c64bd6";
+    f.mode.value = b ? b.mode : "auto";
+    f.welcome.value = (b && b.welcome) || "";
+    f.support.value = (b && b.support) || "";
+    const contrastLine = el("p", { id: ids.accent + "-c", class: "note", role: "status" });
+    const canvas = el("canvas", { class: "brand-preview", width: "420", height: "300", role: "img", "aria-label": BRW.preview });
+    let bitmap = null;
+    let picked = null;
+    const values = () => ({ name: f.name.value.trim(), accent: f.accent.value.toLowerCase(), mode: f.mode.value, welcome: f.welcome.value.trim(), support: f.support.value.trim() });
+    const modeWord = (m) => (BRW.modes.find(([v]) => v === m) || ["", m])[1];
+    function update() {
+      const v = values();
+      const c = HEX6.test(v.accent) ? accentCheck(v.accent) : null;
+      contrastLine.replaceChildren(...(c ? [fill(BRW.textOn, { color: c.on === "#ffffff" ? BRW.white : BRW.dark, ratio: ratioText(c.best) }), " ",
+        fill(BRW.onDark, { ratio: ratioText(c.dark) }), " ", stChip(c.ok ? BRW.passes : BRW.fails, c.ok ? "ok" : "bad")] : []));
+      drawBrandPreview(canvas, Object.assign(v, { on: c ? c.on : "#ffffff" }), bitmap);
+    }
+    for (const x of [f.name, f.accent, f.mode, f.welcome, f.support]) {
+      x.addEventListener("input", update);
+      x.addEventListener("change", update);
+    }
+    f.logo.addEventListener("change", () => {
+      picked = null;
+      bitmap = null;
+      const file = f.logo.files && f.logo.files[0];
+      if (!file) return update();
+      (async () => {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const type = sniffImage(bytes);
+        if (bytes.length > LOGO_MAX) return invalid(f.logo, BRW.tooBig);
+        if (!type) return invalid(f.logo, BRW.notImage);
+        picked = { type, data: base64Of(bytes) };
+        try {
+          bitmap = await createImageBitmap(file);
+        } catch (e) {
+          bitmap = null;
+        }
+      })().then(update, fail);
+    });
+    const save = btn(BRW.save, () => {
+      const v = values();
+      if (!v.name || [...v.name].length > 60) return invalid(f.name, BRW.nameNeeded);
+      if (!HEX6.test(v.accent) || !accentCheck(v.accent).ok) return invalid(f.accent, BRW.faint);
+      if (v.support && !/^(https:\/\/|mailto:)/.test(v.support)) return invalid(f.support, BRW.badSupport);
+      confirmDialog({
+        spec: BRW.dlg.save, vals: { name: v.name }, name: v.name,
+        params: [[BRW.name, v.name], [BRW.accent, code(v.accent)], [BRW.mode, modeWord(v.mode)], [BRW.welcome, v.welcome], [BRW.support, v.support]],
+        fields: [{ kind: "reason" }],
+        run: (d) => o.save(Object.assign({}, v, { reason: d.reason })), done: o.done,
+      });
+    }, "primary");
+    const upload = btn(BRW.logoUpload, () => {
+      if (!picked) return invalid(f.logo, BRW.pickFirst);
+      if (!b) return invalid(f.logo, BRW.saveFirst);
+      const body = picked;
+      confirmDialog({ spec: BRW.dlg.logo, vals: {}, params: [[BRW.logo, body.type]], run: () => o.logo(body), done: o.done });
+    });
+    const removeLogo = b && b.logo ? btn(BRW.logoRemove, () => confirmDialog({ spec: BRW.dlg.removeLogo, vals: {}, danger: true, run: () => o.logo({ remove: true }), done: o.done })) : null;
+    const reset = b && o.canReset ? btn(BRW.reset, () => confirmDialog({
+      spec: BRW.dlg.reset, vals: {}, danger: true, fields: [{ kind: "reason" }], run: (d) => o.reset({ reason: d.reason }), done: o.done,
+    }), "danger") : null;
+    const logoNow = b && b.logo ? fillText(BRW.logoNow, { type: b.logo.type, w: b.logo.w, h: b.logo.h, n: b.logo.bytes }) : BRW.logoNone;
+    const field = (fid, label, input, ...more) => el("div", { class: "field" }, el("label", { for: fid }, label), input, ...more);
+    const kids = [head(PAGE_LABEL.meet.branding), el("p", null, BRW.intro), o.intro ? el("p", null, o.intro) : null,
+      panel(null, pairs([[BRW.current, b ? b.name : BRW.standard], [BRW.changed, b ? whenAny(b.updated) : undefined], [BRW.by, b ? b.by : undefined], [BRW.logo, logoNow]]))];
+    if (o.canSave) {
+      kids.push(panel(BRW.edit,
+        field(ids.name, BRW.name, f.name),
+        field(ids.accent, BRW.accent, f.accent, contrastLine),
+        field(ids.mode, BRW.mode, f.mode),
+        field(ids.welcome, BRW.welcome, f.welcome),
+        field(ids.support, BRW.support, f.support),
+        sub(BRW.preview, canvas),
+        save));
+      kids.push(panel(BRW.logo, el("p", { class: "note" }, logoNow), field(ids.logo, BRW.logoPick, f.logo), el("div", { class: "page-head" }, upload, removeLogo)));
+    }
+    if (reset) kids.push(panel(null, reset));
+    update();
+    return kids.filter(Boolean);
+  }
+  // The relay's own console: the relay's brand, which its guest and web ports serve.
+  pages.meet_branding = async () => {
+    const d = await api("GET", "meet/brand");
+    const write = (path, action) => (body) => post(path, body, { action, target: "-" });
+    return brandingPage(d, { save: write("meet/brand", "meet.brand.set"), logo: write("meet/brand/logo", "meet.brand.logo"), reset: write("meet/brand/reset", "meet.brand.reset"),
+      canSave: canWrite(), canReset: isAdmin() });
+  };
+  // A Lucid Admin Console: its own copy for the account pages first, then the same change on every Meeting Hub relay
+  // through the proxy (6), each with its own fleet confirmation; the page says which relays took it.
+  pages.fleetBranding = async () => {
+    const [d, all] = await Promise.all([api("GET", "meet/accounts/brand", null, { direct: true }), fleetRelays()]);
+    const relays = all.filter((x) => x.product === "meet" && x.state === "active").sort(byName);
+    let said = "";
+    const both = (path, action) => async (body) => {
+      const r = await post("meet/accounts/" + path, body, { action, target: "-" }, { direct: true });
+      const list = [];
+      for (const x of relays) {
+        try {
+          await post("meet/" + path, body, { action, target: "-" }, { relay: x.id });
+          list.push(fillText(BRW.relayOk, { name: x.name }));
+        } catch (e) {
+          if (e && e.status === 401) throw e;
+          list.push(fillText(BRW.relayFailed, { name: x.name, words: e && e.message ? e.message : String(e) }));
+        }
+      }
+      said = BRW.consoleCopy + " " + (relays.length ? fillText(BRW.relays, { list: list.join("; ") }) : BRW.noRelays);
+      return r;
+    };
+    return brandingPage(d, {
+      save: both("brand", "meet.brand.set"), logo: both("brand/logo", "meet.brand.logo"), reset: both("brand/reset", "meet.brand.reset"),
+      canSave: isAdmin(), canReset: isAdmin(), intro: BRW.introFleet,
+      done: () => render({ keepMessages: true }).then(() => say(said)),
+    });
+  };
+
   pages.meet_push = async () => {
     const d = await api("GET", "meet/push");
     const failed = Object.entries(d.failed24h || {}).map(([reason, n]) => ({ reason, n }));
@@ -6367,6 +6687,8 @@
     if (a === "setup") return isAdmin() ? (c) => setupPage(b || "signin", c) : noPage(FMSG.notFound, FMSG.notAllowed);
     // AC-2b-D 3.7: the Meeting Hub organization CA page (admin).
     if (a === "license" && b === "meet-ca") return isAdmin() ? pages.fleetMeetCa : noPage(FW["meet-ca.title"], FMSG.notAllowed);
+    // TH-1 6: Branding (admin), linked from the Lucid Meet accounts section: the console's copy and every Meeting Hub relay
+    if (a === "meet" && b === "branding") return isAdmin() ? pages.fleetBranding : noPage(PAGE_LABEL.meet.branding, FMSG.notAllowed);
     const g = FNAV.find((x) => x.route === a);
     if (!g || (b && !g.pages.some(([id]) => id === b) && !(a === "relays" && /^r_[A-Za-z0-9]+$/.test(b)))) return noPage(FMSG.notFound, FMSG.notFoundBody);
     const href = a === "relays" && (!b || /^r_/.test(b)) ? "#/relays" : "#/" + a + (b ? "/" + b : "");
@@ -6582,9 +6904,51 @@
       r.state === "unconfirmed" ? { label: FD["confirm-relay"].button, run: () => confirmRelay(r.id) } : null,
       live ? { label: FMSG.rename, run: () => labelDialog(r) } : null,
       live ? { label: FMSG.scopes, run: () => go("#/relays/" + encodeURIComponent(r.id) + "?tab=scopes") } : null,
+      ...clusterActions(r),
       { label: FMSG.replace, run: () => go("#/relays/add?replaces=" + encodeURIComponent(r.id)) },
       live ? { label: FMSG.remove, run: () => removeRelayDialog(r) } : null,
     ];
+  }
+  // MR-1 4: what a Meeting Hub relay reports of its cluster (r.cluster, null outside one), and the role changes an
+  // admin makes on it through the relay's console routes.
+  const CLUSTER_TONE = { active: "ok", standby: "none", fenced: "warn" };
+  const numText = (v) => (v == null ? undefined : String(v));
+  function clusterRole(c) {
+    return c.role ? toneChip(FMSG.cluster.roles[c.role] || stateWord(c.role), CLUSTER_TONE[c.role]) : MSG.unknown;
+  }
+  const lagText = (c) => (c.lagS == null ? undefined : fillText(FMSG.cluster.seconds, { n: String(Math.round(c.lagS)) }));
+  function clusterCell(r) {
+    const c = r.cluster;
+    if (!c) return "";
+    const lag = lagText(c);
+    return el("span", null, u(c.node), " ", clusterRole(c), " ", fillText(FMSG.cluster.short, { epoch: numText(c.epoch), generation: numText(c.generation) }),
+      lag ? ", " + fillText(FMSG.cluster.lagShort, { lag }) : null);
+  }
+  function clusterPairs(c) {
+    if (!c) return [];
+    const yn = (b) => (b == null ? undefined : yesNo(b));
+    const dir = c.directoryVersion == null ? undefined
+      : fillText(FMSG.cluster.directoryShort, { version: String(c.directoryVersion), time: c.directoryExpires ? when(c.directoryExpires) : MSG.unknown });
+    return [[FMSG.cluster.id, numText(c.cluster)], [FMSG.cluster.node, numText(c.node)], [FMSG.cluster.role, clusterRole(c)],
+      [FMSG.cluster.epoch, numText(c.epoch)], [FMSG.cluster.generation, numText(c.generation)], [FMSG.cluster.lag, lagText(c)],
+      [FMSG.cluster.peer, numText(c.peer)], [FMSG.cluster.witness, yn(c.witness)], [FMSG.cluster.autoPromote, yn(c.autoPromote)], [FMSG.cluster.directory, dir]];
+  }
+  // A standby or fenced relay can be promoted; the active one made a standby or handed over (contract 2.5).
+  function clusterActions(r) {
+    const c = r.cluster;
+    if (!isAdmin() || r.state !== "active" || !c || !c.role) return [];
+    const act = (k) => ({ label: FMSG.cluster[k], run: () => clusterDialog(r, k) });
+    return c.role === "active" ? [act("demote"), act("handover")] : [act("promote")];
+  }
+  function clusterDialog(r, k) {
+    const force = k === "promote" ? [{ kind: "select", key: "force", label: FMSG.cluster.force, options: yesNoOptions(), value: "no" }] : [];
+    confirmDialog({
+      spec: FMSG.cluster.dlg[k], vals: { name: r.name, cluster: r.cluster.cluster || "" }, name: r.name, id: r.id, danger: true, reaches: [r.name],
+      fields: force.concat([{ kind: "reason" }]),
+      run: (v) => post("meet/cluster/" + k, k === "promote" ? { force: v.force === "yes", reason: v.reason } : { reason: v.reason },
+        { action: "meet.cluster." + k, target: "-" }, { relay: r.id }),
+      done: relaysChanged,
+    });
   }
   function relaysTable(rows, caption, productFixed, c) {
     const q = c ? c.q : new URLSearchParams();
@@ -6601,6 +6965,7 @@
         { key: "site", label: FMSG.cols.site },
         { key: "version", label: FMSG.cols.version },
         { key: "license", label: FMSG.cols.license, cell: licenseCell, sort: (r) => (r.license ? r.license.state : "") },
+        rows.some((r) => r.cluster) ? { key: "cluster", label: FMSG.cluster.col, cell: clusterCell, sortable: false } : null,
         { key: "health", label: FMSG.cols.health, cell: (r) => toneChip(healthWord(r.health), healthTone(r.health)) },
         { key: "lastContactAt", label: FMSG.cols.contact, cell: (r) => when(r.lastContactAt) },
         { key: "state", label: FMSG.cols.state, cell: (r) => el("span", null, relayStateWord(r.state), " ", relayChips(r)), sortable: false },
@@ -6615,11 +6980,46 @@
     const rows = await fleetRelays(true);
     return [head(pageLabel("relays", "list"), addLink()), panel(null, relaysTable(rows, pageLabel("relays", "list"), null, c))];
   };
-  function productRelays(group, all, c) {
+  async function productRelays(group, all, c) {
     const rows = all.filter((x) => x.product === group);
     const title = pageLabel(group, "relays");
     if (!rows.length) return [head(title), panel(null, el("p", null, FW["fleet.no-relays-" + group]), addLink())];
-    return [head(title, addLink()), panel(null, relaysTable(rows, title, group, c))];
+    return [head(title, addLink()), panel(null, relaysTable(rows, title, group, c)), ...(group === "meet" ? await directoryPanels(rows) : [])];
+  }
+  // MR-1 4: each cluster's signed relay directory, read from its active relay (admins: version, dates and nodes) or as
+  // its relays report it (version and end date).
+  async function directoryPanels(rows) {
+    const pick = new Map();
+    for (const r of rows.filter((x) => x.cluster && x.cluster.cluster && x.state !== "removed")) {
+      const cur = pick.get(r.cluster.cluster);
+      if (!cur || (r.cluster.role === "active" && cur.cluster.role !== "active")) pick.set(r.cluster.cluster, r);
+    }
+    const keys = [...pick.keys()].sort();
+    return Promise.all(keys.map((k) => directoryPanel(fill(FMSG.cluster.dir.title, { cluster: k }), pick.get(k))));
+  }
+  async function directoryPanel(title, r) {
+    const c = r.cluster;
+    const D = FMSG.cluster.dir;
+    const from = el("p", { class: "note" }, fill(D.from, { relay: r.name }));
+    if (!isAdmin() || r.state !== "active") {
+      return panel(title, pairs([[D.version, numText(c.directoryVersion) || MSG.unknown], [D.expires, c.directoryExpires ? when(c.directoryExpires) : MSG.unknown]]), from);
+    }
+    let wire;
+    try {
+      wire = (await api("GET", "meet/cluster/directory", null, { relay: r.id, activity: false })).directory;
+    } catch (e) {
+      return panel(title, el("p", { role: "status" }, fill(D.unreadable, { relay: r.name, message: e.message })));
+    }
+    const d = wire && typeof wire === "object" ? wire.directory : null;
+    if (!d || typeof d !== "object") return panel(title, el("p", null, fill(D.none, { relay: r.name })));
+    return panel(title, pairs([[D.version, numText(d.version)], [D.issued, whenAny(d.issued)], [D.expires, whenAny(d.expires)]]),
+      dataTable({
+        caption: D.nodes, rows: Array.isArray(d.nodes) ? d.nodes.filter((n) => n && typeof n === "object") : [], empty: MSG.noneYet, name: (n) => clean(n.id),
+        cols: [{ key: "id", label: FMSG.cluster.node, cell: (n) => code(n.id) }, { key: "server", label: D.server, cell: (n) => code(n.server) },
+          { key: "address", label: D.address, cell: (n) => (n.address ? code(n.address) : "") }, { key: "port", label: D.port },
+          { key: "region", label: D.region }, { key: "priority", label: D.priority }],
+      }),
+      from);
   }
   // Locations: the relays grouped by site or region, with counts and the worst health per group (the map is phase 4).
   const HEALTH_RANK = { ok: 0, warn: 1, silent: 2, bad: 3 };
@@ -6713,7 +7113,8 @@
     const base = "#/relays/" + encodeURIComponent(id);
     const nav = el("nav", { class: "tabs", "aria-label": d.name || id }, tabs.map(([k, w]) => el("a", { class: "btn", href: base + "?tab=" + k, "aria-current": k === tab ? "page" : null }, w)));
     const tools = admin ? [d.state === "unconfirmed" ? btn(FD["confirm-relay"].button, () => confirmRelay(id), "primary") : null,
-      d.state !== "removed" ? btn(FMSG.rename, () => labelDialog(d)) : null, btn(FMSG.replace, () => go("#/relays/add?replaces=" + encodeURIComponent(id))),
+      d.state !== "removed" ? btn(FMSG.rename, () => labelDialog(d)) : null, ...clusterActions(d).map((a) => btn(a.label, a.run)),
+      btn(FMSG.replace, () => go("#/relays/add?replaces=" + encodeURIComponent(id))),
       d.state !== "removed" ? btn(FMSG.remove, () => removeRelayDialog(d), "danger") : null] : [];
     const kids = [head(u(d.name || id), ...tools), nav];
     if (d.state === "unconfirmed") kids.push(banner("warn", MSG.sev.warn, FW["fleet.unconfirmed"]));
@@ -6737,6 +7138,7 @@
       [FMSG.cols.health, toneChip(healthWord(d.health), healthTone(d.health))], [FMSG.cols.version, d.version || ""], ["OS", d.os || ""],
       ["FIPS mode", yesNo(d.fips)], [W["settings.profile"], d.profile ? FMSG.profileWords[d.profile] || d.profile : ""],
       [FMSG.cols.license, licenseCell(d)], [FMSG.cols.contact, when(d.lastContactAt)], [FMSG.certEnds, d.certNotAfter ? when(d.certNotAfter) : MSG.unknown],
+      ...clusterPairs(d.cluster),
       nodes ? [FMSG.nodes, [nodes.hubsOnline + " of " + nodes.hubs + " hubs online", nodes.spokesOnline + " of " + nodes.spokes + " spokes online", nodes.spokesSilent + " silent"].join(", ")] : [FMSG.nodes, undefined],
       svc ? [FMSG.services, [svc.signer ? FMSG.signer + " " + (svc.signer.healthy ? MSG.yes : MSG.no).toLowerCase() + (svc.signer.daysLeft != null ? ", " + svc.signer.daysLeft + " " + FMSG.daysWord : "") : null,
         svc.push ? FMSG.push + " " + onOff(svc.push.enabled).toLowerCase() + ", " + fillText(FMSG.failures24h, { n: svc.push.failed24h || 0 }) : null].filter(Boolean).join("; ")] : [FMSG.services, undefined],
@@ -7646,19 +8048,13 @@
     });
   }
   // A Seats strip per Meeting Hub relay (11.4): seated of the license's users (no total without a license), the clock
-  // while over, and, while the relay is stopped for its license, seats.stopped with the invite disabled.
+  // while over, and, while the relay is stopped for its license, seats.stopped with the invite disabled. The numbers
+  // are each relay's own `meet/seats` (`people` scope): the read-health counts carry no licensed user count.
   async function seatStrips(mrel, stopped) {
     if (!mrel.length) return null;
-    let lic = null;
-    try {
-      lic = await api("GET", "fleet/licenses", null, { direct: true, activity: false });
-    } catch (e) {
-      lic = null;
-    }
-    const byRelay = new Map(((lic && lic.relays) || []).map((x) => [x.relay, x]));
-    return panel(W["nav.meet.pages"][1], el("ul", { class: "checklist" }, mrel.map((x) => {
-      const l = byRelay.get(x.id) || {};
-      const s = l.seats || {};
+    const views = await Promise.all(mrel.map((x) => api("GET", "meet/seats", null, { relay: x.id, activity: false }).catch(() => null)));
+    return panel(W["nav.meet.pages"][1], el("ul", { class: "checklist" }, mrel.map((x, i) => {
+      const s = views[i] || {};
       const users = s.users;
       const line = stopped(x.id) ? W["seats.stopped"] : s.seated != null && users != null ? fillText(W["seats.summary"], { seated: s.seated, users }) : MSG.unknown;
       const clock = s.clock ? fillText(W["attention.seats-over"], { used: s.seated, users, day: s.clock.day, n: s.overage || Math.max(0, (s.seated || 0) - (users || 0)), date: dayAny(s.clock.unseatAt) }) : "";

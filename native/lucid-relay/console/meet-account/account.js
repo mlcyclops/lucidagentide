@@ -12,7 +12,7 @@
   const $ = (id) => document.getElementById(id);
   const SECTIONS = ["join", "join-done", "signin", "signin-done"];
   const USERNAME = /^[a-z0-9][a-z0-9._-]{2,31}$/;
-  const DEVICES = { computer: "your computer", iphone: "your iPhone" };
+  const DEVICES = { computer: "your computer", iphone: "your iPhone", android: "your Android phone" };
 
   function show(id, title) {
     $("loading").hidden = true;
@@ -212,7 +212,69 @@
     $("title").focus();
   }
 
+  // ---- the organization's brand (contract TH-1 section 5) ---------------------------------
+  // The standard Lucid theme shows until the brand answers, and stays on any failure; joining never waits for it.
+  // Colors go through the CSSOM (allowed by style-src 'self'); every text from the server is set as text.
+  const COLOR = /^#[0-9a-f]{6}$/;
+  const LIGHT = "(prefers-color-scheme: light)";
+
+  // `hex` moved `share` of the way toward white or black.
+  function mix(hex, toward, share) {
+    const n = parseInt(hex.slice(1), 16);
+    const end = toward === "white" ? 255 : 0;
+    return "#" + [n >> 16, (n >> 8) & 255, n & 255]
+      .map((v) => Math.round(v + (end - v) * share).toString(16).padStart(2, "0")).join("");
+  }
+
+  function applyBrand(b) {
+    if (!b || typeof b !== "object" || !COLOR.test(b.accent) || !COLOR.test(b.onAccent)) return;
+    const root = document.documentElement;
+    const forced = b.mode === "dark" || b.mode === "light";
+    if (forced) root.dataset.mode = b.mode;
+    const light = () => (forced ? b.mode === "light" : matchMedia(LIGHT).matches);
+    const paint = () => {
+      root.style.setProperty("--accent", b.accent);
+      root.style.setProperty("--accent-2", mix(b.accent, light() ? "black" : "white", 0.15));
+      root.style.setProperty("--on-accent", b.onAccent);
+    };
+    paint();
+    if (!forced) matchMedia(LIGHT).addEventListener("change", paint);
+    const name = typeof b.name === "string" ? b.name : "";
+    if (name) $("topTitle").textContent = name;
+    if (typeof b.logo === "string" && b.logo.startsWith("/meet/brand/logo?v=")) {
+      // the pi mark stays until the logo has loaded, and for good if it does not
+      const img = document.createElement("img");
+      img.className = "mark";
+      img.alt = name;
+      img.addEventListener("load", () => {
+        img.id = "topMark";
+        $("topMark").replaceWith(img);
+      });
+      img.src = b.logo;
+    }
+    if (typeof b.welcome === "string" && b.welcome) {
+      $("joinLead").textContent = b.welcome;
+      $("joinLead").hidden = false;
+    }
+    if (typeof b.support === "string" && /^(https:\/\/|mailto:)/.test(b.support)) {
+      $("brandHelp").href = b.support;
+      $("brandHelp").hidden = false;
+    }
+  }
+
+  async function loadBrand() {
+    try {
+      const resp = await fetch("/meet/api/brand", { credentials: "omit", cache: "no-cache", redirect: "error" });
+      if (!resp.ok) return;
+      const data = await resp.json();
+      applyBrand(data && data.brand);
+    } catch (e) {
+      // the standard theme stays
+    }
+  }
+
   document.addEventListener("DOMContentLoaded", () => {
+    loadBrand();
     const path = location.pathname.replace(/\/+$/, "");
     if (path === "/meet/join") startJoin();
     else startSignin();

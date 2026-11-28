@@ -73,6 +73,7 @@ const BAD_PLATFORM: &str = "platform must be ios or android";
 const BAD_FCM_TOKEN: &str = "an android token must be 100 to 4096 letters, digits, colons, underscores or hyphens";
 const ANDROID_NO_VOIP: &str = "an android registration takes no voip_token, and callkit must be false";
 const PLATFORM_OFF: &str = "push notifications for this platform are off on this relay";
+const BAD_PHONE: &str = "phone must be true or false";
 pub const SETTLE_HOW: &str = "how must be declined";
 pub const SETTLE_NONE: &str = "no such invitation";
 pub const INBOX_WAIT_ERROR: &str = "wait must be 1 to 25 seconds";
@@ -370,7 +371,10 @@ fn stored_entry(o: &Obj) -> bool {
         Some(Value::Bool(c)) => !(android && *c),
         _ => false,
     };
-    o.len() == 10 + usize::from(o.contains_key("platform"))
+    // PH-1 section 5.4: `phone` is kept only as true
+    let phone_ok = matches!(o.get("phone"), None | Some(Value::Bool(true)));
+    o.len() == 10 + usize::from(o.contains_key("platform")) + usize::from(o.contains_key("phone"))
+        && phone_ok
         && token_ok
         && env_ok
         && pj::as_int(o.get("ts")).is_some()
@@ -732,7 +736,7 @@ impl State {
     }
 
     /// The person is on Do not disturb.
-    fn pu_dnd(&self, principal: &str) -> bool {
+    pub(super) fn pu_dnd(&self, principal: &str) -> bool {
         self.status_of(principal).get("state").and_then(Value::as_str) == Some("dnd")
     }
 
@@ -969,6 +973,49 @@ impl State {
         }
     }
 
+    /// PH-1 revision 2 (contract section 10.3): an inbound text, already kept in `to`'s thread with `number`: the `msg`
+    /// push to the person's devices that are not live for push, `conv` `sms:<number>`, `from` `phone:<number>`, at
+    /// level all (a text mentions no one and answers nothing), never under Do not disturb, at most one per device and
+    /// conversation every RATE_S seconds. A text is plain at the carrier, so its preview is the inner's `text` (its
+    /// first PREVIEW characters), present only when previews are on (3.9).
+    pub(super) fn pu_sms(&mut self, to: &str, number: &str, msg: &Obj) {
+        const PREVIEW: usize = 200;
+        if !self.pu_on() || !self.push_tokens.contains_key(to) || self.pu_dnd(to) {
+            return;
+        }
+        let conv_key = format!("sms:{number}");
+        if self.pu_level(to, &conv_key) != "all" {
+            return;
+        }
+        let mut inner = obj([
+            ("v", Value::from(1)),
+            ("k", Value::from("msg")),
+            ("ts", Value::from((self.pu.now() * 1000.0) as i64)),
+            ("from", Value::from(format!("phone:{number}"))),
+            ("conv", Value::from(conv_key.clone())),
+            ("id", Value::from(pj::text_of(msg, "id"))),
+            ("thread", Value::from("")),
+            ("files", Value::from(0)),
+            ("enc", Value::Bool(false)),
+            ("reply", Value::Bool(false)),
+            ("sms", Value::Bool(true)),
+        ]);
+        if !self.nt_previews_off(to, &conv_key) {
+            inner.insert("text".into(), Value::from(pj::clip(&pj::text_of(msg, "text"), PREVIEW)));
+        }
+        let now = self.pu.mono();
+        self.pu.last.retain(|_, at| now - *at < RATE_S);
+        for (device, row) in self.nt_offline(to) {
+            let rate = (to.to_string(), device.clone(), conv_key.clone());
+            if self.pu.last.contains_key(&rate) {
+                continue;
+            }
+            if self.nt_push(to, &device, &row, Channel::Alert, inner.clone(), false) {
+                self.pu.last.insert(rate, now);
+            }
+        }
+    }
+
     /// The wrap rider (3.4): the newest CE-1 wrap of (cid, the envelope's sender device, its epoch) to this device
     /// whose `seq` is above the device's key cursor, as `{eph, blob, dck_sha256}`.
     fn nt_rider(&mut self, to: &str, device: &str, cid: &str, env: &Obj) -> Option<Obj> {
@@ -1003,7 +1050,7 @@ impl State {
     }
 
     /// A call's level (section 2 gate 2): the lowest of the room's conversation and `dm:<caller>`.
-    fn nt_call_level(&self, from: &str, to: &str, room: &str) -> String {
+    pub(super) fn nt_call_level(&self, from: &str, to: &str, room: &str) -> String {
         let room_level = self.pu_level(to, &self.nt_call_key(from, to, room));
         let caller = self.pu_level(to, &format!("dm:{from}"));
         if rank(&room_level) <= rank(&caller) {
@@ -1084,8 +1131,16 @@ impl State {
         if kind == "live" {
             inner.insert("others".into(), Value::from(others));
         }
+        // PH-1 section 5.4: a phone call carries its `phone` and rings only the devices registered with `phone: true`
+        let caller = inv.get("phone").cloned();
+        if let Some(p) = &caller {
+            inner.insert("phone".into(), p.clone());
+        }
         let mono = self.pu.mono();
         for (device, row) in self.nt_offline(&to) {
+            if caller.is_some() && !phone::row_rings(&row) {
+                continue;
+            }
             let once = (to.clone(), device.clone(), format!("invite:{id}"), kind.clone());
             if self.pu.once.contains_key(&once) {
                 continue;
@@ -1109,7 +1164,7 @@ impl State {
         if !self.pu_on() || !self.push_tokens.contains_key(&to) || self.pu_dnd(&to) || self.nt_call_level(&from, &to, &room) == "off" {
             return;
         }
-        let inner = obj([
+        let mut inner = obj([
             ("v", Value::from(1)),
             ("k", Value::from("missed")),
             ("ts", Value::from((self.pu.now() * 1000.0) as i64)),
@@ -1119,8 +1174,16 @@ impl State {
             ("room", Value::from(room)),
             ("why", Value::from(why)),
         ]);
+        // PH-1 section 5.1: a missed phone call names its caller (`phone`), to the devices it rang
+        let caller = inv.get("phone").cloned();
+        if let Some(p) = &caller {
+            inner.insert("phone".into(), p.clone());
+        }
         let mono = self.pu.mono();
         for (device, row) in self.nt_offline(&to) {
+            if caller.is_some() && !phone::row_rings(&row) {
+                continue;
+            }
             let once = (to.clone(), device.clone(), format!("invite:{id}"), "missed".to_string());
             if self.pu.once.contains_key(&once) {
                 continue;
@@ -1134,11 +1197,15 @@ impl State {
     /// Settle invite `id` of `to` (`how`: answered, declined, missed or cancelled; `device`: the session's for answered
     /// and declined, "" when the relay settled it): every session of `to` hears `invite_settled`. An answered ring is
     /// refunded; missed and cancelled queue the `missed` push after the answer grace.
-    fn nt_settle(&mut self, to: &str, id: &str, how: &str, device: &str, now: f64) {
+    pub(super) fn nt_settle(&mut self, to: &str, id: &str, how: &str, device: &str, now: f64) {
         let Some(inv) = self.invites.get_mut(to).and_then(|l| l.iter_mut().find(|i| pj::text_of(i, "id") == id)) else { return };
         inv.insert("settled".into(), Value::from(how));
         inv.insert("settled_ts".into(), f(now));
         let (from, room) = (pj::text_of(inv, "from"), pj::text_of(inv, "room"));
+        // PH-1 section 5.1: a phone call's ring settled: declined and missed end the caller's call
+        if inv.contains_key("phone") {
+            self.phone_settled(&room, id, how);
+        }
         self.dirty = true;
         let event = obj([("type", Value::from("invite_settled")), ("id", Value::from(id)), ("room", Value::from(room)), ("how", Value::from(how)), ("device", Value::from(device))]);
         self.tell(&[to.to_string()], &event, None);
@@ -1539,6 +1606,12 @@ impl Hub {
                 (pj::b64(&seal), sk, voip_token, *callkit)
             }
         };
+        // PH-1 section 5.4: the device takes phone calls (kept on its row only when true)
+        let phone = match body.get("phone") {
+            None | Some(Value::Null) => false,
+            Some(Value::Bool(b)) => *b,
+            Some(_) => return bad(BAD_PHONE),
+        };
         // PR-1 1.4: whoever loses this token to the new registration, and the caller, may change presence
         let holds = |d: &Value| as_obj(Some(d)).map(|d| d.values().any(|e| e.get("token").and_then(Value::as_str) == Some(token.as_str()))).unwrap_or(false);
         let mut holders: Vec<String> = st.push_tokens.iter().filter(|(p, d)| **p != who.principal && holds(d)).map(|(p, _)| p.clone()).collect();
@@ -1558,7 +1631,7 @@ impl Hub {
         let voip = if callkit { voip_token } else { String::new() };
         let rings = android || (st.pu.voip && !voip.is_empty());
         let platform = if android { ANDROID } else { IOS };
-        let entry = obj([
+        let mut entry = obj([
             ("token", Value::from(token)),
             ("env", Value::from(env.clone())),
             ("ts", Value::from((pj::now() * 1000.0) as i64)),
@@ -1571,6 +1644,9 @@ impl Hub {
             ("callkit", Value::Bool(callkit)),
             ("platform", Value::from(platform)),
         ]);
+        if phone {
+            entry.insert("phone".into(), Value::Bool(true));
+        }
         let devices = st.push_tokens.entry(who.principal.clone()).or_insert_with(|| Value::Object(Obj::new()));
         if !devices.is_object() {
             *devices = Value::Object(Obj::new());
@@ -1694,6 +1770,8 @@ impl Hub {
         for (cid, ts) in as_obj(st.channel_read.get(&who.principal)).into_iter().flatten() {
             reads.insert(format!("channel:{cid}"), ts.clone());
         }
+        // PH-1 revision 2: text threads, `sms:<number>`
+        reads.extend(st.sms_reads(&who.principal));
         Ok(obj([("reads", Value::Object(reads))]))
     }
 
@@ -2732,6 +2810,39 @@ mod tests {
         assert_eq!((&on["push"], &on["push_voip"], &on["notify_previews"]), (&json!(true), &json!(true), &json!(false)));
     }
 
+    /// PH-1 revision 2 (contract 10.3): an inbound text pushes `msg` with `conv: "sms:<number>"`, `from:
+    /// "phone:<number>"` and, while previews are on, the text as its preview.
+    #[test]
+    fn an_inbound_text_pushes_msg_with_its_number_and_preview() {
+        let (h, mut rx) = hub_on();
+        let ben = who("ben@x", IPHONE);
+        let (key, _) = register(&h, &ben, TOKEN, None, true);
+        let number = "+13055550147";
+        let msg = row(json!({"id": "s-0011223344556677", "dir": "in", "text": "Running late", "ts": pj::now(), "status": "received"}));
+        h.st.lock().pu_sms("ben@x", number, &msg);
+        let jobs = sent(&mut rx);
+        assert_eq!(jobs.len(), 1);
+        let inner = inner_of(&h, &jobs[0], &key);
+        assert_eq!((&inner["k"], &inner["conv"], &inner["from"], &inner["id"]), (&json!("msg"), &json!("sms:+13055550147"), &json!("phone:+13055550147"), &json!("s-0011223344556677")));
+        assert_eq!((&inner["text"], &inner["enc"], &inner["sms"], &inner["dev"]), (&json!("Running late"), &json!(false), &json!(true), &json!(IPHONE)));
+        assert_eq!(payload_of(&jobs[0])["aps"]["category"], json!("msg"));
+        // one per device and conversation every RATE_S
+        h.st.lock().pu_sms("ben@x", number, &msg);
+        assert!(sent(&mut rx).is_empty());
+        // previews off: no text
+        fresh(&h);
+        h.st.lock().pu.previews = false;
+        h.st.lock().pu_sms("ben@x", number, &msg);
+        let jobs = sent(&mut rx);
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(inner_of(&h, &jobs[0], &key).get("text"), None);
+        // the thread's level off: none
+        fresh(&h);
+        level(&h, "sms:+13055550147", json!("off"), "all");
+        h.st.lock().pu_sms("ben@x", number, &msg);
+        assert!(sent(&mut rx).is_empty());
+    }
+
     fn sent(rx: &mut Receiver<Job>) -> Vec<Job> {
         let mut out = Vec::new();
         while let Ok(j) = rx.try_recv() {
@@ -3258,7 +3369,7 @@ mod tests {
         let person = pj::b64_strict(answer["key"].as_str().unwrap()).unwrap();
         let soon = pj::now() + 1800.0;
         let create = |title: &str, start: f64| {
-            h.meeting_create(&sa, &ann, Some(&json!(title)), Some(&json!(start)), Some(&json!(start + 1800.0)), Some(&json!(["ben@x"])), None, None, None, None).unwrap()["id"].as_str().unwrap().to_string()
+            h.meeting_create(&sa, &ann, Some(&json!(title)), Some(&json!(start)), Some(&json!(start + 1800.0)), Some(&json!(["ben@x"])), None, None, None, None, None).unwrap()["id"].as_str().unwrap().to_string()
         };
         // a stranger's invite within the hour is active, not Time Sensitive
         let m1 = create("One", soon);
