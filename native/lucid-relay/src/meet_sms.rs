@@ -81,15 +81,25 @@ pub struct Cfg {
     token: String,
 }
 
-/// application/x-www-form-urlencoded escaping: unreserved characters stay, every other byte is %XX.
-fn form_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
-            out.push(b as char);
-        } else {
-            out.push_str(&format!("%{b:02X}"));
-        }
+/// A multipart/form-data body of `fields` (names are ASCII constants; values are sent as they are, UTF-8).
+fn multipart(fields: &[(&str, &str)], boundary: &str) -> String {
+    let mut out = String::new();
+    for (k, v) in fields {
+        out.push_str(&format!("--{boundary}\r\nContent-Disposition: form-data; name=\"{k}\"\r\n\r\n{v}\r\n"));
+    }
+    out.push_str(&format!("--{boundary}--\r\n"));
+    out
+}
+
+/// The fields of a multipart/form-data body (tests and the fake API): `content_type` is the request's header.
+#[cfg(test)]
+pub(crate) fn parse_multipart(content_type: &str, body: &str) -> Vec<(String, String)> {
+    let Some(boundary) = content_type.split("boundary=").nth(1) else { return Vec::new() };
+    let mut out = Vec::new();
+    for part in body.split(&format!("--{boundary}")) {
+        let Some((head, value)) = part.split_once("\r\n\r\n") else { continue };
+        let Some(name) = head.split("name=\"").nth(1).and_then(|n| n.split('"').next()) else { continue };
+        out.push((name.to_string(), value.strip_suffix("\r\n").unwrap_or(value).to_string()));
     }
     out
 }
@@ -99,12 +109,12 @@ impl Cfg {
     /// the method's fields), so the password never sits in a URL or a log. Ok: the answer's JSON object (its `status`
     /// says whether the provider did it); Err: the API could not be reached or did not answer JSON.
     fn call(&self, method: &str, fields: &[(&str, String)]) -> Result<Obj, String> {
-        let esc = form_escape;
-        let mut form = format!("api_username={}&api_password={}&method={}&content_type=json", esc(&self.user), esc(&self.password), esc(method));
-        for (k, v) in fields {
-            form.push_str(&format!("&{k}={}", esc(v)));
-        }
-        let headers = [("Content-Type", "application/x-www-form-urlencoded".to_string()), ("Accept", "application/json".to_string())];
+        // voip.ms's REST endpoint reads a POST only as multipart/form-data (a urlencoded POST is taken for SOAP)
+        let mut all: Vec<(&str, &str)> = vec![("api_username", &self.user), ("api_password", &self.password), ("method", method), ("content_type", "json")];
+        all.extend(fields.iter().map(|(k, v)| (*k, v.as_str())));
+        let boundary = format!("lucid-{}", pj::token_hex(16));
+        let form = multipart(&all, &boundary);
+        let headers = [("Content-Type", format!("multipart/form-data; boundary={boundary}")), ("Accept", "application/json".to_string())];
         let api = &self.api;
         let sent = match &api.tls {
             Some(tls) => crate::meet_tls::https_request_via(tls, &api.host, &api.host, api.port, API_TIMEOUT, "POST", &api.path, &headers, Some(form.as_bytes()), &|_: &[u8]| Ok(()), REPLY_MAX),
@@ -720,7 +730,7 @@ mod tests {
                 for conn in listener.incoming() {
                     let Ok(mut tcp) = conn else { continue };
                     let mut reader = std::io::BufReader::new(tcp.try_clone().unwrap());
-                    let mut length = 0usize;
+                    let (mut length, mut ctype) = (0usize, String::new());
                     loop {
                         let mut line = String::new();
                         if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim_end().is_empty() {
@@ -729,12 +739,14 @@ mod tests {
                         if let Some((k, v)) = line.trim_end().split_once(':') {
                             if k.eq_ignore_ascii_case("content-length") {
                                 length = v.trim().parse().unwrap_or(0);
+                            } else if k.eq_ignore_ascii_case("content-type") {
+                                ctype = v.trim().to_string();
                             }
                         }
                     }
                     let mut body = vec![0u8; length];
                     let _ = reader.read_exact(&mut body);
-                    seen.lock().push(crate::meet::parse_query(&String::from_utf8_lossy(&body)));
+                    seen.lock().push(super::parse_multipart(&ctype, &String::from_utf8_lossy(&body)));
                     let _ = write!(tcp, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}", reply.len());
                 }
             });
