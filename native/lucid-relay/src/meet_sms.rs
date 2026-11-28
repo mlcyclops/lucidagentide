@@ -81,12 +81,25 @@ pub struct Cfg {
     token: String,
 }
 
+/// application/x-www-form-urlencoded escaping: unreserved characters stay, every other byte is %XX.
+fn form_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
 impl Cfg {
     /// One voip.ms API call: an HTTPS POST form (`api_username`, `api_password`, `method`, `content_type=json`, then
     /// the method's fields), so the password never sits in a URL or a log. Ok: the answer's JSON object (its `status`
     /// says whether the provider did it); Err: the API could not be reached or did not answer JSON.
     fn call(&self, method: &str, fields: &[(&str, String)]) -> Result<Obj, String> {
-        let esc = crate::mcp::form_escape;
+        let esc = form_escape;
         let mut form = format!("api_username={}&api_password={}&method={}&content_type=json", esc(&self.user), esc(&self.password), esc(method));
         for (k, v) in fields {
             form.push_str(&format!("&{k}={}", esc(v)));
@@ -94,8 +107,8 @@ impl Cfg {
         let headers = [("Content-Type", "application/x-www-form-urlencoded".to_string()), ("Accept", "application/json".to_string())];
         let api = &self.api;
         let sent = match &api.tls {
-            Some(tls) => crate::meet_tls::https_request_capped(tls, &api.host, api.port, API_TIMEOUT, "POST", &api.path, &headers, Some(form.as_bytes()), &|_: &[u8]| Ok(()), REPLY_MAX),
-            None => crate::meet_tls::http_request_capped(&api.host, api.port, API_TIMEOUT, "POST", &api.path, &headers, Some(form.as_bytes()), REPLY_MAX),
+            Some(tls) => crate::meet_tls::https_request_via(tls, &api.host, &api.host, api.port, API_TIMEOUT, "POST", &api.path, &headers, Some(form.as_bytes()), &|_: &[u8]| Ok(()), REPLY_MAX),
+            None => crate::meet_tls::http_request(&api.host, api.port, API_TIMEOUT, "POST", &api.path, &headers, Some(form.as_bytes())),
         };
         let r = sent.map_err(|e| e.unwrap_or_else(|m| m))?;
         if !(200..300).contains(&r.status) {

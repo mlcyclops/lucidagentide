@@ -2146,13 +2146,21 @@ impl Hub {
         let _ = std::fs::rename(path, PathBuf::from(bad));
     }
 
-    /// Write state.json now (tmp file, then rename).
+    /// Write state.json now (tmp file, then rename); a failed write is logged and left to the upkeep's next save.
     pub fn save(&self) {
-        let Some(path) = self.path() else { return };
+        if let Err(e) = self.save_synced() {
+            log_warn(&e);
+        }
+    }
+
+    /// Write state.json now (tmp file synced, then renamed). Err when it is not on disk: the state stays dirty, so the
+    /// upkeep writes it again. Without a state folder, or on a standby, there is nothing to write (Ok).
+    pub fn save_synced(&self) -> Result<(), String> {
+        let Some(path) = self.path() else { return Ok(()) };
         let _g = self.save_lock.lock();
         // MR-1 2.3: a standby's state.json is the active's copy; its own Hub never writes over it
         if self.cluster().is_some_and(|c| !c.saves_allowed()) {
-            return;
+            return Ok(());
         }
         let data = {
             let mut st = self.st.lock();
@@ -2180,15 +2188,15 @@ impl Hub {
             drop(fh);
             std::fs::rename(&tmp, &path)
         })();
-        if let Err(e) = result {
-            log_warn(&format!("cannot write {}: {e}", path.display()));
+        result.map_err(|e| {
             self.st.lock().dirty = true;
-            return;
-        }
+            format!("cannot write {}: {e}", path.display())
+        })?;
         // MR-1 2.3: a new replica generation for the standby
         if let Some(c) = self.cluster() {
             c.note_saved();
         }
+        Ok(())
     }
 
     /// MR-1 2.4: wait for a save in progress (a node turning standby stops saving first).
