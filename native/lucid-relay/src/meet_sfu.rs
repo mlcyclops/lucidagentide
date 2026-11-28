@@ -14,6 +14,9 @@
 // media server runs on its own thread (it may be slow or down, and callers hold the lock). A child module of
 // meet_hub: it shares the one lock.
 //
+// A phone stay (PH-1, meet_phone: a personal phone call or a meeting that allows phone callers) runs here too, without
+// end-to-end encryption; its own rules replace the ones below.
+//
 // Every sfu stay is end-to-end encrypted (contract E2EE-1); the media server and this relay are untrusted for keys. A
 // seat joins one only with `e2ee: true` (409 otherwise) and never as a web guest (403). The join answer adds
 // `e2ee: {required: true, stay}` (`stay`: the stay's LiveKit room, bound in what seats sign) and the rows carry each
@@ -79,6 +82,17 @@ pub(super) struct Cfg {
     max: usize,
 }
 
+impl Cfg {
+    /// PH-1: the API key LiveKit names as a webhook's `iss`, and the secret it signs webhooks with.
+    pub(super) fn api_key(&self) -> &str {
+        &self.key
+    }
+
+    pub(super) fn secret(&self) -> &[u8] {
+        &self.secret
+    }
+}
+
 /// The stays' media modes and LiveKit rooms (from a stay's first join until it is empty).
 #[derive(Default)]
 pub(super) struct Sfu {
@@ -140,9 +154,27 @@ pub(super) fn spawn(name: &str, f: impl FnOnce() + Send + 'static) {
 /// One LiveKit RoomService call (Twirp, JSON) with a short-lived admin token: `(status, answer)`, `(None, None)` when
 /// the media server could not be reached.
 fn call(cfg: &Cfg, method: &str, body: &Obj, video: Obj) -> (Option<u16>, Option<Obj>) {
+    twirp(cfg, &format!("livekit.RoomService/{method}"), body, obj([("video", Value::Object(video))]))
+}
+
+/// PH-1: one LiveKit SIP service call (Twirp, JSON: `CreateSIPParticipant` and the dispatch rules) with a
+/// short-lived token holding the SIP grant (admin and call) and, for a call into a room, that room's admin grant.
+pub(super) fn sip_call(cfg: &Cfg, method: &str, body: &Obj, room: Option<&str>) -> (Option<u16>, Option<Obj>) {
+    let mut grants = obj([("sip", Value::Object(obj([("admin", Value::Bool(true)), ("call", Value::Bool(true))])))]);
+    if let Some(room) = room {
+        grants.insert("video".into(), Value::Object(admin_video(room)));
+    }
+    twirp(cfg, &format!("livekit.SIP/{method}"), body, grants)
+}
+
+/// One Twirp call (`<package>.<Service>/<Method>`) with the relay's admin token carrying `grants`.
+fn twirp(cfg: &Cfg, service: &str, body: &Obj, grants: Obj) -> (Option<u16>, Option<Obj>) {
     let now = pj::now() as i64;
-    let token = jwt(&obj([("iss", Value::from(cfg.key.clone())), ("sub", Value::from("lucid-meet-relay")), ("nbf", Value::from(now - 10)), ("exp", Value::from(now + ADMIN_TTL)), ("video", Value::Object(video))]), &cfg.secret);
-    let path = format!("/twirp/livekit.RoomService/{method}");
+    let mut claims = obj([("iss", Value::from(cfg.key.clone())), ("sub", Value::from("lucid-meet-relay")), ("nbf", Value::from(now - 10)), ("exp", Value::from(now + ADMIN_TTL))]);
+    claims.extend(grants);
+    let token = jwt(&claims, &cfg.secret);
+    let method = service.rsplit('/').next().unwrap_or(service);
+    let path = format!("/twirp/{service}");
     let headers = [("Authorization", format!("Bearer {token}")), ("Content-Type", "application/json".to_string())];
     let data = pj::dumps(&Value::Object(body.clone()));
     let sent = if cfg.tls {
@@ -196,6 +228,14 @@ fn sealed_caption(text: &str) -> bool {
     digits(epoch) && digits(seq) && !data.is_empty() && data.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'/' | b'='))
 }
 
+/// A LiveKit room's `creation_time` in seconds (protojson writes an int64 as a string), 0 when it does not say.
+fn created_at(room: &Obj) -> f64 {
+    match room.get("creation_time").or_else(|| room.get("creationTime")) {
+        Some(Value::String(s)) => s.parse().unwrap_or(0.0),
+        v => pj::as_num(v).unwrap_or(0.0),
+    }
+}
+
 fn status_text(status: Option<u16>) -> String {
     status.map(|s| s.to_string()).unwrap_or_else(|| "failed".into())
 }
@@ -204,7 +244,7 @@ fn admin_video(lk_room: &str) -> Obj {
     obj([("room", Value::from(lk_room)), ("roomAdmin", Value::Bool(true))])
 }
 
-fn remove_now(cfg: &Cfg, lk_room: &str, who: &str, why: &str) {
+pub(super) fn remove_now(cfg: &Cfg, lk_room: &str, who: &str, why: &str) {
     let (status, _) = call(cfg, "RemoveParticipant", &obj([("room", Value::from(lk_room)), ("identity", Value::from(who))]), admin_video(lk_room));
     // 404: the participant had already gone (or never connected): nothing to remove
     log_info(&format!("sfu remove room={lk_room} identity={who} why={why} status={}", status_text(status)));
@@ -297,6 +337,10 @@ impl State {
     /// _sfu_why: why the stay starting now uses the media server ("" = it does not).
     fn sfu_why(&self, room: &str, large: bool) -> &'static str {
         let Some(cfg) = &self.sfu.cfg else { return "" };
+        // PH-1 section 7: a phone stay (a personal call, a meeting that allows phone callers) always runs here
+        if self.phone_kind(room).is_some() {
+            return "phone";
+        }
         if large {
             return "large";
         }
@@ -335,6 +379,10 @@ impl State {
     pub(super) fn sfu_may_join(&self, room: &str, who: &Identity, ext: &Obj) -> R<()> {
         let large = m::flag(ext.get("large"), "large")?;
         let e2ee = m::flag(ext.get("e2ee"), "e2ee")?;
+        // PH-1 section 7: a phone stay is not end-to-end encrypted; its own rules decide (the `phone` cap, the owner)
+        if let Some(decided) = self.phone_may_join(room, who, ext) {
+            return decided;
+        }
         let sfu = if self.stays.contains_key(room) { self.sfu.media.get(room) == Some(&"sfu") } else { !self.sfu_why(room, large).is_empty() };
         if sfu && who.guest {
             // WA-1 4.3: a guest with its key, an admission and rules allowing large calls
@@ -383,10 +431,12 @@ impl State {
             }
         };
         let peer = &self.peers[peer_id];
-        if format == "legacy" && peer.who.guest {
+        // PH-1 revision 3 (section 11.4): a phone stay is not end-to-end encrypted; its joins checked the `phone` cap
+        let phone = self.phone_stay(&room);
+        if format == "legacy" && peer.who.guest && !phone {
             return forbidden(E2EE_GUESTS);
         }
-        if format == "peer" && !peer_capable(&peer.who, peer.caps.as_deref()) {
+        if format == "peer" && !phone && !peer_capable(&peer.who, peer.caps.as_deref()) {
             return Err(E::Conflict(NEEDS_NEW_APP.into()));
         }
         let mut grant = self.sfu_grant(peer_id);
@@ -396,17 +446,33 @@ impl State {
 
     /// _sfu_stay_created: the media mode of the stay this join starts.
     pub(super) fn sfu_stay_created(&mut self, room: &str, who: &Identity, ext: &Obj) {
+        // PH-1: a personal phone call (sfu_why: "phone") runs on the media server; revision 3: a meeting with a PIN
+        // starts like any stay and is armed for dial-in below
         let why = self.sfu_why(room, ext.get("large") == Some(&Value::Bool(true)));
         let media = if why.is_empty() { "mesh" } else { "sfu" };
         self.sfu.media.insert(room.to_string(), media);
         if media == "sfu" {
-            let lk_room = format!("{room}.s{}", pj::token_hex(6));
+            // PH-1: a personal phone call's stay is the LiveKit room its caller is already in
+            let lk_room = self.phone_lk_room(room).unwrap_or_else(|| format!("{room}.s{}", pj::token_hex(6)));
             self.sfu.rooms.insert(room.to_string(), lk_room.clone());
             self.sfu.presenter.insert(room.to_string(), String::new());
             // check the media server soon after a large call starts (leftovers of a restart)
             self.sfu.next_sync = self.sfu.next_sync.min(pj::now() + SYNC_SOON);
             log_info(&format!("sfu room={room} principal={} media=sfu why={why} sfu_room={lk_room}", who.principal));
         }
+        // PH-1 revision 3 (section 11.2): every new stay of a meeting with a PIN, mesh or media server, is armed
+        self.phone_stay_created(room);
+    }
+
+    /// PH-1 revision 3 (section 11.3): a phone caller switched the stay: it runs on the media server in the dial-in
+    /// room, with no presenter and no identity format (a phone stay needs none); the sync soon deletes the old
+    /// end-to-end encrypted room nobody uses any more.
+    pub(super) fn sfu_phone_switch(&mut self, room: &str, lk_room: &str) {
+        self.sfu.media.insert(room.to_string(), "sfu");
+        self.sfu.rooms.insert(room.to_string(), lk_room.to_string());
+        self.sfu.presenter.insert(room.to_string(), String::new());
+        self.sfu.format.remove(room);
+        self.sfu.next_sync = self.sfu.next_sync.min(pj::now() + SYNC_SOON);
     }
 
     /// The LiveKit room of a large call's stay (its E2EE `stay`), None for a mesh call.
@@ -433,6 +499,10 @@ impl State {
         }
         let pending = self.peers.get(peer_id).map(|p| p.admission_pending).unwrap_or(true);
         let grant = if pending { Value::Null } else { self.sfu_media_grant(peer_id).map(Value::Object).unwrap_or(Value::Null) };
+        // PH-1 section 7: a phone stay says so, never end-to-end encrypted
+        if let Some(phone) = self.phone_join_extra(room) {
+            return obj([("media", Value::from("sfu")), ("sfu", grant), ("e2ee", Value::Object(obj([("required", Value::Bool(false))]))), ("phone", Value::Object(phone))]);
+        }
         let stay = self.sfu.rooms.get(room).cloned().unwrap_or_default();
         // `stay`: the stay's LiveKit room, bound in what seats sign
         let mut e2ee = obj([("required", Value::Bool(true)), ("stay", Value::from(stay))]);
@@ -487,6 +557,10 @@ impl State {
     /// only that identity share a screen).
     pub(super) fn sfu_stage_view(&mut self, room: &str, view: &Obj) {
         let (Some(cfg), Some(lk_room)) = (self.sfu.cfg.clone(), self.sfu.rooms.get(room).cloned()) else { return };
+        // PH-1 section 7: nobody shares a screen in a personal phone call
+        if self.phone_personal(room) {
+            return;
+        }
         let peer = view.get("presenter").and_then(|p| p.get("peer")).map(pj::py_str).unwrap_or_default();
         let now_id = self.peers.get(&peer).filter(|p| p.room == room).map(|p| identity(p, self.sfu_legacy(room))).unwrap_or_default();
         let before = self.sfu.presenter.get(room).cloned().unwrap_or_default();
@@ -523,7 +597,19 @@ impl State {
 
     /// _sfu_encrypted: `room`'s current stay is a large call (end-to-end encrypted, no guests).
     pub(super) fn sfu_encrypted(&self, room: &str) -> bool {
-        self.stays.contains_key(room) && self.sfu.media.get(room) == Some(&"sfu")
+        // PH-1: a phone stay runs on the media server without end-to-end encryption
+        self.stays.contains_key(room) && self.sfu.media.get(room) == Some(&"sfu") && !self.phone_stay(room)
+    }
+
+    /// PH-1: the media server's settings (the phone slice calls LiveKit and checks its webhooks with them).
+    pub(super) fn sfu_cfg(&self) -> Option<Arc<Cfg>> {
+        self.sfu.cfg.clone()
+    }
+
+    /// Unit tests of other slices: a media server nobody listens on (key `k`, secret `s`).
+    #[cfg(test)]
+    pub(super) fn sfu_test_server(&mut self) {
+        self.sfu.cfg = Some(Arc::new(Cfg { url: "ws://127.0.0.1:9".into(), host: "127.0.0.1".into(), port: 9, tls: false, key: "k".into(), secret: b"s".to_vec(), threshold: 9, max: 100 }));
     }
 
     /// _sfu_caption_check: in a large call every caption line is the sender's ciphertext (contract E2EE-2 section 5):
@@ -564,16 +650,22 @@ impl State {
         let who = identity(peer, self.sfu_legacy(&peer.room));
         // the named presenter keeps the screen across a reconnect with a fresh token
         let mut sources: Vec<Value> = SOURCES.iter().map(|s| Value::from(*s)).collect();
-        if self.sfu.presenter.get(&peer.room) == Some(&who) {
+        // PH-1 section 7: a personal phone call carries the microphone only, never a screen
+        let personal = self.phone_personal(&peer.room);
+        if personal {
+            sources.truncate(1);
+        } else if self.sfu.presenter.get(&peer.room) == Some(&who) {
             sources.extend(["screen_share", "screen_share_audio"].map(Value::from));
         }
         let publish = peer.who.kind != "captioner"; // WA-1 5.3: the captioner only listens
+        // PH-1 section 8: the keypad's tones (RFC 4733 through LiveKit publishDtmf) travel as data packets
+        let data = self.phone_stay(&peer.room);
         let video = obj([
             ("room", Value::from(self.sfu.rooms.get(&peer.room).cloned().unwrap_or_default())),
             ("roomJoin", Value::Bool(true)),
             ("canPublish", Value::Bool(publish)),
             ("canSubscribe", Value::Bool(true)),
-            ("canPublishData", Value::Bool(false)),
+            ("canPublishData", Value::Bool(data)),
             ("canPublishSources", Value::Array(if publish { sources } else { Vec::new() })),
         ]);
         let claims = obj([
@@ -595,13 +687,19 @@ impl Hub {
     pub(super) fn sfu_sync(&self, cfg: Arc<Cfg>) {
         let (mut removed, mut deleted) = (0, 0);
         let (_, answer) = call(&cfg, "ListRooms", &Obj::new(), obj([("roomList", Value::Bool(true))]));
-        let names: Vec<String> = answer.as_ref().and_then(|a| a.get("rooms")).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_object).map(|r| pj::s(r, "name")).collect();
+        let names: Vec<(String, f64)> = answer.as_ref().and_then(|a| a.get("rooms")).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_object).map(|r| (pj::s(r, "name"), created_at(r))).collect();
         let active: Vec<(String, String)> = self.st.lock().sfu.rooms.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-        for name in names {
-            if !stay_room(&name) || active.iter().any(|(_, lk)| *lk == name) {
+        for (name, created) in names {
+            // PH-1 section 7: a `lucid-phone_*` room without a phone stay goes too (a relay restart drops calls in
+            // progress), once old enough that its call's webhook cannot still be on its way
+            let phone_room = name.starts_with(phone::LK_PREFIX);
+            if !(stay_room(&name) || phone_room) || active.iter().any(|(_, lk)| *lk == name) {
                 continue;
             }
             if self.st.lock().sfu.rooms.values().any(|lk| *lk == name) {
+                continue;
+            }
+            if phone_room && !self.st.lock().phone_room_unheld(&name, created) {
                 continue;
             }
             delete_room(&cfg, &name, "unknown");
@@ -612,14 +710,24 @@ impl Hub {
             if status != Some(200) {
                 continue;
             }
-            let there: HashSet<String> = answer.as_ref().and_then(|a| a.get("participants")).and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_object).map(|p| pj::s(p, "identity")).collect();
+            // identity -> a SIP participant (LiveKit `kind` SIP, as its name or its number 3)
+            let there: HashMap<String, bool> = answer
+                .as_ref()
+                .and_then(|a| a.get("participants"))
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_object)
+                .map(|p| (pj::s(p, "identity"), p.get("kind") == Some(&Value::from("SIP")) || pj::as_int(p.get("kind")) == Some(3)))
+                .collect();
             let extra: Vec<String> = {
                 let st = self.st.lock();
                 if st.sfu.rooms.get(room) != Some(lk_room) {
                     continue; // the stay ended meanwhile (its room was deleted)
                 }
                 let seats = st.sfu_seats(room);
-                let mut extra: Vec<String> = there.into_iter().filter(|i| !i.is_empty() && !seats.contains(i)).collect();
+                // PH-1 section 7: the phone participants of a live phone stay are not seats and stay
+                let mut extra: Vec<String> = there.into_iter().filter(|(i, sip)| !i.is_empty() && !seats.contains(i) && !st.phone_keeps(room, i, *sip)).map(|(i, _)| i).collect();
                 extra.sort();
                 extra
             };
@@ -644,8 +752,14 @@ impl Hub {
         if st.sfu.media.get(&peer.room) != Some(&"sfu") {
             return Err(E::Conflict(NOT_USED.into()));
         }
-        if !peer.e2ee {
+        // PH-1: a phone stay is the one media server call that is not end-to-end encrypted
+        if !peer.e2ee && !st.phone_stay(&peer.room) {
             return Err(E::Conflict(E2EE_REQUIRED.into()));
+        }
+        // PH-1 revision 3 (section 11.4): a seat a phone caller switched (a guest keeps its seat and asks here) needs
+        // the `phone` cap
+        if st.phone_stay(&peer.room) && !peer.caps.as_ref().is_some_and(|c| c.iter().any(|x| x == "phone")) {
+            return Err(E::Conflict(phone::NEEDS_UPDATE.into()));
         }
         if peer.admission_pending {
             return forbidden(ADMISSION_FIRST);

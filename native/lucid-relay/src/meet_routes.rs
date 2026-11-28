@@ -64,6 +64,19 @@ fn get_route(path: &str) -> Option<Route> {
             c.relay.hub.notify_reads(&who)
         },
         "/v1/dm/history" => dm_history,
+        // PH-1 revision 2 (contract section 10.3): the caller's text threads and a thread's messages
+        "/v1/sms/threads" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            let session = c.q("session", "");
+            c.gate(&who, None, "", &session)?;
+            c.relay.hub.sms_threads(&session, &who)
+        },
+        "/v1/sms/history" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            let session = c.q("session", "");
+            c.gate(&who, None, "", &session)?;
+            c.relay.hub.sms_history(&session, &who, &c.q("number", ""), &c.q("after", "0"), &c.q("limit", "50"))
+        },
         "/v1/channels" => |c: &mut Ctx| {
             let who = c.who(false)?;
             let session = c.q("session", "");
@@ -401,11 +414,11 @@ fn post_route(path: &str) -> Option<Route> {
         },
         "/v1/meetings" => |c: &mut Ctx| {
             let (who, b, session) = session_gate(c)?;
-            c.relay.hub.meeting_create(&session, &who, b.get("title"), b.get("start"), b.get("end"), b.get("attendees"), b.get("description"), b.get("recurrence"), b.get("tz"), b.get("cohosts"))
+            c.relay.hub.meeting_create(&session, &who, b.get("title"), b.get("start"), b.get("end"), b.get("attendees"), b.get("description"), b.get("recurrence"), b.get("tz"), b.get("cohosts"), b.get("phone"))
         },
         "/v1/meetings/update" => |c: &mut Ctx| {
             let (who, b, session) = session_gate(c)?;
-            let changes: Obj = ["title", "start", "end", "attendees", "description", "recurrence", "tz", "cohosts"].iter().filter_map(|k| b.get(*k).map(|v| (k.to_string(), v.clone()))).collect();
+            let changes: Obj = ["title", "start", "end", "attendees", "description", "recurrence", "tz", "cohosts", "phone"].iter().filter_map(|k| b.get(*k).map(|v| (k.to_string(), v.clone()))).collect();
             c.relay.hub.meeting_update(&session, &who, b.get("id"), &changes)
         },
         "/v1/meetings/cancel" => |c: &mut Ctx| {
@@ -417,6 +430,20 @@ fn post_route(path: &str) -> Option<Route> {
             c.relay.hub.meeting_rsvp(&session, &who, b.get("id"), b.get("response"))
         },
         "/v1/invite" => invite,
+        // PH-1 section 5.2: call a phone number from the caller's line (404 without `phone` in relay.json)
+        "/v1/phone/call" => |c: &mut Ctx| {
+            let (who, b, session) = session_gate(c)?;
+            c.relay.hub.phone_call(&session, &who, b.get("to"), b.get("room"))
+        },
+        // PH-1 revision 2 (contract section 10.3): a text from the caller's line, and a text thread's read mark
+        "/v1/sms" => |c: &mut Ctx| {
+            let (who, b, session) = session_gate(c)?;
+            c.relay.hub.sms_send(&session, &who, b.get("to"), b.get("text"))
+        },
+        "/v1/sms/read" => |c: &mut Ctx| {
+            let (who, b, session) = session_gate(c)?;
+            c.relay.hub.sms_read(&session, &who, b.get("number"), b.get("ts"))
+        },
         // NT-1 section 3.5: the caller's own device declines one of their invitations
         "/v1/invite/settle" => |c: &mut Ctx| {
             let who = c.who(false)?;
@@ -1435,6 +1462,8 @@ fn hello(c: &mut Ctx) -> R<Obj> {
     let active = crate::meet_hub::parse_active(b.get("active"), Some(true))?;
     let resume = b.get("resume").and_then(Value::as_str).unwrap_or("");
     let mut reply = c.relay.hub.hello_resume(&who, &c.address, &client, active, resume)?;
+    // PH-1 section 5.3: the hello's `caps` (unknown ones ignored) and the caller's phone line
+    c.relay.hub.phone_hello(&who, b.get("caps"), &mut reply);
     if let Some(info) = c.relay.outdated(&who, &client) {
         c.relay.note_outdated(&who, &info);
         reply.insert("update_required".into(), Value::Object(info));

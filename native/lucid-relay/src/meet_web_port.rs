@@ -34,12 +34,14 @@ const WEB_GET: [&str; 17] = [
     "/v1/whoami", "/v1/inbox", "/v1/events", "/v1/dm/history", "/v1/channels", "/v1/channels/history", "/v1/room/captions", "/v1/files/get", "/v1/files/list", "/v1/chat/devices", "/v1/chat/keys", "/v1/chat/log", "/v1/crl",
     "/v1/org/policy", "/v1/lobby", "/v1/lobby/wait", "/v1/emoji/file",
 ];
-const WEB_POST: [&str; 29] = [
+const WEB_POST: [&str; 31] = [
     "/v1/hello", "/v1/bye", "/v1/status", "/v1/dm", "/v1/dm/read", "/v1/react", "/v1/typing", "/v1/chat", "/v1/chat/edit", "/v1/chat/delete", "/v1/chat/event", "/v1/chat/devices", "/v1/chat/keys",
     "/v1/channels/post", "/v1/channels/read", "/v1/files/start", "/v1/files/chunk", "/v1/files/finish", "/v1/join", "/v1/leave", "/v1/signal", "/v1/ice", "/v1/stage", "/v1/sfu/token", "/v1/e2ee", "/v1/e2ee/keys",
     "/v1/e2ee/roster", "/v1/lobby/leave",
     // answering a recording consent request is not a recording action (WA-1 revision 3)
     "/v1/recording/consent",
+    // PH-1 revision 3 (section 11.4): the web dialer, and declining an incoming phone call
+    "/v1/phone/call", "/v1/invite/settle",
 ];
 /// ...and the stage actions it may take (`lobby_*` only while its seat is the host).
 const WEB_STAGE: [&str; 7] = ["hand", "react", "mute", "present", "stop", "request", "cancel"];

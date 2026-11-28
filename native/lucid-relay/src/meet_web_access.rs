@@ -23,7 +23,8 @@ pub(crate) const ROW_KEYS: [&str; 5] = ["key", "dck", "verified", "admission", "
 const KEY_MAX: usize = 200;
 const CLOCK_MS: f64 = 120.0 * 1000.0;
 const CONFLICT_SHOW: f64 = 60.0;
-const CAPS: [&str; 4] = ["caption_others", "guest_admit", "peer_identity", "self_captions"];
+/// PH-1: `phone`: the app can take a phone stay (meet_phone).
+const CAPS: [&str; 5] = ["caption_others", "guest_admit", "peer_identity", "self_captions", "phone"];
 const CAPTION_MAX: i64 = 8;
 const LINK_MAX: i64 = 1440;
 const CHALLENGE_TTL: f64 = 60.0;
