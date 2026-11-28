@@ -1914,6 +1914,12 @@ demo-P-FIRSTRUN.1: ## P-FIRSTRUN.1 (ADR-0698): one-time toasts ("Make LucidAgent
 	node --check desktop/scripts/demo_p_firstrun_1.mjs
 	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_firstrun_1.mjs; else echo "demo-P-FIRSTRUN.1: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi
 
+.PHONY: demo-P-PLUGINS.PREMIUM2
+demo-P-PLUGINS.PREMIUM2: ## P-PLUGINS.PREMIUM2 (ADR-0699): the Plugins drawer lands on Premium, the Lucid Agent Worlds fold to two rows under a Show all toggle, the Meeting Hub is $9.99/mo per license with Request a quote and the Trainer $9.99/mo. Real-UI proof, wide and narrow (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7811): LUCID_DEMO_BROWSER_URL=http://127.0.0.1:<cdp> LUCID_DEMO_URL=http://127.0.0.1:7811/ node desktop/scripts/demo_p_plugins_premium_2.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/plugin_catalog.test.ts desktop/renderer/plugins_flyout.test.ts tools/ux_pr_gate.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_plugins_premium_2.mjs
+	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_plugins_premium_2.mjs; else echo "demo-P-PLUGINS.PREMIUM2: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi
+
 .PHONY: demo-P-WHATSNEW.1
 demo-P-WHATSNEW.1: ## P-WHATSNEW.1 (ADR-0686): a one-time What's new popup after an upgrade (bundled manifest with pictures, seen version kept engine-side, never over onboarding or the suggestion toast), Dismiss points at About > What's new, About replays it read-only. Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7821, fresh browser profile): LUCID_DEMO_BROWSER_URL=http://127.0.0.1:<cdp> LUCID_DEMO_URL=http://127.0.0.1:7821/ node desktop/scripts/demo_p_whatsnew_1.mjs
 	$(BUN) test $(TEST_IGNORES) desktop/renderer/release_notes.test.ts desktop/renderer/whats_new.test.ts desktop/about.test.ts harness/adr_numbering.test.ts

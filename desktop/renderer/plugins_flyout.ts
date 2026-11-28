@@ -4,12 +4,12 @@
 // desktop/renderer/plugins_flyout.ts - P-PLUGINS.1 (ADR-0461): the Plugins drawer.
 //
 // A drawer that slides out of the Preview panel's left edge over the chat (or, with the Preview panel closed, out of
-// the main work area's right edge; P-WORLDS.STORE1), `min(1180px, 88vw)` wide, with a
-// PREMIUM | FREE | INSTALLED toggle (default PREMIUM, remembered) and techlead187.com-style cards. It replaces the ADR-0158
-// `#scrim` marketplace modal. Every card's state comes from plugin_catalog.ts `decideCardAction`; this module
-// only renders it and runs the side effects through injected dependencies (the market provider for sign-in,
-// checkout, entitlement and government access; the engine bridge for install / start / license), so app.ts
-// keeps the singletons and this file has no hidden globals.
+// the main work area's right edge; P-WORLDS.STORE1), `min(1180px, 88vw)` wide, with a PREMIUM | FREE | INSTALLED
+// toggle (every open lands on PREMIUM unless the caller names a tab, P-PLUGINS.PREMIUM2) and techlead187.com-style cards.
+// It replaces the ADR-0158 `#scrim` marketplace modal. Every card's state comes from plugin_catalog.ts
+// `decideCardAction`; this module only renders it and runs the side effects through injected dependencies (the market
+// provider for sign-in, checkout, entitlement and government access; the engine bridge for install / start /
+// license), so app.ts keeps the singletons and this file has no hidden globals.
 //
 // P-PLUGINS.7 (ADR-0505): a third tab, INSTALLED, lists what is on this machine and is the one place a private
 // plugin (a .lplugin.zip the user picked) is installed, opened and removed. Installing is two explicit steps:
@@ -40,11 +40,11 @@
 
 import { esc } from "./format.ts";
 import { icon, iconBody } from "./icons.ts";
-import { tipEsc } from "./tip_text.ts"; // P-TIP.1 (ADR-0599)
+import { tipEsc, tipValue } from "./tip_text.ts"; // P-TIP.1 (ADR-0599)
 import {
   BLACK_ARROW, FREE_PLUGINS, GATE_TEXT, PLUGIN_LICENSE_NAME, PLUGIN_LICENSE_URL, PREMIUM_PLUGINS, SPONSOR_CREDITS, SPONSOR_PACK_ID, SPONSOR_PICKS, WORLDS_GROUP, WORLD_PACKS_GROUP,
   addonActionLabel, cardActionLabel, decideAddonAction, decideCardAction, fmtDownloads, isBundle, isWorldPlugin, matchesQuery, ownedPackMeta, parseCageOrUei, parseTierPref,
-  provenanceChip, sortFree, storeInstalledVersion,
+  priceLabel, provenanceChip, sortFree, storeInstalledVersion,
   type AddonAction, type CardAction, type DrawerTab, type FreePlugin, type PluginMedia, type PosterTone, type PremiumPlugin, type SoldPlugin,
 } from "./plugin_catalog.ts";
 import { shouldResumeCheckout, type PendingCheckout } from "./pack_cta.ts";
@@ -62,7 +62,6 @@ import type { ToastOpts } from "./ui.ts";
 import type { InstalledWorld } from "./viz_world_api.ts";
 import { installFromStore } from "./world_updates.ts";
 
-export const TIER_PREF_KEY = "lucid.plugins-tier";
 const MEDIA_DIR = "assets/plugins";
 
 // ── geometry ───────────────────────────────────────────────────────────────────────────────────────
@@ -118,13 +117,25 @@ export interface CardNote { tone: "info" | "ok" | "danger"; text: string }
 export function premiumFootHtml(p: PremiumPlugin, a: CardAction, installed: boolean, note: CardNote | null, canExport = false): string {
   const meta = p.sale === "link"
     ? (p.partner ? `<span class="plg-meta">Partner: ${esc(p.partner)}</span>` : `<span class="plg-meta">Own subscription</span>`)
-    : `<span class="plg-meta">${a.kind === "owned" ? esc(ownedPackMeta(a)) : `One-time ${esc(p.price)}`}</span><button type="button" class="plg-lic" data-plg-license="${esc(p.id)}">${installed ? "License" : "License terms"}</button>`;
+    : `<span class="plg-meta">${a.kind === "owned" ? esc(ownedPackMeta(a)) : esc(priceLabel(p))}</span><button type="button" class="plg-lic" data-plg-license="${esc(p.id)}">${installed ? "License" : "License terms"}</button>`
+      // P-PLUGINS.PREMIUM2 (ADR-0699): several licenses go through a quote, in the browser
+      + (p.quoteUrl ? `<button type="button" class="plg-lic" data-plg-ext="${esc(p.quoteUrl)}" data-tip="${esc(tipValue("Request a quote", `Pricing for more than one ${p.name} license.`))}">Request a quote</button>` : "");
   const exportBtn = installed && canExport && isWorldPlugin(p) ? `<button type="button" class="plg-lic" data-plg-wexport="${esc(p.id)}">Export</button>` : "";
   const disabled = a.kind === "installing" || a.kind === "access-pending" || a.kind === "coming-soon" || a.kind === "owned" ? " disabled" : "";
   const busy = a.kind === "installing" ? ` aria-busy="true"` : "";
   const ext = a.kind === "visit" ? icon("arrowRight", 13) : "";
   return `<div class="plg-foot">${meta}${exportBtn}<button type="button" class="plg-act" data-kind="${a.kind}" data-plg-act="${esc(p.id)}"${disabled}${busy}>${esc(cardActionLabel(a))}${ext}</button></div>`
     + (note ? `<p class="plg-note" data-tone="${note.tone}" role="status">${esc(note.text)}</p>` : "");
+}
+
+/** P-PLUGINS.PREMIUM2 (ADR-0699): the Lucid Agent Worlds grid. Folded (not `open`, the default) it shows two full rows
+ *  at whatever column count the drawer's width gives (styles.css hides the cards past them), and a toggle under it
+ *  unfolds the rest; the toggle hides itself when nothing is cut off. A search shows every match, with no toggle. */
+export function worldsGridHtml(cards: readonly string[], searching: boolean, open: boolean): string {
+  const capped = !searching && !open;
+  return `<div class="plg-grid plg-worlds${capped ? " capped" : ""}" id="plgWorldsGrid">${cards.join("")}</div>`
+    + (searching ? "" : `<button type="button" class="plg-more" data-plg-worlds-more aria-controls="plgWorldsGrid" aria-expanded="${!capped}">`
+    + `<span>${capped ? `Show all ${cards.length} worlds` : "Show fewer worlds"}</span>${icon("chevronDown", 13)}</button>`);
 }
 
 export function premiumCardHtml(p: PremiumPlugin, a: CardAction, installed: boolean, note: CardNote | null, canExport = false): string {
@@ -246,6 +257,8 @@ function buySheetLead(p: SoldPlugin, picks: readonly string[]): string {
     return `One-time ${p.price}. Your ${SPONSOR_PICKS} picks unlock right after checkout: ${names}. You also bank ${SPONSOR_CREDITS} world credits to spend on any world over the next 3 years.`;
   }
   if (isBundle(p)) return `One-time ${p.price}. Every Lucid Agent World unlocks right after checkout, plus every world released in the next 3 years, yours to keep.`;
+  // P-PLUGINS.PREMIUM2 (ADR-0699): a subscription says so, and where a team goes for several licenses.
+  if (p.billing === "monthly") return `${priceLabel(p)}, billed monthly. It runs on this machine.${p.quoteUrl ? " For more than one license, use Request a quote on its card." : ""}`;
   return `One-time ${p.price}. Yours for good, with free updates. It runs on this machine and never needs to call home.`;
 }
 
@@ -461,10 +474,12 @@ const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), textar
 export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
   let root: HTMLElement | null = null;
   let opener: HTMLElement | null = null;
-  let tier: DrawerTab = parseTierPref(deps.storage.getItem(TIER_PREF_KEY));
+  let tier: DrawerTab = "premium";
   /** The file on the private-install review sheet: its path and exactly what the engine saw in it. */
   let reviewing: { path: string; view: InspectedFile } | null = null;
   let query = "";
+  /** P-PLUGINS.PREMIUM2 (ADR-0699): the Lucid Agent Worlds unfolded past their two rows; folded again on every open. */
+  let worldsOpen = false;
   let videos: IntersectionObserver | null = null;
   const ents = new Map<string, Entitlement | null>();
   const installed = new Map<string, InstalledPluginView>();
@@ -550,9 +565,9 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
     const govCards = cards((p) => p.section === "government" && !p.group);
     if (!packCards.length && !civ.length && !worldCards.length && !govCards.length) return empty;
     const importBtn = deps.worldImport ? `<button type="button" class="plg-act" data-kind="install" data-plg-wimport>${icon("folder", 13)}Import world file</button>` : "";
-    return `<p class="plg-lede">Lucid Agent World Packs and Lucid Agent Worlds for the Visualize view, then full LUCID apps that install in one click and open in a Preview tab. Each is a one-time purchase, priced on its card, under the <button type="button" class="plg-inline" data-plg-ext="${esc(PLUGIN_LICENSE_URL)}">${esc(PLUGIN_LICENSE_NAME)}</button>.</p>`
+    return `<p class="plg-lede">Lucid Agent World Packs and Lucid Agent Worlds for the Visualize view, then full LUCID apps that install in one click and open in a Preview tab. Each is priced on its card, one-time or monthly, under the <button type="button" class="plg-inline" data-plg-ext="${esc(PLUGIN_LICENSE_URL)}">${esc(PLUGIN_LICENSE_NAME)}</button>.</p>`
       + (packCards.length ? `<section class="plg-sec" aria-labelledby="plgSecPacks"><h3 class="plg-h" id="plgSecPacks">${esc(WORLD_PACKS_GROUP)}</h3><p class="plg-sec-sub">Many worlds in one purchase. The worlds a pack unlocks install from their own cards.</p><div class="plg-grid">${packCards.join("")}</div></section>` : "")
-      + (worldCards.length ? `<section class="plg-sec" aria-labelledby="plgSecWorlds"><div class="plg-inst-head"><h3 class="plg-h" id="plgSecWorlds">${esc(WORLDS_GROUP)}</h3>${importBtn}</div><p class="plg-sec-sub">Themed casts, stages, skies, throwables and storms for the Visualize view. An installed world exports as its signed package file, which imports on another machine with no internet.</p><div class="plg-grid">${worldCards.join("")}</div></section>` : "")
+      + (worldCards.length ? `<section class="plg-sec" aria-labelledby="plgSecWorlds"><div class="plg-inst-head"><h3 class="plg-h" id="plgSecWorlds">${esc(WORLDS_GROUP)}</h3>${importBtn}</div><p class="plg-sec-sub">Themed casts, stages, skies, throwables and storms for the Visualize view. An installed world exports as its signed package file, which imports on another machine with no internet.</p>${worldsGridHtml(worldCards, !!query.trim(), worldsOpen)}</section>` : "")
       + (civ.length ? `<section class="plg-sec" aria-labelledby="plgSecCiv"><h3 class="plg-h" id="plgSecCiv">Civilian</h3><div class="plg-grid">${civ.join("")}</div></section>` : "")
       + (govCards.length ? `<section class="plg-sec" aria-labelledby="plgSecGov"><h3 class="plg-h" id="plgSecGov">Government</h3><p class="plg-sec-sub">Sold only after government access is verified. ${esc(BLACK_ARROW)} partner apps open on the partner's site.</p><div data-plg-gov>${govPanelHtml(deps.user().signedIn, gov, govFormOpen, govError)}</div><div class="plg-grid">${govCards.join("")}</div></section>` : "");
   }
@@ -605,10 +620,22 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
     if (tier === "installed") render(); else paintAllFeet();
   }
 
+  /** P-PLUGINS.PREMIUM2 (ADR-0699): unfold or fold the Lucid Agent Worlds in place (no re-render, so the loops that
+   *  are playing keep playing). Folding brings the section's heading back into view when the toggle has scrolled away. */
+  function toggleWorlds(btn: HTMLElement): void {
+    const grid = root?.querySelector<HTMLElement>("#plgWorldsGrid");
+    if (!grid) return;
+    worldsOpen = !worldsOpen;
+    grid.classList.toggle("capped", !worldsOpen);
+    btn.setAttribute("aria-expanded", String(worldsOpen));
+    const label = btn.querySelector("span");
+    if (label) label.textContent = worldsOpen ? "Show fewer worlds" : `Show all ${grid.children.length} worlds`;
+    if (!worldsOpen) root?.querySelector("#plgSecWorlds")?.scrollIntoView({ block: "nearest" });
+  }
+
   function setTier(t: DrawerTab): void {
     if (t === tier) return;
     tier = t;
-    try { deps.storage.setItem(TIER_PREF_KEY, t); } catch { /* private mode: the choice lasts this session */ }
     render();
   }
 
@@ -681,8 +708,11 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
   }
 
   function open(t?: DrawerTab, from?: HTMLElement | null): void {
-    if (t) setTier(t);
-    if (root) return;
+    if (root) { if (t) setTier(t); return; }
+    // P-PLUGINS.PREMIUM2 (ADR-0699): every open lands on Premium unless the caller names a tab (an add-on's toast opens
+    // Free, a restore opens Installed), and the Lucid Agent Worlds start folded to their two rows.
+    tier = t ?? "premium";
+    worldsOpen = false;
     opener = from ?? opener ?? (document.activeElement as HTMLElement | null);
     root = document.createElement("div");
     root.className = "plg-layer";
@@ -752,6 +782,7 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
     if ((el = hit("[data-plg-tier]"))) { setTier(parseTierPref(el.dataset.plgTier)); return; }
     if ((el = hit("[data-plg-repo]"))) { deps.openExternal(el.dataset.plgRepo!); return; }
     if ((el = hit("[data-plg-ext]"))) { deps.openExternal(el.dataset.plgExt!); return; }
+    if ((el = hit("[data-plg-worlds-more]"))) { toggleWorlds(el); return; } // P-PLUGINS.PREMIUM2 (ADR-0699)
     if ((el = hit("[data-plg-pick]"))) { togglePick(el as HTMLButtonElement); return; }
     if (hit("[data-plg-picks-go]")) { continuePicks(); return; }
     if ((el = hit("[data-plg-checkout]"))) { void checkout(el.dataset.plgCheckout!, el.dataset.plgPicks?.split(",").filter(Boolean)); return; }
@@ -988,7 +1019,8 @@ export function createPluginsFlyout(deps: PluginsFlyoutDeps): PluginsFlyout {
     closeSheet();
     setNote(id, { tone: "info", text: "Opening checkout in your browser." });
     const prov = deps.provider();
-    const url = await prov.checkoutUrl(id, "one-time", picks?.length ? { picks } : undefined).catch(() => null);
+    // P-PLUGINS.PREMIUM2 (ADR-0699): a monthly app checks out as a subscription
+    const url = await prov.checkoutUrl(id, p.billing === "monthly" ? "subscription" : "one-time", picks?.length ? { picks } : undefined).catch(() => null);
     if (url) {
       pending = { packId: id, packName: p.name, startedAt: deps.now(), stage: "checkout" };
       deps.openExternal(url);
