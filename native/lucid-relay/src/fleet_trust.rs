@@ -462,6 +462,12 @@ pub const FLEET_SCOPES: &[ScopeRow] = &[
     row("GET", "meet/support", Health::Refused, PEOPLE),
     row("POST", "meet/support/answer", Health::Write, PEOPLE),
     row("POST", "meet/support/close", Health::Write, PEOPLE),
+    // MR-1 2.5, 4: the cluster node (viewers read it from the relay report's `cluster`)
+    row("GET", "meet/cluster/status", Health::Refused, RH),
+    row("GET", "meet/cluster/directory", Health::Refused, RH),
+    row("POST", "meet/cluster/promote", Health::Write, CONFIG),
+    row("POST", "meet/cluster/demote", Health::Write, CONFIG),
+    row("POST", "meet/cluster/handover", Health::Write, CONFIG),
 ];
 
 pub fn scope_row(method: &str, path: &str) -> Option<&'static ScopeRow> {

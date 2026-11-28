@@ -1831,6 +1831,53 @@
       caState: { ok: "OK", lost: "Key cannot be opened", unreadable: "Records do not read back" }, confirms: "Confirms", disagrees: "Disagrees",
       certPem: "The ended certificate (PEM)", dismiss: "Dismiss", saveDays: "Save", open: "Open",
     },
+    // MR-1 section 4: a Meeting Hub relay cluster (one active relay, one standby) and its signed relay directory.
+    cluster: {
+      col: "Cluster",
+      id: "Cluster",
+      node: "Cluster node",
+      role: "Cluster role",
+      roles: { active: "Active", standby: "Standby", fenced: "Fenced" },
+      epoch: "Epoch",
+      generation: "Replica generation",
+      lag: "Replica lag",
+      peer: "Peer node",
+      witness: "Witness lease",
+      autoPromote: "Standby promotes itself",
+      short: "epoch <epoch>, generation <generation>",
+      lagShort: "lag <lag>",
+      seconds: "<n> s",
+      directory: "Relay directory",
+      directoryShort: "version <version>, ends <time>",
+      promote: "Promote",
+      demote: "Make standby",
+      handover: "Hand over",
+      force: "Promote even if the other relay still answers as active",
+      dlg: {
+        promote: { title: "Promote <name> to the active relay of <cluster>?", body: ["<name> starts serving people with a new epoch. Do this only when the active relay is down: while it still answers as active the relay refuses unless you choose to force it, and two active relays would split the cluster's data."], button: ["Promote"] },
+        demote: { title: "Make <name> a standby of <cluster>?", body: ["<name> stops serving people and copies the active relay. Until another relay of the cluster is active, people cannot connect. Calls in progress drop."], button: ["Make standby"] },
+        handover: { title: "Hand over <cluster> from <name>?", body: ["<name> stops taking changes, waits until the standby has every change, then the standby becomes the active relay and <name> becomes the standby. People reconnect on their own; calls in progress drop and rejoin."], button: ["Hand over"] },
+      },
+      dir: {
+        title: "Relay directory of <cluster>",
+        version: "Version",
+        issued: "Issued",
+        expires: "Ends",
+        nodes: "Nodes",
+        server: "Server",
+        address: "Connects to",
+        port: "Port",
+        region: "Region",
+        priority: "Priority",
+        from: "As <relay> holds it.",
+        none: "<relay> holds no signed relay directory. Sign one with meet_pki.py relay-directory on the signer and post it to the active relay.",
+        unreadable: "The relay directory could not be read from <relay>: <message>",
+      },
+      attention: {
+        "relay-directory-expiring": "The relay directory of cluster <cluster> ends in <days> days. Sign a new one and post it to the active relay.",
+        "relay-directory-expired": "The relay directory of cluster <cluster> has ended. Apps connect only to the relay they enrolled with until a new one is posted.",
+      },
+    },
     // ADR-0343: the Lucid Meet password accounts this console keeps (moved from the old Meet console, ADR-0347).
     accounts: {
       title: "Lucid Meet accounts",
@@ -3714,7 +3761,7 @@
       // AC-2a 8.1: the fleet's own kinds have fleet words; a relay's pushed item is an AC-1 kind (any other kind is
       // dropped), shown as "<relay name>: <words>" with the console's own name for the relay.
       // The console's relay-* kinds (revision 3.4 license items among them) name their relay in the words.
-      const own = fleet() && (!it.relay || String(it.kind).startsWith("relay-")) ? FW["attention." + it.kind] : null;
+      const own = fleet() && (!it.relay || String(it.kind).startsWith("relay-")) ? FW["attention." + it.kind] || FMSG.cluster.attention[it.kind] : null;
       const tpl = own || W["attention." + it.kind];
       if (typeof tpl !== "string") continue;
       const sev = it.severity === "bad" ? "bad" : it.severity === "warn" ? "warn" : "info";
@@ -6582,9 +6629,51 @@
       r.state === "unconfirmed" ? { label: FD["confirm-relay"].button, run: () => confirmRelay(r.id) } : null,
       live ? { label: FMSG.rename, run: () => labelDialog(r) } : null,
       live ? { label: FMSG.scopes, run: () => go("#/relays/" + encodeURIComponent(r.id) + "?tab=scopes") } : null,
+      ...clusterActions(r),
       { label: FMSG.replace, run: () => go("#/relays/add?replaces=" + encodeURIComponent(r.id)) },
       live ? { label: FMSG.remove, run: () => removeRelayDialog(r) } : null,
     ];
+  }
+  // MR-1 4: what a Meeting Hub relay reports of its cluster (r.cluster, null outside one), and the role changes an
+  // admin makes on it through the relay's console routes.
+  const CLUSTER_TONE = { active: "ok", standby: "none", fenced: "warn" };
+  const numText = (v) => (v == null ? undefined : String(v));
+  function clusterRole(c) {
+    return c.role ? toneChip(FMSG.cluster.roles[c.role] || stateWord(c.role), CLUSTER_TONE[c.role]) : MSG.unknown;
+  }
+  const lagText = (c) => (c.lagS == null ? undefined : fillText(FMSG.cluster.seconds, { n: String(Math.round(c.lagS)) }));
+  function clusterCell(r) {
+    const c = r.cluster;
+    if (!c) return "";
+    const lag = lagText(c);
+    return el("span", null, u(c.node), " ", clusterRole(c), " ", fillText(FMSG.cluster.short, { epoch: numText(c.epoch), generation: numText(c.generation) }),
+      lag ? ", " + fillText(FMSG.cluster.lagShort, { lag }) : null);
+  }
+  function clusterPairs(c) {
+    if (!c) return [];
+    const yn = (b) => (b == null ? undefined : yesNo(b));
+    const dir = c.directoryVersion == null ? undefined
+      : fillText(FMSG.cluster.directoryShort, { version: String(c.directoryVersion), time: c.directoryExpires ? when(c.directoryExpires) : MSG.unknown });
+    return [[FMSG.cluster.id, numText(c.cluster)], [FMSG.cluster.node, numText(c.node)], [FMSG.cluster.role, clusterRole(c)],
+      [FMSG.cluster.epoch, numText(c.epoch)], [FMSG.cluster.generation, numText(c.generation)], [FMSG.cluster.lag, lagText(c)],
+      [FMSG.cluster.peer, numText(c.peer)], [FMSG.cluster.witness, yn(c.witness)], [FMSG.cluster.autoPromote, yn(c.autoPromote)], [FMSG.cluster.directory, dir]];
+  }
+  // A standby or fenced relay can be promoted; the active one made a standby or handed over (contract 2.5).
+  function clusterActions(r) {
+    const c = r.cluster;
+    if (!isAdmin() || r.state !== "active" || !c || !c.role) return [];
+    const act = (k) => ({ label: FMSG.cluster[k], run: () => clusterDialog(r, k) });
+    return c.role === "active" ? [act("demote"), act("handover")] : [act("promote")];
+  }
+  function clusterDialog(r, k) {
+    const force = k === "promote" ? [{ kind: "select", key: "force", label: FMSG.cluster.force, options: yesNoOptions(), value: "no" }] : [];
+    confirmDialog({
+      spec: FMSG.cluster.dlg[k], vals: { name: r.name, cluster: r.cluster.cluster || "" }, name: r.name, id: r.id, danger: true, reaches: [r.name],
+      fields: force.concat([{ kind: "reason" }]),
+      run: (v) => post("meet/cluster/" + k, k === "promote" ? { force: v.force === "yes", reason: v.reason } : { reason: v.reason },
+        { action: "meet.cluster." + k, target: "-" }, { relay: r.id }),
+      done: relaysChanged,
+    });
   }
   function relaysTable(rows, caption, productFixed, c) {
     const q = c ? c.q : new URLSearchParams();
@@ -6601,6 +6690,7 @@
         { key: "site", label: FMSG.cols.site },
         { key: "version", label: FMSG.cols.version },
         { key: "license", label: FMSG.cols.license, cell: licenseCell, sort: (r) => (r.license ? r.license.state : "") },
+        rows.some((r) => r.cluster) ? { key: "cluster", label: FMSG.cluster.col, cell: clusterCell, sortable: false } : null,
         { key: "health", label: FMSG.cols.health, cell: (r) => toneChip(healthWord(r.health), healthTone(r.health)) },
         { key: "lastContactAt", label: FMSG.cols.contact, cell: (r) => when(r.lastContactAt) },
         { key: "state", label: FMSG.cols.state, cell: (r) => el("span", null, relayStateWord(r.state), " ", relayChips(r)), sortable: false },
@@ -6615,11 +6705,46 @@
     const rows = await fleetRelays(true);
     return [head(pageLabel("relays", "list"), addLink()), panel(null, relaysTable(rows, pageLabel("relays", "list"), null, c))];
   };
-  function productRelays(group, all, c) {
+  async function productRelays(group, all, c) {
     const rows = all.filter((x) => x.product === group);
     const title = pageLabel(group, "relays");
     if (!rows.length) return [head(title), panel(null, el("p", null, FW["fleet.no-relays-" + group]), addLink())];
-    return [head(title, addLink()), panel(null, relaysTable(rows, title, group, c))];
+    return [head(title, addLink()), panel(null, relaysTable(rows, title, group, c)), ...(group === "meet" ? await directoryPanels(rows) : [])];
+  }
+  // MR-1 4: each cluster's signed relay directory, read from its active relay (admins: version, dates and nodes) or as
+  // its relays report it (version and end date).
+  async function directoryPanels(rows) {
+    const pick = new Map();
+    for (const r of rows.filter((x) => x.cluster && x.cluster.cluster && x.state !== "removed")) {
+      const cur = pick.get(r.cluster.cluster);
+      if (!cur || (r.cluster.role === "active" && cur.cluster.role !== "active")) pick.set(r.cluster.cluster, r);
+    }
+    const keys = [...pick.keys()].sort();
+    return Promise.all(keys.map((k) => directoryPanel(fill(FMSG.cluster.dir.title, { cluster: k }), pick.get(k))));
+  }
+  async function directoryPanel(title, r) {
+    const c = r.cluster;
+    const D = FMSG.cluster.dir;
+    const from = el("p", { class: "note" }, fill(D.from, { relay: r.name }));
+    if (!isAdmin() || r.state !== "active") {
+      return panel(title, pairs([[D.version, numText(c.directoryVersion) || MSG.unknown], [D.expires, c.directoryExpires ? when(c.directoryExpires) : MSG.unknown]]), from);
+    }
+    let wire;
+    try {
+      wire = (await api("GET", "meet/cluster/directory", null, { relay: r.id, activity: false })).directory;
+    } catch (e) {
+      return panel(title, el("p", { role: "status" }, fill(D.unreadable, { relay: r.name, message: e.message })));
+    }
+    const d = wire && typeof wire === "object" ? wire.directory : null;
+    if (!d || typeof d !== "object") return panel(title, el("p", null, fill(D.none, { relay: r.name })));
+    return panel(title, pairs([[D.version, numText(d.version)], [D.issued, whenAny(d.issued)], [D.expires, whenAny(d.expires)]]),
+      dataTable({
+        caption: D.nodes, rows: Array.isArray(d.nodes) ? d.nodes.filter((n) => n && typeof n === "object") : [], empty: MSG.noneYet, name: (n) => clean(n.id),
+        cols: [{ key: "id", label: FMSG.cluster.node, cell: (n) => code(n.id) }, { key: "server", label: D.server, cell: (n) => code(n.server) },
+          { key: "address", label: D.address, cell: (n) => (n.address ? code(n.address) : "") }, { key: "port", label: D.port },
+          { key: "region", label: D.region }, { key: "priority", label: D.priority }],
+      }),
+      from);
   }
   // Locations: the relays grouped by site or region, with counts and the worst health per group (the map is phase 4).
   const HEALTH_RANK = { ok: 0, warn: 1, silent: 2, bad: 3 };
@@ -6713,7 +6838,8 @@
     const base = "#/relays/" + encodeURIComponent(id);
     const nav = el("nav", { class: "tabs", "aria-label": d.name || id }, tabs.map(([k, w]) => el("a", { class: "btn", href: base + "?tab=" + k, "aria-current": k === tab ? "page" : null }, w)));
     const tools = admin ? [d.state === "unconfirmed" ? btn(FD["confirm-relay"].button, () => confirmRelay(id), "primary") : null,
-      d.state !== "removed" ? btn(FMSG.rename, () => labelDialog(d)) : null, btn(FMSG.replace, () => go("#/relays/add?replaces=" + encodeURIComponent(id))),
+      d.state !== "removed" ? btn(FMSG.rename, () => labelDialog(d)) : null, ...clusterActions(d).map((a) => btn(a.label, a.run)),
+      btn(FMSG.replace, () => go("#/relays/add?replaces=" + encodeURIComponent(id))),
       d.state !== "removed" ? btn(FMSG.remove, () => removeRelayDialog(d), "danger") : null] : [];
     const kids = [head(u(d.name || id), ...tools), nav];
     if (d.state === "unconfirmed") kids.push(banner("warn", MSG.sev.warn, FW["fleet.unconfirmed"]));
@@ -6737,6 +6863,7 @@
       [FMSG.cols.health, toneChip(healthWord(d.health), healthTone(d.health))], [FMSG.cols.version, d.version || ""], ["OS", d.os || ""],
       ["FIPS mode", yesNo(d.fips)], [W["settings.profile"], d.profile ? FMSG.profileWords[d.profile] || d.profile : ""],
       [FMSG.cols.license, licenseCell(d)], [FMSG.cols.contact, when(d.lastContactAt)], [FMSG.certEnds, d.certNotAfter ? when(d.certNotAfter) : MSG.unknown],
+      ...clusterPairs(d.cluster),
       nodes ? [FMSG.nodes, [nodes.hubsOnline + " of " + nodes.hubs + " hubs online", nodes.spokesOnline + " of " + nodes.spokes + " spokes online", nodes.spokesSilent + " silent"].join(", ")] : [FMSG.nodes, undefined],
       svc ? [FMSG.services, [svc.signer ? FMSG.signer + " " + (svc.signer.healthy ? MSG.yes : MSG.no).toLowerCase() + (svc.signer.daysLeft != null ? ", " + svc.signer.daysLeft + " " + FMSG.daysWord : "") : null,
         svc.push ? FMSG.push + " " + onOff(svc.push.enabled).toLowerCase() + ", " + fillText(FMSG.failures24h, { n: svc.push.failed24h || 0 }) : null].filter(Boolean).join("; ")] : [FMSG.services, undefined],
@@ -7646,19 +7773,13 @@
     });
   }
   // A Seats strip per Meeting Hub relay (11.4): seated of the license's users (no total without a license), the clock
-  // while over, and, while the relay is stopped for its license, seats.stopped with the invite disabled.
+  // while over, and, while the relay is stopped for its license, seats.stopped with the invite disabled. The numbers
+  // are each relay's own `meet/seats` (`people` scope): the read-health counts carry no licensed user count.
   async function seatStrips(mrel, stopped) {
     if (!mrel.length) return null;
-    let lic = null;
-    try {
-      lic = await api("GET", "fleet/licenses", null, { direct: true, activity: false });
-    } catch (e) {
-      lic = null;
-    }
-    const byRelay = new Map(((lic && lic.relays) || []).map((x) => [x.relay, x]));
-    return panel(W["nav.meet.pages"][1], el("ul", { class: "checklist" }, mrel.map((x) => {
-      const l = byRelay.get(x.id) || {};
-      const s = l.seats || {};
+    const views = await Promise.all(mrel.map((x) => api("GET", "meet/seats", null, { relay: x.id, activity: false }).catch(() => null)));
+    return panel(W["nav.meet.pages"][1], el("ul", { class: "checklist" }, mrel.map((x, i) => {
+      const s = views[i] || {};
       const users = s.users;
       const line = stopped(x.id) ? W["seats.stopped"] : s.seated != null && users != null ? fillText(W["seats.summary"], { seated: s.seated, users }) : MSG.unknown;
       const clock = s.clock ? fillText(W["attention.seats-over"], { used: s.seated, users, day: s.clock.day, n: s.overage || Math.max(0, (s.seated || 0) - (users || 0)), date: dayAny(s.clock.unseatAt) }) : "";

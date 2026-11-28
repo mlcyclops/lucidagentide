@@ -263,6 +263,20 @@ fn one(port: &Port, reader: &mut BufReader<Tls>, address: &str) -> std::io::Resu
         let sent = json(reader.get_mut(), &port.csp, 404, &obj([("error", Value::from(UNKNOWN))]), &[]);
         return Ok(sent.is_ok() && !close && !post);
     }
+    // MR-1 2.4: a standby or fenced node refuses guests as it refuses members; on the active a guest's write is
+    // counted until it is answered, so a handover can wait for it
+    let _admitted = match port.hub.cluster().cloned().map(|c| c.admit(&head.method, &path)) {
+        Some(Err((status, body))) => {
+            let post = head.method == "POST";
+            if post {
+                m::drain_unread(reader, &head, false);
+            }
+            let sent = json(reader.get_mut(), &port.csp, status, &body, &[]);
+            return Ok(sent.is_ok() && !close && !post);
+        }
+        Some(Ok(admitted)) => admitted,
+        None => None,
+    };
     // AC-1 2.4 (R42-1): every guest route serves people, so it answers `license-inactive` while service is stopped
     let refused = port.hub.gate().and_then(|g| g.admits_guest(&head.method, &path).err());
     let mut req = Req { port, head: &head, query: m::parse_query(&query), reader: &mut *reader, address, body_read: false, close: false };

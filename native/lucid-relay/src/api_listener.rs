@@ -106,6 +106,10 @@ pub trait Source: Send + Sync {
     fn spokes(&self, _org: &str, _view: &str, _query: &str, _people: bool) -> Option<Result<Value, crate::fleet_wire::Refusal>> {
         None
     }
+    /// MR-1 2.4: the 503 every route answers while this relay is a standby or fenced cluster node; None while it serves.
+    fn cluster_refusal(&self, _method: &str, _path: &str) -> Option<(u16, Value)> {
+        None
+    }
 }
 
 struct RelaySource {
@@ -158,6 +162,11 @@ impl Source for RelaySource {
 
     fn events(&self) -> Option<Arc<crate::api_events::EventLog>> {
         self.relay.upgrade()?.api_events()
+    }
+
+    fn cluster_refusal(&self, method: &str, path: &str) -> Option<(u16, Value)> {
+        let (status, body) = self.relay.upgrade()?.hub.cluster()?.refusal(method, path)?;
+        Some((status, Value::Object(body)))
     }
 }
 
@@ -473,7 +482,11 @@ impl Api {
     /// One request; every answer carries `X-Lucid-Request-Id` (the audit `rid` of its decision).
     pub fn answer(&self, req: &Req, now: i64) -> Reply {
         let rid = res::rid();
-        let mut r = self.route(req, &rid, now);
+        // MR-1 2.4: a standby or fenced node takes nothing on this port either (the contract's 503 body)
+        let mut r = match self.source.cluster_refusal(req.method, req.path) {
+            Some((status, body)) => Reply::json(status, body),
+            None => self.route(req, &rid, now),
+        };
         if !r.headers.iter().any(|(k, _)| *k == "X-Lucid-Request-Id") {
             r.headers.push(("X-Lucid-Request-Id", rid));
         }
@@ -485,9 +498,12 @@ impl Api {
     /// refusal is in its chain (9.4; 503 when it cannot be), and one about an unknown org is a security line (unless
     /// the limiter refused it, so a flood does not flood the log). Outside every namespace it is answered as is.
     pub fn refuse_early(&self, method: &str, path: &str, source: IpAddr, refused: Reply, rid: &str, now: i64) -> Reply {
-        let mut r = match res::org_of(path) {
-            None => refused,
-            Some(org) => {
+        // MR-1 2.4: a standby or fenced node writes nothing, not even a refusal into a chain
+        let cluster = self.source.cluster_refusal(method, path).map(|(status, body)| Reply::json(status, body));
+        let mut r = match (cluster, res::org_of(path)) {
+            (Some(standby), _) => standby,
+            (None, None) => refused,
+            (None, Some(org)) => {
                 let r = res::charged(self.state.source_ok(source, now), refused);
                 if self.view(org, now).is_some() {
                     let audit = self.source.audit();
@@ -1256,6 +1272,59 @@ mod tests {
         assert_eq!(kids[1], one.body["keys"][0]["kid"].as_str().unwrap());
         let three = api.answer(&get("/api/orgs/acme/local/jwks.json"), NOW + KEY_ROTATE_S + KEY_OVERLAP_S);
         assert_eq!(three.body["keys"].as_array().unwrap().len(), 1);
+    }
+
+    /// MR-1 2.4: the test source as a standby cluster node.
+    struct StandbySource(TestSource);
+    impl Source for StandbySource {
+        fn audit(&self) -> Option<Arc<dyn AuditLog>> {
+            self.0.audit()
+        }
+        fn console_connected(&self) -> bool {
+            self.0.console_connected()
+        }
+        fn product(&self) -> Product {
+            self.0.product()
+        }
+        fn relay_id(&self) -> Option<String> {
+            self.0.relay_id()
+        }
+        fn snapshot(&self, org: &str) -> Option<ApiMapStore> {
+            self.0.snapshot(org)
+        }
+        fn owner_active(&self, p: &str) -> bool {
+            self.0.owner_active(p)
+        }
+        fn pseudonym_ready(&self, org: &str) -> bool {
+            self.0.pseudonym_ready(org)
+        }
+        fn vault(&self) -> Option<Arc<dyn VaultLock>> {
+            self.0.vault()
+        }
+        fn licensed(&self) -> bool {
+            self.0.licensed()
+        }
+        fn cluster_refusal(&self, _method: &str, _path: &str) -> Option<(u16, Value)> {
+            Some((503, json!({"ok": false, "code": "standby", "error": crate::meet_cluster::STANDBY_WORDS, "active": "lab"})))
+        }
+    }
+
+    #[test]
+    fn a_standby_answers_every_api_route_503() {
+        let dir = tmp();
+        let key = client_key();
+        let audit = Arc::new(ApiAudit::open(Some(dir.path().join("standby-chains").as_path()), "r_01", Arc::new(NoSigner), Arc::new(Keys), NOW));
+        let inner = TestSource { store: store(&key, json!({"r_01": ORIGIN})), vault: Arc::new(parking_lot::Mutex::new(MemVault::default())), pseudonym: true, licensed: true, audit: audit.clone() };
+        let api = Api::new(Box::new(StandbySource(inner)), dir.path());
+        let form = token_form(&key, "monitor.read");
+        let proof = dpop_proof();
+        let early = api.refuse_early("POST", "/api/orgs/acme/local/oauth/token", "10.40.0.9".parse().unwrap(), res::problem(413, "too-large", "Too large."), &res::rid(), NOW);
+        for r in [api.answer(&get("/api/orgs/acme/local/jwks.json"), NOW), api.answer(&get("/api/orgs/acme/v1/health"), NOW), api.answer(&token_req(&form, Some(&proof)), NOW), early] {
+            assert_eq!((r.status, r.body.clone()), (503, json!({"ok": false, "code": "standby", "error": crate::meet_cluster::STANDBY_WORDS, "active": "lab"})));
+            assert!(r.headers.iter().any(|(k, _)| *k == "X-Lucid-Request-Id"));
+        }
+        // nothing was decided, so nothing is in the chain
+        assert!(actions(&audit).is_empty());
     }
 
     /// API-1d 6.3: a spokes relay's source (the test source as a spokes relay that answers its own views).

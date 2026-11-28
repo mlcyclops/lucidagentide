@@ -412,7 +412,12 @@ mod flock {
 /// Take `fleet.lock` in `dir` (creating the folder), or say why not: CLI_FLEET_RUNNING while another process holds it.
 pub fn fleet_lock(dir: &Path) -> Result<FleetLock, String> {
     let _ = crate::store::make_dir(dir);
-    let path = dir.join(FLEET_LOCK);
+    file_lock(&dir.join(FLEET_LOCK))
+}
+
+/// Take an exclusive advisory lock on `path` (MR-1 `cluster.lock` too), or CLI_FLEET_RUNNING while another process
+/// holds it.
+pub fn file_lock(path: &Path) -> Result<FleetLock, String> {
     let mut o = std::fs::OpenOptions::new();
     o.read(true).write(true).create(true).truncate(false);
     #[cfg(unix)]
@@ -426,7 +431,7 @@ pub fn fleet_lock(dir: &Path) -> Result<FleetLock, String> {
         // No sharing: a second open, by any process, fails while this handle lives.
         o.share_mode(0);
     }
-    let file = match o.open(&path) {
+    let file = match o.open(path) {
         Ok(f) => f,
         Err(e) if e.raw_os_error() == Some(32) || e.raw_os_error() == Some(33) => return Err(CLI_FLEET_RUNNING.into()),
         Err(e) => return Err(format!("cannot open {}: {e}", path.display())),
