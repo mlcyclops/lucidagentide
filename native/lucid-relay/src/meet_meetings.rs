@@ -241,6 +241,32 @@ fn organizer_of(m: &Obj) -> String {
     m.get("organizer").and_then(|o| o.get("principal")).and_then(Value::as_str).unwrap_or_default().to_string()
 }
 
+/// API-1 revision 8 1.2 item 3: the people a scheduled meeting can show in a meeting: its organizer and the attendees
+/// whose `response` is `accept` (none for a canceled meeting).
+pub(super) fn meeting_accepted(m: &Obj) -> Vec<String> {
+    if pj::truthy(m.get("canceled")) {
+        return Vec::new();
+    }
+    let mut out = vec![organizer_of(m)];
+    out.extend(
+        m.get("attendees")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|a| a.get("response").and_then(Value::as_str) == Some("accept"))
+            .filter_map(|a| a.get("principal").and_then(Value::as_str))
+            .map(str::to_string),
+    );
+    out
+}
+
+/// API-1 revision 8 1.2 item 3: an occurrence of this meeting (not canceled) is in progress at `t` (s): it started
+/// at or before `t` and ends after it.
+pub(super) fn meeting_in_progress(m: &Obj, t: f64) -> bool {
+    !pj::truthy(m.get("canceled"))
+        && meeting_occurrences(pj::num(m, "start"), pj::num(m, "end"), &pj::text_of(m, "recurrence"), &pj::text_of(m, "tz"), t, t, 4).iter().any(|(s, e)| *s <= t && t < *e)
+}
+
 impl State {
     /// _meeting_person: a person as a meeting names them, with the name the directory has now.
     fn meeting_person(&self, principal: &str, name: &str) -> Obj {

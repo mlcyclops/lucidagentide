@@ -347,6 +347,16 @@ fn post_route(path: &str) -> Option<Route> {
             let (who, b, session) = session_gate(c)?;
             c.relay.hub.activity(&session, &who, b.get("active"))
         },
+        // API-1 revision 8 2.1: the person's own calendar busy time (the Hub's calendar sync)
+        "/v1/presence/calendar" => |c: &mut Ctx| {
+            let (who, b, session) = session_gate(c)?;
+            c.relay.hub.presence_calendar(&session, &who, b.get("blocks"))
+        },
+        // API-1 revision 8 2.2: the person's out of office
+        "/v1/ooo" => |c: &mut Ctx| {
+            let (who, b, session) = session_gate(c)?;
+            c.relay.hub.presence_ooo(&session, &who, &b)
+        },
         "/v1/admin/organizations" => |c: &mut Ctx| {
             let (who, b) = (c.who(false)?, c.body()?);
             c.relay.hub.admin_set_organization(&pj::s(&b, "session"), &who, b.get("principal"), b.get("id"), b.get("label"), b.get("remove"))

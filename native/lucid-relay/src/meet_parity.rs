@@ -574,8 +574,9 @@ impl State {
         row.and_then(|r| r.get("role").and_then(Value::as_str).map(str::to_owned)).unwrap_or_default()
     }
 
-    /// Revision 4 7.1: a call event, kept for the event thread (the oldest goes past `CALL_EVENTS_MAX`).
-    fn pa_event(&mut self, kind: &'static str, data: Value, owner: String) {
+    /// Revision 4 7.1: a call event, kept for the event thread (the oldest goes past `CALL_EVENTS_MAX`). Revision 8
+    /// 4.7: also `presence.changed` (meet_hub's `pr_flush`).
+    pub(super) fn pa_event(&mut self, kind: &'static str, data: Value, owner: String) {
         if self.pa.events.len() >= CALL_EVENTS_MAX {
             self.pa.events.remove(0);
         }

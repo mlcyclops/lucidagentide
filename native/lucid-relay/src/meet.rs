@@ -1688,6 +1688,18 @@ impl crate::fleet_agent::MeetHooks for MeetFleet {
     }
 }
 
+/// API-1 revision 8 4.6: the application sessions, calendar blocks and out of office records of `org` clients that
+/// are no longer live in the map pinned here (suspended, expired, deleted or without presence.write) stop counting.
+/// Run after every pinned map and journal entry, and from the relay's upkeep (at start and every minute) so a
+/// registration that simply runs out is caught too. The snapshot is taken and its lock released before the hub's
+/// presence store is locked.
+pub(crate) fn presence_retain(hub: &Hub, org: &str) {
+    if let Some(store) = hub.api_org_snapshot(org) {
+        let now = crate::codec::now_ms() / 1000;
+        hub.presence_retain_clients(org, &|client: &str| crate::api_presence::writer_live(&store, org, client, now));
+    }
+}
+
 /// API-1d 2.4: the API ops of the link on a Meeting Hub relay (behavior unchanged from the API part of `MeetHooks`).
 impl crate::fleet_agent::ApiHooks for MeetFleet {
     fn api_heads(&self) -> Value {
@@ -1696,7 +1708,7 @@ impl crate::fleet_agent::ApiHooks for MeetFleet {
 
     fn api_request(&self, op: &str, body: &Value) -> Option<Result<Value, crate::fleet_wire::Refusal>> {
         // MR-1 2.4: a standby or fenced node takes no api map, journal entry, hold or export (it would diverge)
-        let writes = matches!(op, "api-map" | "api-tighten" | "api-hold" | "api-export" | "api-export-cancel");
+        let writes = matches!(op, "api-map" | "api-tighten" | "api-hold" | "api-export" | "api-export-cancel" | "api-presence-write");
         if let Some(Err((code, words))) = self.relay.upgrade().filter(|_| writes).map(|r| r.hub.cluster_writes()) {
             return Some(Err(crate::fleet_wire::Refusal::new(503, code, words)));
         }
@@ -1707,11 +1719,31 @@ impl crate::fleet_agent::ApiHooks for MeetFleet {
             "api-export" | "api-export-status" | "api-export-cancel" => crate::api_exports_relay::request(&r, op, body),
             // API-1 revision 4 13.1
             "api-directory-status" => crate::api_sso_status::request(&r, body),
+            // API-1 revision 8 5: the hub's presence views and writes
+            "api-presence" => crate::api_presence::ReadArgs::of(body).and_then(|a| r.hub.api_presence_read(&a.org, &a.people, a.after.as_deref(), a.limit)),
+            "api-presence-write" => {
+                let answer = crate::api_presence::WriteArgs::of(body).and_then(|a| {
+                    // revision 8 4.6: a write the console let through before this relay applied the client's suspension
+                    // (or saw its registration end) is judged against the map pinned here now, so it never outlives
+                    // the cleanup; an org not served falls through to the hub's `org-not-served`
+                    let now = crate::codec::now_ms() / 1000;
+                    if r.hub.api_org_snapshot(&a.org).is_some_and(|store| !crate::api_presence::writer_live(&store, &a.org, &a.client_id, now)) {
+                        return Err(crate::fleet_wire::Refusal::new(403, "suspended", "That client may not write presence for this organization."));
+                    }
+                    r.hub.api_presence_write(&a.org, &a.client_id, &a.client_name, &a.principal, &a.kind, &a.body)
+                });
+                // revision 8 7: the relay's families follow each write
+                let (writes, sessions) = r.hub.presence_metrics();
+                crate::api_catalog::counters::set_presence(writes, sessions);
+                answer
+            }
             _ => {
                 let answer = r.hub.api_fleet_request(op, body);
                 // 5.3.3: a new pin or an applied journal entry reaches the org's archive (the lock is released here)
                 if answer.is_ok() && matches!(op, "api-map" | "api-tighten") {
-                    crate::api_exports_relay::state_changed(&r, body.get("org").and_then(Value::as_str).unwrap_or_default());
+                    let org = body.get("org").and_then(Value::as_str).unwrap_or_default();
+                    crate::api_exports_relay::state_changed(&r, org);
+                    presence_retain(&r.hub, org);
                 }
                 answer
             }
@@ -3100,6 +3132,33 @@ mod tests {
         g.welcome(Some(&id));
         assert!(!g.ca_held());
         assert!(g.meet_pki().is_null(), "meetPki is null without fleet_pki");
+    }
+
+    /// API-1 revision 8 4.6: an `api-presence-write` is judged against the map pinned on this relay now, so a client it
+    /// does not hold as a live writer (here: no map names it) is refused `suspended` and stores nothing; and the
+    /// retention the upkeep runs at start and every minute drops what such a client left behind.
+    #[test]
+    fn r8_presence_writes_and_retention_follow_the_relays_own_map() {
+        use crate::fleet_agent::ApiHooks;
+        const ANN: &str = "ann@acme.example";
+        let r = test_relay(Settings { state_dir: path(&dir("r8-presence")), ..Settings::default() });
+        r.hub.pr_test_serve("acme", ANN);
+        r.hub.pc_test_holds("acme", "acme.example");
+        let f = MeetFleet::new(&r);
+        let ooo = || f.api_request("api-presence", &json!({"org": "acme", "people": [ANN]})).unwrap().unwrap()["presence"][0]["out_of_office"].clone();
+        let write = json!({"org": "acme", "client": {"id": "c_1", "name": "Mail"}, "principal": ANN, "kind": "ooo", "body": {"on": true, "message": "Away"}});
+        let refused = f.api_request("api-presence-write", &write).unwrap().unwrap_err();
+        assert_eq!((refused.status, refused.code.as_str()), (403, "suspended"));
+        assert_eq!(ooo(), Value::Null, "nothing stored");
+        // an org this relay does not serve keeps the hub's own refusal
+        let mut other = write.clone();
+        other["org"] = json!("other");
+        assert_eq!(f.api_request("api-presence-write", &other).unwrap().unwrap_err().code, "org-not-served");
+        // a record that landed before its client stopped being live is dropped by the upkeep's retention
+        r.hub.api_presence_write("acme", "c_1", "Mail", ANN, "ooo", &json!({"on": true, "message": "Away"})).unwrap();
+        assert!(ooo().is_object());
+        presence_retain(&r.hub, "acme");
+        assert_eq!(ooo(), Value::Null);
     }
 }
 

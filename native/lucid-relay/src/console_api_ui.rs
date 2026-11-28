@@ -70,6 +70,8 @@ pub const TWO_CLEARED: &str = "Undoes a tightening";
 pub const TWO_COMPLIANCE: &str = "Adds or widens a client with a compliance scope";
 pub const TWO_RECIPIENT: &str = "Sets or changes the key compliance exports are sealed to";
 pub const TWO_DIRECTORY: &str = "Adds or widens a client that writes the directory";
+/// API-1 revision 8 3: presence.write lets an outside system change what everyone sees about a person.
+pub const TWO_PRESENCE: &str = "Adds or widens a client that sets people's presence";
 pub const TWO_EVENTS_SENSITIVE: &str = "Sends events to a destination for a compliance or directory client";
 pub const TWO_WEBHOOK_WEAK: &str = "Turns off webhook verification or signs webhooks with v1";
 // API-1 revision 5 13.2 (slice 1c3)
@@ -1229,6 +1231,10 @@ pub fn two_person(base: &Value, draft: &Value, active: &[TightenEntry]) -> Vec<&
         }
         if strs(c.get("scopes")).iter().any(|x| x == "directory.write") && client_widens(old, c) {
             add(TWO_DIRECTORY);
+        }
+        // API-1 revision 8 3: presence.write added or widened (presence.read is step-up only)
+        if strs(c.get("scopes")).iter().any(|x| x == "presence.write") && client_widens(old, c) {
+            add(TWO_PRESENCE);
         }
         if c.pointer("/compliance/recipient").is_some_and(|r| old.and_then(|o| o.pointer("/compliance/recipient")) != Some(r)) {
             add(TWO_RECIPIENT);
@@ -2578,5 +2584,25 @@ mod tests {
         stage_spokes_relay(&mut u, SPOKES_RELAY, false, None).unwrap();
         assert_eq!(u.map["spokes"]["relays"], json!([]));
         assert!(!two_person(&u.base, &u.map, &[]).contains(&TWO_SPOKES_BIND));
+    }
+
+    /// API-1 revision 8 3: presence.write added or widened is a two-person save; presence.read is step-up only.
+    #[test]
+    fn presence_write_added_or_widened_needs_a_second_admin() {
+        let reader = json!({"id": "c_00000000000000b1", "kind": "integration", "state": "active", "scopes": ["presence.read"], "ceiling": "confidential",
+                            "relays": ["r_01"], "networks": [], "credentials": [], "expires": 100});
+        let base = json!({"clients": [reader], "destinations": [], "cleared": []});
+        let mut more = base.clone();
+        more["clients"][0]["relays"] = json!(["r_01", "r_02"]);
+        assert!(two_person(&base, &more, &[]).is_empty(), "a presence.read client widened is step-up only");
+        let mut write = base.clone();
+        write["clients"][0]["scopes"] = json!(["presence.read", "presence.write"]);
+        assert_eq!(two_person(&base, &write, &[]), [TWO_PRESENCE]);
+        let mut wider = write.clone();
+        wider["clients"][0]["relays"] = json!(["r_01", "r_02"]);
+        assert_eq!(two_person(&write, &wider, &[]), [TWO_PRESENCE]);
+        let mut narrower = write.clone();
+        narrower["clients"][0]["expires"] = json!(50);
+        assert!(two_person(&write, &narrower, &[]).is_empty());
     }
 }

@@ -1740,6 +1740,8 @@ async fn api_answer(state: Arc<PortState>, m: api_resource::Matched<'_>, peer: P
         RouteId::SpokesNodes | RouteId::SpokesCounts | RouteId::SpokesSeats | RouteId::SpokesRelays => None,
         // API-1d 7.1.5: answered above
         RouteId::A2aAgents | RouteId::A2aCard | RouteId::A2aJwks => None,
+        // API-1 revision 8 4.2 to 4.5: the fan-out may wait up to 10 s on the blocking thread
+        RouteId::PresenceList | RouteId::PresenceOne | RouteId::PresenceSession | RouteId::PresenceClear | RouteId::PresenceCalendar | RouteId::PresenceOoo => None,
     };
     if let Some(doc) = doc {
         return state.api_doc(&m, doc, ip, now);
@@ -1785,6 +1787,10 @@ async fn api_answer(state: Arc<PortState>, m: api_resource::Matched<'_>, peer: P
         RouteId::ComplianceExportRequest => {
             let key = req.headers().get("idempotency-key").and_then(|v| v.to_str().ok()).map(str::to_owned);
             Some(api_resource::Body { json: read_api_json(req, crate::api_exports::REQUEST_MAX).await, key })
+        }
+        // API-1 revision 8 4.3 to 4.5: a presence write's JSON body (at most 64 KiB; `Idempotency-Key` accepted and ignored)
+        RouteId::PresenceSession | RouteId::PresenceClear | RouteId::PresenceCalendar | RouteId::PresenceOoo => {
+            Some(api_resource::Body { json: read_api_json(req, crate::api_presence::BODY_MAX).await, key: None })
         }
         _ => None,
     };

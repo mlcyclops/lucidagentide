@@ -131,11 +131,19 @@ pub enum RouteId {
     A2aAgents,
     A2aCard,
     A2aJwks,
+    /// API-1 revision 8 4.2: presence reads (front door and relay listener).
+    PresenceList,
+    PresenceOne,
+    /// API-1 revision 8 4.3 to 4.5: presence writes (front door only).
+    PresenceSession,
+    PresenceClear,
+    PresenceCalendar,
+    PresenceOoo,
 }
 
 impl RouteId {
     #[cfg(test)]
-    pub const ALL: [RouteId; 49] = [
+    pub const ALL: [RouteId; 55] = [
         RouteId::AsMetadata,
         RouteId::LocalAsMetadata,
         RouteId::ResourceMetadata,
@@ -185,6 +193,12 @@ impl RouteId {
         RouteId::A2aAgents,
         RouteId::A2aCard,
         RouteId::A2aJwks,
+        RouteId::PresenceList,
+        RouteId::PresenceOne,
+        RouteId::PresenceSession,
+        RouteId::PresenceClear,
+        RouteId::PresenceCalendar,
+        RouteId::PresenceOoo,
     ];
 }
 
@@ -224,7 +238,7 @@ use Pipeline::{Public as PUB, Resource as RES, Token as TOK};
 use Side::{FrontDoor as F, Relay as R};
 
 /// Every org route of both listeners (7.1, 7.2).
-pub static ROUTES: [ApiRoute; 60] = [
+pub static ROUTES: [ApiRoute; 68] = [
     r(RouteId::AsMetadata, F, "GET", "/.well-known/oauth-authorization-server/api/orgs/{org}", PUB, "", "public", "", "AuthorizationServerMetadata", "RFC 8414 metadata of the issuer I"),
     r(RouteId::ResourceMetadata, F, "GET", "/.well-known/oauth-protected-resource/api/orgs/{org}", PUB, "", "public", "", "ProtectedResourceMetadata", "RFC 9728 metadata of the resource I"),
     r(RouteId::Jwks, F, "GET", "/api/orgs/{org}/jwks.json", PUB, "", "public", "", "Jwks", "The issuer keys of the org's api map"),
@@ -274,6 +288,13 @@ pub static ROUTES: [ApiRoute; 60] = [
     r(RouteId::A2aAgents, F, "GET", "/api/orgs/{org}/a2a/agents", PUB, "", "public", "", "AgentList", "The org's served agents and their card URLs (API-1d 7.1.5)"),
     r(RouteId::A2aCard, F, "GET", "/api/orgs/{org}/a2a/agents/{agent}/agent-card.json", PUB, "", "public", "", "AgentCard", "One agent's signed A2A Agent Card, with ETag (API-1d 7.1)"),
     r(RouteId::A2aJwks, F, "GET", "/api/orgs/{org}/a2a/jwks.json", PUB, "", "public", "", "Jwks", "The card keys inside their window and not dropped (API-1d 7.1.4)"),
+    // API-1 revision 8 4.2 to 4.5: `confidential` (they name people and carry the out of office message)
+    r(RouteId::PresenceList, F, "GET", "/api/orgs/{org}/v1/presence", RES, "presence.read", "confidential", "", "PresenceList", "Presence of people the org covers, merged across the client's relays (API-1 revision 8 4.2)"),
+    r(RouteId::PresenceOne, F, "GET", "/api/orgs/{org}/v1/presence/{principal}", RES, "presence.read", "confidential", "", "Presence", "One person's presence, merged across the client's relays (API-1 revision 8 4.2)"),
+    r(RouteId::PresenceSession, F, "POST", "/api/orgs/{org}/v1/presence/{principal}/sessions", RES, "presence.write", "confidential", "PresenceSessionRequest", "PresenceSessionSet", "Set or renew an application presence session (API-1 revision 8 4.3)"),
+    r(RouteId::PresenceClear, F, "POST", "/api/orgs/{org}/v1/presence/{principal}/sessions/{session}/clear", RES, "presence.write", "confidential", "Empty", "PresenceCleared", "End an application presence session (API-1 revision 8 4.3)"),
+    r(RouteId::PresenceCalendar, F, "POST", "/api/orgs/{org}/v1/presence/{principal}/calendar", RES, "presence.write", "confidential", "PresenceCalendarRequest", "PresenceCalendarSet", "Replace this client's calendar busy time of a person (API-1 revision 8 4.4)"),
+    r(RouteId::PresenceOoo, F, "POST", "/api/orgs/{org}/v1/presence/{principal}/out-of-office", RES, "presence.write", "confidential", "PresenceOooRequest", "PresenceOooSet", "Set or clear a person's out of office (API-1 revision 8 4.5)"),
     r(RouteId::LocalAsMetadata, R, "GET", "/.well-known/oauth-authorization-server/api/orgs/{org}/local", PUB, "", "public", "", "AuthorizationServerMetadata", "RFC 8414 metadata of the local issuer L"),
     r(RouteId::ResourceMetadata, R, "GET", "/.well-known/oauth-protected-resource/api/orgs/{org}", PUB, "", "public", "", "ProtectedResourceMetadata", "RFC 9728 metadata of the resource RR"),
     r(RouteId::LocalJwks, R, "GET", "/api/orgs/{org}/local/jwks.json", PUB, "", "public", "", "Jwks", "The relay's local token keys for the org"),
@@ -289,6 +310,9 @@ pub static ROUTES: [ApiRoute; 60] = [
     r(RouteId::SpokesCounts, R, "GET", "/api/orgs/{org}/v1/spokes/counts", RES, "spokes.read", "internal", "", "SpokesCounts", "This spokes relay's node counts (API-1d 6.1)"),
     r(RouteId::SpokesSeats, R, "GET", "/api/orgs/{org}/v1/spokes/seats", RES, "spokes.read", "internal", "", "SpokesSeats", "This spokes relay's license seats (API-1d 6.1)"),
     r(RouteId::SpokesRelays, R, "GET", "/api/orgs/{org}/v1/spokes/relays", RES, "spokes.read", "internal", "", "SpokesRelays", "This spokes relay's directory, CRL and license (API-1d 6.1)"),
+    // API-1 revision 8 4.2: this relay's own views (served in both modes; no writes here)
+    r(RouteId::PresenceList, R, "GET", "/api/orgs/{org}/v1/presence", RES, "presence.read", "confidential", "", "PresenceList", "Presence of people the org covers, from this relay (API-1 revision 8 4.2)"),
+    r(RouteId::PresenceOne, R, "GET", "/api/orgs/{org}/v1/presence/{principal}", RES, "presence.read", "confidential", "", "Presence", "One person's presence, from this relay (API-1 revision 8 4.2)"),
 ];
 
 /// The org namespace of a request path (`/api/orgs/<org>/...`, or a `.well-known` document of one), whether or not a
@@ -342,10 +366,11 @@ fn fit<'a>(pattern: &str, path: &'a str) -> Option<(&'a str, Option<&'a str>)> {
             (None, None) => break,
             (Some("{org}"), Some(x)) if !x.is_empty() => org = Some(x),
             // `{id}` a relay id, `{hold}` a hold (revision 4 5.2.4), `{job}` an export job (5.3.7), `{agent}` an agent
-            // (API-1d 7.1.5): the path's one id
-            (Some("{id}" | "{hold}" | "{job}" | "{agent}"), Some(x)) if !x.is_empty() => id = Some(x),
-            // a part's `{n}`, read by its route from the path (`api_exports::part_of`)
-            (Some("{n}"), Some(x)) if !x.is_empty() => {}
+            // (API-1d 7.1.5), `{principal}` a person (API-1 revision 8 4.2, percent-encoded): the path's one id
+            (Some("{id}" | "{hold}" | "{job}" | "{agent}" | "{principal}"), Some(x)) if !x.is_empty() => id = Some(x),
+            // a part's `{n}`, read by its route from the path (`api_exports::part_of`), and a presence session's
+            // `{session}` (`api_presence::path_parts`)
+            (Some("{n}" | "{session}"), Some(x)) if !x.is_empty() => {}
             (Some(a), Some(b)) if a == b => {}
             _ => return None,
         }
@@ -516,6 +541,13 @@ pub trait Data {
     fn spokes(&self, _org: &str, _relay: &str, _view: &str, _query: &str, _people: bool) -> Option<Result<Value, crate::fleet_wire::Refusal>> {
         None
     }
+    /// API-1 revision 8 4.2, 4.6: `op` (`api-presence` or `api-presence-write`) with `body` to every relay the client
+    /// reaches (`reaches`) that reports `presence`: the front door asks each connected one over the fleet link (in id
+    /// order, a relay silent for 10 s is None), a Meet relay's listener answers reads from its own hub. None: no
+    /// presence here (404); Err: refused before any relay was asked (409 `relay-outdated` while `presence` is closed).
+    fn presence(&self, _org: &str, _reaches: &dyn Fn(&str) -> bool, _op: &str, _body: &Value) -> Option<Result<Vec<crate::api_presence::Outcome>, crate::api_presence::Problem>> {
+        None
+    }
 }
 
 /// One listener's limiter state (6.5) for the resource and scrape pipelines and its DPoP `jti` cache.
@@ -531,6 +563,8 @@ pub struct ResourceState {
     validations: AtomicUsize,
     /// Revision 4 7.3: the long polls held on this listener, one per org and client.
     held: crate::api_events::Holds,
+    /// API-1 revision 8 4.6: presence writes per org, client and person and minute.
+    presence_writes: Mutex<HashMap<String, VecDeque<i64>>>,
 }
 
 impl Default for ResourceState {
@@ -545,6 +579,7 @@ impl Default for ResourceState {
             scrapes: Mutex::default(),
             validations: AtomicUsize::new(0),
             held: crate::api_events::Holds::default(),
+            presence_writes: Mutex::default(),
         }
     }
 }
@@ -1211,8 +1246,83 @@ fn serve(site: &Site, call: &Call, ok: &Allowed, body: Option<&Body>) -> Result<
         | RouteId::ComplianceExportPart
         | RouteId::ComplianceExportCancel => compliance_answer(site, call, ok, body),
         RouteId::SpokesNodes | RouteId::SpokesCounts | RouteId::SpokesSeats | RouteId::SpokesRelays => spokes_answer(site, call, ok),
+        RouteId::PresenceList | RouteId::PresenceOne => presence_read(site, call, ok),
+        RouteId::PresenceSession | RouteId::PresenceClear | RouteId::PresenceCalendar | RouteId::PresenceOoo => presence_write(site, call, ok, body),
         _ => Err(no(404, "not-found", NOT_FOUND)),
     }
+}
+
+/// API-1 revision 8 4.2 and 4.6: a presence refusal as the route's (`relay-unreachable` with `Retry-After: 30`).
+fn presence_no((status, code, why): crate::api_presence::Problem) -> No {
+    let n = no(status, code, why);
+    if code == "relay-unreachable" {
+        n.retry(SPOKES_RETRY_S)
+    } else {
+        n
+    }
+}
+
+/// API-1 revision 8 4.2: `GET v1/presence/{principal}` and `GET v1/presence?people=...` or `?after=...&limit=...`,
+/// asked of every relay of the client that reports `presence` (a relay listener: itself) and merged. An uncovered
+/// principal is 404 (single) or left out (list); `partial` lists the relays silent for 10 s.
+fn presence_read(site: &Site, call: &Call, ok: &Allowed) -> Result<Reply, No> {
+    use crate::api_presence as pr;
+    let q = match call.route.id {
+        RouteId::PresenceOne => pr::ReadQuery::People(vec![call.id.and_then(pr::principal_of).ok_or_else(|| no(400, "query", "The principal is not a person principal."))?]),
+        _ => pr::read_query(call.query).map_err(presence_no)?,
+    };
+    let reaches = |r: &str| ok.reaches(r);
+    let outcomes = site.data.presence(call.org, &reaches, "api-presence", &pr::read_body(call.org, &q)).ok_or_else(|| no(404, "not-found", NOT_FOUND))?.map_err(presence_no)?;
+    let body = pr::read_answer(&q, outcomes).map_err(presence_no)?;
+    if call.route.id == RouteId::PresenceOne {
+        let one = body["presence"].as_array().and_then(|a| a.first()).cloned().ok_or_else(|| no(404, "not-found", NOT_FOUND))?;
+        return Ok(Reply::json(200, one));
+    }
+    Ok(Reply::json(200, body))
+}
+
+/// API-1 revision 8 4.3 to 4.6 (front door only): the body checked, 60 writes a minute per client and person, then
+/// `api-presence-write` to every relay of the client that reports `presence`; the answer names the relays that stored
+/// it. Each write is the audit entry `presence.write` (client, principal, kind, relays) beside its `api.call`.
+fn presence_write(site: &Site, call: &Call, ok: &Allowed, body: Option<&Body>) -> Result<Reply, No> {
+    use crate::api_presence as pr;
+    if site.side != Side::FrontDoor {
+        return Err(no(404, "not-found", NOT_FOUND));
+    }
+    let (principal, session) = pr::path_parts(call.path).ok_or_else(|| no(400, "query", "The principal is not a person principal."))?;
+    let kind = match call.route.id {
+        RouteId::PresenceSession => "session",
+        RouteId::PresenceClear => "clear",
+        RouteId::PresenceCalendar => "calendar",
+        _ => "ooo",
+    };
+    let given = match body.map(|b| &b.json) {
+        Some(Ok(v)) => v.clone(),
+        Some(Err(e)) if *e == "too-large" => return Err(no(413, "too-large", "The body is over 64 KiB.")),
+        // a clear takes `{}` or no body at all
+        _ if kind == "clear" => json!({}),
+        _ => return Err(no(400, "bad-body", "The body is not a JSON object.")),
+    };
+    let request = pr::write_request(kind, session.as_deref(), &given).map_err(presence_no)?;
+    if let Err(l) = api_issue::take(&site.state.presence_writes, &format!("{} {} {principal}", call.org, ok.client), pr::WRITES_PER_MINUTE, site.now) {
+        return Err(no(429, "rate", "At most 60 presence writes a minute per person; see Retry-After.").retry(wait_of(l)));
+    }
+    let name = tok::find_client(site.store, call.org, &ok.client).and_then(|c| c.get("name")).and_then(Value::as_str).unwrap_or(ok.client.as_str()).to_string();
+    let reaches = |r: &str| ok.reaches(r);
+    let wire = pr::write_body(call.org, &ok.client, &name, &principal, kind, &request);
+    let outcomes = site.data.presence(call.org, &reaches, "api-presence-write", &wire).ok_or_else(|| no(404, "not-found", NOT_FOUND))?.map_err(presence_no)?;
+    let answer = pr::write_answer(kind, outcomes).map_err(presence_no)?;
+    let relays: Vec<&str> = answer["relays"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
+    let mut e = entry_of(call, "presence.write");
+    e.insert("client".into(), json!(ok.client));
+    e.insert("principal".into(), json!(principal));
+    e.insert("kind".into(), json!(kind));
+    e.insert("relays".into(), json!(relays.join(",")));
+    e.insert("result".into(), json!("ok"));
+    if site.audit.record(call.org, Value::Object(e), site.now).is_err() {
+        return Err(no(503, "audit-unavailable", AUDIT_WHY));
+    }
+    Ok(Reply::json(200, answer))
 }
 
 /// API-1d 6.1: the most of a route's query string forwarded to a spokes relay (`api-spokes` `query`).
@@ -1626,6 +1736,31 @@ fn spokes_params(id: RouteId, side: Side) -> Vec<Value> {
     out
 }
 
+/// API-1 revision 8 4.2 to 4.5: the parameters of the presence routes.
+fn presence_params(id: RouteId) -> Vec<Value> {
+    use crate::api_presence::{LIMIT_DEFAULT, LIMIT_MAX, PEOPLE_MAX};
+    let principal = || json!({"name": "principal", "in": "path", "required": true, "schema": {"type": "string", "maxLength": 960}, "description": "The person's principal, percent-encoded."});
+    let mut out = Vec::new();
+    match id {
+        RouteId::PresenceList => {
+            out.push(json!({"name": "people", "in": "query", "required": false, "schema": {"type": "string"},
+                            "description": format!("1 to {PEOPLE_MAX} principals separated by commas; not with after or limit.")}));
+            out.push(json!({"name": "after", "in": "query", "required": false, "schema": {"type": "string"}, "description": "The opaque cursor of the previous page's next."}));
+            out.push(json!({"name": "limit", "in": "query", "required": false, "schema": {"type": "integer", "minimum": 1, "maximum": LIMIT_MAX, "default": LIMIT_DEFAULT}}));
+        }
+        RouteId::PresenceOne | RouteId::PresenceSession | RouteId::PresenceCalendar | RouteId::PresenceOoo => out.push(principal()),
+        RouteId::PresenceClear => {
+            out.push(principal());
+            out.push(json!({"name": "session", "in": "path", "required": true, "schema": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$"}}));
+        }
+        _ => {}
+    }
+    if matches!(id, RouteId::PresenceSession | RouteId::PresenceClear | RouteId::PresenceCalendar | RouteId::PresenceOoo) {
+        out.push(json!({"name": "Idempotency-Key", "in": "header", "required": false, "schema": {"type": "string"}, "description": "Accepted and ignored: every presence write replaces."}));
+    }
+    out
+}
+
 /// 7.4: the OpenAPI 3.1 document of the listener's org routes, generated from `ROUTES` (server: the listener's
 /// origin, paths with the org filled in).
 pub fn openapi(side: Side, org: &str, resource: &str) -> Value {
@@ -1671,12 +1806,18 @@ pub fn openapi(side: Side, org: &str, resource: &str) -> Value {
         }
         params.extend(compliance_params(r.id));
         params.extend(spokes_params(r.id, side));
+        params.extend(presence_params(r.id));
         if !params.is_empty() {
             op.insert("parameters".into(), json!(params));
         }
+        // API-1 revision 8 1.1: the Graph mapping for integrators
+        if r.path.contains("/v1/presence") {
+            op.insert("description".into(), json!(crate::api_presence::GRAPH_MAPPING));
+        }
         if !r.request.is_empty() {
-            // revision 4: the compliance POST routes take JSON
-            let form = if matches!(r.request, "HoldRequest" | "ExportRequest") { "application/json" } else { "application/x-www-form-urlencoded" };
+            // revision 4: the compliance POST routes take JSON; so do the presence writes (revision 8)
+            let json_body = matches!(r.request, "HoldRequest" | "ExportRequest") || r.path.contains("/v1/presence/");
+            let form = if json_body { "application/json" } else { "application/x-www-form-urlencoded" };
             op.insert("requestBody".into(), json!({"required": true, "content": {form: {"schema": {"$ref": format!("#/components/schemas/{}", r.request)}}}}));
         }
         let ctype = match r.id {
@@ -1863,6 +2004,33 @@ pub fn schemas() -> Map<String, Value> {
         "required": ["name", "description", "supportedInterfaces", "version", "capabilities", "defaultInputModes", "defaultOutputModes", "skills", "signatures"],
         "properties": {"signatures": {"type": "array", "minItems": 1, "items": {"type": "object", "required": ["protected", "signature"],
             "properties": {"protected": {"type": "string"}, "signature": {"type": "string"}}}}}});
+    // API-1 revision 8 4.1 to 4.5
+    {
+        use crate::api_presence::{ACTIVITY, AVAILABILITY, EXPIRES_MAX, EXPIRES_MIN, SESSION_ACTIVITY, SESSION_AVAILABILITY};
+        let relays = json!({"type": "array", "items": {"type": "string"}});
+        let ooo = json!({"type": ["object", "null"], "required": ["by"],
+            "properties": {"message": {"type": "string", "maxLength": 280}, "from": {"type": "integer"}, "until": {"type": "integer"}, "by": {"type": "string"}}});
+        v["Presence"] = json!({"type": "object", "description": crate::api_presence::GRAPH_MAPPING,
+            "required": ["principal", "availability", "activity", "out_of_office", "status", "presence", "mobile"],
+            "properties": {"principal": {"type": "string"}, "availability": {"enum": AVAILABILITY}, "activity": {"enum": ACTIVITY}, "out_of_office": ooo,
+                           "status": {"type": ["object", "null"], "properties": {"state": {"type": "string"}, "text": {"type": "string"}, "until": {"type": "integer"}}},
+                           "presence": {"enum": ["available", "away", "offline"]}, "mobile": {"type": "boolean"}, "relay": {"type": "string"}}});
+        v["PresenceList"] = json!({"type": "object", "required": ["presence"],
+            "properties": {"presence": {"type": "array", "items": {"$ref": "#/components/schemas/Presence"}}, "next": {"type": "string"}, "partial": relays}});
+        v["PresenceSessionRequest"] = json!({"type": "object", "required": ["session", "availability", "activity"], "additionalProperties": false,
+            "properties": {"session": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,64}$"}, "availability": {"enum": SESSION_AVAILABILITY}, "activity": {"enum": SESSION_ACTIVITY},
+                           "expires_in": {"type": "integer", "minimum": EXPIRES_MIN, "maximum": EXPIRES_MAX, "default": EXPIRES_MIN}}});
+        v["PresenceSessionSet"] = json!({"type": "object", "required": ["session", "expires", "relays"],
+            "properties": {"session": {"type": "string"}, "expires": {"type": "integer"}, "relays": relays, "partial": relays}});
+        v["PresenceCleared"] = json!({"type": "object", "required": ["cleared", "relays"], "properties": {"cleared": {"type": "boolean"}, "relays": relays, "partial": relays}});
+        v["PresenceCalendarRequest"] = json!({"type": "object", "required": ["blocks"], "additionalProperties": false,
+            "properties": {"blocks": {"type": "array", "maxItems": crate::api_presence::BLOCKS_MAX, "items": {"type": "object", "required": ["start", "end", "show"], "additionalProperties": false,
+                "properties": {"start": {"type": "integer"}, "end": {"type": "integer"}, "show": {"enum": ["busy", "oof"]}}}}}});
+        v["PresenceCalendarSet"] = json!({"type": "object", "required": ["blocks", "relays"], "properties": {"blocks": {"type": "integer"}, "relays": relays, "partial": relays}});
+        v["PresenceOooRequest"] = json!({"type": "object", "required": ["on"], "additionalProperties": false,
+            "properties": {"on": {"type": "boolean"}, "message": {"type": "string", "maxLength": 280}, "from": {"type": "integer"}, "until": {"type": "integer"}}});
+        v["PresenceOooSet"] = json!({"type": "object", "required": ["out_of_office", "relays"], "properties": {"out_of_office": ooo, "relays": relays, "partial": relays}});
+    }
     if let Some(grants) = v.pointer_mut("/TokenRequest/properties/grant_type/enum").and_then(Value::as_array_mut) {
         grants.extend([json!(crate::api_delegated::GRANT_CODE), json!(crate::api_delegated::GRANT_REFRESH), json!(crate::api_delegated::GRANT_JWT_BEARER)]);
     }
@@ -2635,5 +2803,272 @@ mod tests {
         assert_eq!(counts.body["relays"], json!([{"relay": R1, "counts": {"hubs": 1, "spokes": 2, "online": 3}}]));
         // a Meet relay's listener (no spokes source) answers 404
         assert_eq!(code(&spokes_get(&env, &Fleet, Side::Relay, "/api/orgs/acme/v1/spokes/seats", "", &rt)), (404, "not-found".into()));
+    }
+
+    // ---- API-1 revision 8 (PR-2): presence ----
+
+    const ANN: &str = "ann@acme.example";
+
+    /// Two relays reporting `presence` as the front door reaches them: R1 sees Ann available with an old out of office,
+    /// R2 sees her in a call with a newer one; a third (R3) stays silent. Each ask is kept as (relay, op, body).
+    #[derive(Default)]
+    struct PresenceFleet {
+        asks: Mutex<Vec<(String, String, Value)>>,
+        silent: bool,
+    }
+    impl Data for PresenceFleet {
+        fn relays(&self, org: &str, now: i64) -> Vec<RelayInfo> {
+            Fleet.relays(org, now)
+        }
+        fn ids(&self, org: &str) -> Vec<String> {
+            Fleet.ids(org)
+        }
+        fn exposition(&self, org: &str, ids: &[String], now: i64) -> String {
+            Fleet.exposition(org, ids, now)
+        }
+        fn console(&self) -> Value {
+            Fleet.console()
+        }
+        fn presence(&self, _org: &str, reaches: &dyn Fn(&str) -> bool, op: &str, body: &Value) -> Option<Result<Vec<crate::api_presence::Outcome>, crate::api_presence::Problem>> {
+            let view = |availability: &str, activity: &str, ooo: Value| {
+                json!({"principal": ANN, "availability": availability, "activity": activity, "out_of_office": ooo, "status": null, "presence": "available", "mobile": false})
+            };
+            let mut out = Vec::new();
+            for relay in [R1, R2, R3].into_iter().filter(|r| reaches(*r)) {
+                self.asks.lock().push((relay.to_string(), op.to_string(), body.clone()));
+                let covered = body.get("principal").or_else(|| body.pointer("/people/0")).and_then(Value::as_str).is_none_or(|p| p == ANN);
+                let answer = match (relay, op) {
+                    (R3, _) => None,
+                    (R2, _) if self.silent => None,
+                    (_, "api-presence-write") if !covered => Some(Err(crate::fleet_wire::Refusal::new(403, "not-covered", "That person is not covered."))),
+                    (_, "api-presence-write") => Some(Ok(json!({"session": "teams-1", "expires": NOW * 1000 + 300_000}))),
+                    (_, _) if !covered => Some(Ok(json!({"presence": []}))),
+                    (R1, _) => Some(Ok(json!({"presence": [view("available", "available", json!({"message": "old", "by": "self", "set_at": 1}))]}))),
+                    _ => Some(Ok(json!({"presence": [view("busy", "in_call", json!({"message": "Back Monday", "by": "Mail", "set_at": 2}))]}))),
+                };
+                out.push((relay.to_string(), answer));
+            }
+            Some(Ok(out))
+        }
+    }
+
+    /// An integration client holding both presence scopes at `ceiling`, reaching `relays`.
+    fn presence_env(ceiling: &str, relays: Value) -> Env {
+        let mut c = client();
+        c["kind"] = json!("integration");
+        c["scopes"] = json!(["presence.read", "presence.write"]);
+        c["ceiling"] = json!(ceiling);
+        c["relays"] = relays;
+        Env::new(c)
+    }
+
+    fn presence_call(env: &Env, data: &dyn Data, side: Side, method: &str, path: &str, query: &str, body: Option<Value>, auth: &str) -> Reply {
+        let m = route_of(side, method, path).expect("a table route");
+        let owner = |_: &str| true;
+        let (relay, resource, local) = match side {
+            Side::FrontDoor => ("console", I, None),
+            Side::Relay => (R1, RR, Some((format!("{RR}/local"), Vec::new()))),
+        };
+        let local_ref = local.as_ref().map(|(l, k): &(String, Vec<Value>)| (l.as_str(), k.as_slice()));
+        let site = Site { side, relay, resource, local: local_ref, store: &env.store, owner_active: &owner, licensed: true, audit: &env.audit, state: &env.state, data, now: NOW };
+        let id = rid();
+        let call = Call { org: m.org, route: m.route, id: m.id, path, query, authorization: Some(auth), dpop: None, cert: None, source: IpAddr::from(IP), rid: &id };
+        let body = body.map(|json| Body { json: Ok(json), key: None });
+        answer_with(&site, &call, body.as_ref())
+    }
+
+    #[test]
+    fn presence_reads_merge_the_relays_list_the_silent_one_and_hide_uncovered_people() {
+        let env = presence_env("confidential", json!(["*"]));
+        let data = PresenceFleet::default();
+        let t = env.mint(&["presence.read"], "R0", "confidential", 1, I, NOW, NOW + 600);
+        // one person: R2's busy/in_call wins over R1's available; the newer out of office; no set_at
+        let one = presence_call(&env, &data, Side::FrontDoor, "GET", "/api/orgs/acme/v1/presence/ann%40acme.example", "", None, &t);
+        assert_eq!(one.status, 200, "{}", one.body);
+        assert_eq!((one.body["availability"].as_str(), one.body["activity"].as_str(), one.body["relay"].as_str()), (Some("busy"), Some("in_call"), Some(R2)));
+        assert_eq!(one.body["out_of_office"], json!({"message": "Back Monday", "by": "Mail"}));
+        // the list names the silent relay; an uncovered person is left out, and 404 alone
+        let list = presence_call(&env, &data, Side::FrontDoor, "GET", "/api/orgs/acme/v1/presence", "people=ann@acme.example", None, &t);
+        assert_eq!((list.body["presence"].as_array().map(Vec::len), &list.body["partial"]), (Some(1), &json!([R3])));
+        let nobody = presence_call(&env, &data, Side::FrontDoor, "GET", "/api/orgs/acme/v1/presence", "people=cy@acme.example", None, &t);
+        assert_eq!(nobody.body["presence"], json!([]));
+        assert_eq!(code(&presence_call(&env, &data, Side::FrontDoor, "GET", "/api/orgs/acme/v1/presence/cy%40acme.example", "", None, &t)), (404, "not-found".into()));
+        // the query rules and the cursor
+        assert_eq!(code(&presence_call(&env, &data, Side::FrontDoor, "GET", "/api/orgs/acme/v1/presence", &format!("people={ANN}&after=x"), None, &t)), (400, "query".into()));
+        assert_eq!(code(&presence_call(&env, &data, Side::FrontDoor, "GET", "/api/orgs/acme/v1/presence", "after=%%", None, &t)), (400, "cursor".into()));
+        let page = presence_call(&env, &data, Side::FrontDoor, "GET", "/api/orgs/acme/v1/presence", "limit=10", None, &t);
+        assert_eq!(page.body["presence"][0]["principal"], ANN);
+        assert!(page.body.get("next").is_none());
+        // only the client's relays are asked
+        let env2 = presence_env("confidential", json!([R1]));
+        let t2 = env2.mint(&["presence.read"], "R0", "confidential", 1, I, NOW, NOW + 600);
+        let data2 = PresenceFleet::default();
+        let r = presence_call(&env2, &data2, Side::FrontDoor, "GET", "/api/orgs/acme/v1/presence/ann%40acme.example", "", None, &t2);
+        assert_eq!((r.body["relay"].as_str(), data2.asks.lock().len()), (Some(R1), 1));
+        // the ceiling: confidential data refuses an internal client; the scope is needed
+        let internal = env.mint(&["presence.read"], "R0", "internal", 1, I, NOW, NOW + 600);
+        assert_eq!(code(&presence_call(&env, &data, Side::FrontDoor, "GET", "/api/orgs/acme/v1/presence", "", None, &internal)), (403, "ceiling".into()));
+        let other = env.mint(&["presence.write"], "R0", "confidential", 1, I, NOW, NOW + 600);
+        assert_eq!(code(&presence_call(&env, &data, Side::FrontDoor, "GET", "/api/orgs/acme/v1/presence", "", None, &other)), (403, "scope".into()));
+        // a relay listener without presence (no hub) answers 404; it serves no writes
+        let rt = env.mint(&["presence.read"], "R0", "confidential", 1, RR, NOW, NOW + 600);
+        assert_eq!(code(&presence_call(&env, &Fleet, Side::Relay, "GET", "/api/orgs/acme/v1/presence", "", None, &rt)), (404, "not-found".into()));
+        assert!(route_of(Side::Relay, "POST", "/api/orgs/acme/v1/presence/ann%40acme.example/calendar").is_none());
+    }
+
+    #[test]
+    fn presence_writes_reach_every_relay_are_audited_and_limited_per_person() {
+        let env = presence_env("confidential", json!(["*"]));
+        let data = PresenceFleet::default();
+        let t = env.mint(&["presence.write"], "R0", "confidential", 1, I, NOW, NOW + 600);
+        const SESSIONS: &str = "/api/orgs/acme/v1/presence/ann%40acme.example/sessions";
+        let session = json!({"session": "teams-1", "availability": "busy", "activity": "in_call", "expires_in": 600});
+        let r = presence_call(&env, &data, Side::FrontDoor, "POST", SESSIONS, "", Some(session.clone()), &t);
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert_eq!((&r.body["relays"], &r.body["partial"]), (&json!([R1, R2]), &json!([R3])));
+        // each relay got the client's id and name and the checked body
+        let asks = data.asks.lock().clone();
+        assert_eq!(asks.iter().map(|(r, ..)| r.as_str()).collect::<Vec<_>>(), [R1, R2, R3]);
+        assert_eq!(asks[0].2["client"], json!({"id": CLIENT, "name": "monitor"}));
+        assert_eq!((asks[0].2["kind"].as_str(), asks[0].2["body"]["expires_in"].as_i64()), (Some("session"), Some(600)));
+        // the audit entry
+        let entry = env.entries(Repr::AsIs).into_iter().find(|e| e["action"] == "presence.write").expect("presence.write");
+        assert_eq!((entry["client"].as_str(), entry["principal"].as_str(), entry["kind"].as_str()), (Some(CLIENT), Some(ANN), Some("session")));
+        assert_eq!(entry["relays"], format!("{R1},{R2}"));
+        // bodies: not an application session value, unknown keys, a calendar block with a title
+        let bad = json!({"session": "teams-1", "availability": "busy", "activity": "in_meeting"});
+        assert_eq!(code(&presence_call(&env, &data, Side::FrontDoor, "POST", SESSIONS, "", Some(bad), &t)), (422, "presence-value".into()));
+        let titled = json!({"blocks": [{"start": 1, "end": 2, "show": "busy", "title": "Review"}]});
+        assert_eq!(code(&presence_call(&env, &data, Side::FrontDoor, "POST", "/api/orgs/acme/v1/presence/ann%40acme.example/calendar", "", Some(titled), &t)), (400, "bad-body".into()));
+        // a person the policy does not cover: the relays' 403 not-covered
+        let cy = presence_call(&env, &data, Side::FrontDoor, "POST", "/api/orgs/acme/v1/presence/cy%40acme.example/out-of-office", "", Some(json!({"on": false})), &t);
+        assert_eq!(code(&cy), (403, "not-covered".into()));
+        // a clear takes no body; 60 writes a minute per client and person (one session write and one clear so far)
+        let clear = presence_call(&env, &data, Side::FrontDoor, "POST", "/api/orgs/acme/v1/presence/ann%40acme.example/sessions/teams-1/clear", "", None, &t);
+        assert_eq!(clear.status, 200, "{}", clear.body);
+        for _ in 0..58 {
+            assert_eq!(presence_call(&env, &data, Side::FrontDoor, "POST", SESSIONS, "", Some(session.clone()), &t).status, 200);
+        }
+        assert_eq!(code(&presence_call(&env, &data, Side::FrontDoor, "POST", SESSIONS, "", Some(session.clone()), &t)), (429, "rate".into()));
+        // no relay answered
+        let silent = PresenceFleet { silent: true, ..PresenceFleet::default() };
+        let env2 = presence_env("confidential", json!([R2, R3]));
+        let t2 = env2.mint(&["presence.write"], "R0", "confidential", 1, I, NOW, NOW + 600);
+        assert_eq!(code(&presence_call(&env2, &silent, Side::FrontDoor, "POST", SESSIONS, "", Some(session), &t2)), (503, "relay-unreachable".into()));
+    }
+
+    #[test]
+    fn a_suspended_or_narrowed_clients_presence_writes_stop_counting() {
+        use crate::api_presence::writer_live;
+        let mut env = presence_env("confidential", json!(["*"]));
+        assert!(writer_live(&env.store, ORG, CLIENT, NOW));
+        assert!(!writer_live(&env.store, ORG, "c_ffffffffffffffff", NOW), "not in the map");
+        assert!(!writer_live(&env.store, ORG, CLIENT, NOW + 400 * 86_400), "expired");
+        env.store.apply_tighten(ORG, &json!({"id": "t_acme_000001", "tseq": 1, "ts": NOW, "action": "client_drop_scope", "target": {"client": CLIENT, "scope": "presence.write"}})).unwrap();
+        assert!(!writer_live(&env.store, ORG, CLIENT, NOW), "presence.write dropped");
+        let mut env = presence_env("confidential", json!(["*"]));
+        env.store.apply_tighten(ORG, &json!({"id": "t_acme_000001", "tseq": 1, "ts": NOW, "action": "client_suspend", "target": CLIENT})).unwrap();
+        assert!(!writer_live(&env.store, ORG, CLIENT, NOW), "suspended");
+    }
+
+    #[test]
+    fn the_presence_routes_carry_the_graph_mapping_in_openapi() {
+        let doc = openapi(Side::FrontDoor, ORG, I);
+        for (path, method) in [("/api/orgs/acme/v1/presence", "get"), ("/api/orgs/acme/v1/presence/{principal}", "get"), ("/api/orgs/acme/v1/presence/{principal}/sessions", "post"),
+                               ("/api/orgs/acme/v1/presence/{principal}/sessions/{session}/clear", "post"), ("/api/orgs/acme/v1/presence/{principal}/calendar", "post"),
+                               ("/api/orgs/acme/v1/presence/{principal}/out-of-office", "post")] {
+            let op = &doc["paths"][path][method];
+            assert_eq!(op["x-lucid-class"], "confidential", "{path}");
+            assert!(op["description"].as_str().is_some_and(|d| d.contains("dnd = DoNotDisturb") && d.contains("in_call = InACall")), "{path}");
+        }
+        assert!(doc["paths"]["/api/orgs/acme/v1/presence/{principal}/calendar"]["post"]["requestBody"]["content"]["application/json"].is_object());
+        let relay = openapi(Side::Relay, ORG, RR);
+        assert!(relay["paths"]["/api/orgs/acme/v1/presence"]["get"].is_object());
+        assert!(relay["paths"]["/api/orgs/acme/v1/presence/{principal}/sessions"].is_null(), "no writes on a relay listener");
+    }
+
+    /// One relay whose fleet ops reach a real Meet hub, the way `meet.rs` dispatches `api-presence` and
+    /// `api-presence-write` (revision 8 5).
+    struct HubFleet(crate::meet_hub::Hub);
+    impl Data for HubFleet {
+        fn relays(&self, org: &str, now: i64) -> Vec<RelayInfo> {
+            Fleet.relays(org, now)
+        }
+        fn ids(&self, org: &str) -> Vec<String> {
+            Fleet.ids(org)
+        }
+        fn exposition(&self, org: &str, ids: &[String], now: i64) -> String {
+            Fleet.exposition(org, ids, now)
+        }
+        fn console(&self) -> Value {
+            Fleet.console()
+        }
+        fn presence(&self, _org: &str, reaches: &dyn Fn(&str) -> bool, op: &str, body: &Value) -> Option<Result<Vec<crate::api_presence::Outcome>, crate::api_presence::Problem>> {
+            if !reaches(R1) {
+                return Some(Ok(Vec::new()));
+            }
+            let answer = match op {
+                "api-presence" => crate::api_presence::ReadArgs::of(body).and_then(|a| self.0.api_presence_read(&a.org, &a.people, a.after.as_deref(), a.limit)),
+                _ => crate::api_presence::WriteArgs::of(body).and_then(|a| self.0.api_presence_write(&a.org, &a.client_id, &a.client_name, &a.principal, &a.kind, &a.body)),
+            };
+            Some(Ok(vec![(R1.to_string(), Some(answer))]))
+        }
+    }
+
+    /// Revision 8 end to end: an integration client reads and writes a person's presence through the front door
+    /// pipeline into a real relay hub, and the hub raises `presence.changed` events the registry accepts.
+    #[test]
+    fn an_integration_drives_a_real_hubs_presence_through_the_front_door() {
+        use crate::meet::Identity;
+        let hub = crate::meet_hub::Hub::new(None, &[], 168.0, 30.0, 365.0, None, Arc::new(crate::meet_console::LinkStats::new()));
+        hub.pr_test_serve(ORG, ANN);
+        hub.pc_test_holds(ORG, "acme.example");
+        let ann = Identity { principal: ANN.into(), name: "Ann".into(), device: "aaaaaaaaaaaaaaaa".into(), ..Default::default() };
+        hub.hello(&ann, "", &serde_json::Map::new()).unwrap();
+        let data = HubFleet(hub);
+        let env = presence_env("confidential", json!(["*"]));
+        let read = env.mint(&["presence.read"], "R0", "confidential", 1, I, NOW, NOW + 600);
+        let write = env.mint(&["presence.write"], "R0", "confidential", 1, I, NOW, NOW + 600);
+        const ONE: &str = "/api/orgs/acme/v1/presence/ann%40acme.example";
+        let get = || presence_call(&env, &data, Side::FrontDoor, "GET", ONE, "", None, &read).body;
+        let shown = |v: &Value| (v["availability"].as_str().map(str::to_owned), v["activity"].as_str().map(str::to_owned));
+        let pair = |a: &str, b: &str| (Some(a.to_owned()), Some(b.to_owned()));
+        // online on a device: available
+        let first = get();
+        assert_eq!(shown(&first), pair("available", "available"), "{first}");
+        // the mail system's calendar says she is in a meeting now (times only)
+        let now_ms = (crate::meet_json::now() * 1000.0) as i64;
+        let blocks = json!({"blocks": [{"start": now_ms - 60_000, "end": now_ms + 3_600_000, "show": "busy"}]});
+        let r = presence_call(&env, &data, Side::FrontDoor, "POST", &format!("{ONE}/calendar"), "", Some(blocks), &write);
+        assert_eq!((r.status, &r.body["relays"]), (200, &json!([R1])), "{}", r.body);
+        assert_eq!(shown(&get()), pair("busy", "in_meeting"));
+        // automatic replies on: the meeting stays, the record names the client
+        let r = presence_call(&env, &data, Side::FrontDoor, "POST", &format!("{ONE}/out-of-office"), "", Some(json!({"on": true, "message": "Back Monday"})), &write);
+        assert_eq!(r.status, 200, "{}", r.body);
+        let v = get();
+        assert_eq!(shown(&v), pair("busy", "in_meeting"));
+        assert_eq!((v["out_of_office"]["message"].as_str(), v["out_of_office"]["by"].as_str()), (Some("Back Monday"), Some("monitor")));
+        // an application session presenting outranks busy (dnd > busy); clearing it goes back
+        let session = json!({"session": "deck-1", "availability": "dnd", "activity": "presenting", "expires_in": 900});
+        assert_eq!(presence_call(&env, &data, Side::FrontDoor, "POST", &format!("{ONE}/sessions"), "", Some(session), &write).status, 200);
+        assert_eq!(shown(&get()), pair("dnd", "presenting"));
+        assert_eq!(presence_call(&env, &data, Side::FrontDoor, "POST", &format!("{ONE}/sessions/deck-1/clear"), "", None, &write).status, 200);
+        // calendar cleared: available with automatic replies shows out of office
+        let r = presence_call(&env, &data, Side::FrontDoor, "POST", &format!("{ONE}/calendar"), "", Some(json!({"blocks": []})), &write);
+        assert_eq!(r.status, 200, "{}", r.body);
+        assert_eq!(shown(&get()), pair("available", "out_of_office"));
+        // the list read agrees; a person the policy does not cover is refused
+        let list = presence_call(&env, &data, Side::FrontDoor, "GET", "/api/orgs/acme/v1/presence", &format!("people={ANN}"), None, &read);
+        assert_eq!(shown(&list.body["presence"][0]), pair("available", "out_of_office"));
+        let outside = presence_call(&env, &data, Side::FrontDoor, "POST", "/api/orgs/acme/v1/presence/zed%40other.example/out-of-office", "", Some(json!({"on": false})), &write);
+        assert_eq!(code(&outside), (403, "not-covered".into()));
+        // the hub raised presence.changed for acme, each one valid under the registry, never with the message
+        let events: Vec<_> = data.0.api_take_events().into_iter().filter(|(_, kind, _)| *kind == "presence.changed").collect();
+        assert!(!events.is_empty());
+        for (org, kind, payload) in &events {
+            assert_eq!(org, ORG);
+            crate::api_events::check_emit(R1, kind, payload).unwrap_or_else(|e| panic!("{payload}: {e}"));
+            assert!(payload.get("message").is_none() && payload["principal"] == ANN, "{payload}");
+        }
     }
 }

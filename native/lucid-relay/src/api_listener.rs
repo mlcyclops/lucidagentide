@@ -110,6 +110,14 @@ pub trait Source: Send + Sync {
     fn cluster_refusal(&self, _method: &str, _path: &str) -> Option<(u16, Value)> {
         None
     }
+    /// API-1 revision 8 4.2: an `api-presence` body answered from this relay's hub; None without one (404).
+    fn presence(&self, _body: &Value) -> Option<Result<Value, crate::fleet_wire::Refusal>> {
+        None
+    }
+    /// API-1 revision 8 7: this relay's presence writes by kind and live application sessions, for `v1/metrics`.
+    fn presence_metrics(&self) -> Option<(Vec<(String, u64)>, u64)> {
+        None
+    }
 }
 
 struct RelaySource {
@@ -167,6 +175,15 @@ impl Source for RelaySource {
     fn cluster_refusal(&self, method: &str, path: &str) -> Option<(u16, Value)> {
         let (status, body) = self.relay.upgrade()?.hub.cluster()?.refusal(method, path)?;
         Some((status, Value::Object(body)))
+    }
+
+    fn presence(&self, body: &Value) -> Option<Result<Value, crate::fleet_wire::Refusal>> {
+        let r = self.relay.upgrade()?;
+        Some(crate::api_presence::ReadArgs::of(body).and_then(|a| r.hub.api_presence_read(&a.org, &a.people, a.after.as_deref(), a.limit)))
+    }
+
+    fn presence_metrics(&self) -> Option<(Vec<(String, u64)>, u64)> {
+        Some(self.relay.upgrade()?.hub.presence_metrics())
     }
 }
 
@@ -233,6 +250,10 @@ impl Data for Own<'_> {
         if !ids.iter().any(|i| i == self.id) {
             return String::new();
         }
+        // API-1 revision 8 7: the hub's presence counts as of this scrape
+        if let Some((writes, sessions)) = self.source.presence_metrics() {
+            crate::api_catalog::counters::set_presence(writes, sessions);
+        }
         own_exposition(self.id, self.source.product(), org, now)
     }
 
@@ -250,6 +271,15 @@ impl Data for Own<'_> {
             return None;
         }
         self.source.spokes(org, view, query, people)
+    }
+
+    /// API-1 revision 8 4.2, 4.6: reads from this relay's own hub only (writes are the front door's).
+    fn presence(&self, _org: &str, reaches: &dyn Fn(&str) -> bool, op: &str, body: &Value) -> Option<Result<Vec<crate::api_presence::Outcome>, crate::api_presence::Problem>> {
+        if op != "api-presence" || !reaches(self.id) {
+            return None;
+        }
+        let answer = self.source.presence(body)?;
+        Some(Ok(vec![(self.id.to_string(), Some(answer))]))
     }
 }
 
@@ -556,6 +586,8 @@ impl Api {
             // API-1d 6.3: a spokes relay's own inventory (`Source::spokes`; 404 from the route on a Meet relay)
             RouteId::SpokesNodes | RouteId::SpokesCounts | RouteId::SpokesSeats | RouteId::SpokesRelays if self.source.product() == Product::Spokes => self.resource(&view, &m, req, rid, now),
             RouteId::SpokesNodes | RouteId::SpokesCounts | RouteId::SpokesSeats | RouteId::SpokesRelays => not_found(),
+            // API-1 revision 8 4.2: a Meet relay's own presence views (`Source::presence`; 404 from the route elsewhere)
+            RouteId::PresenceList | RouteId::PresenceOne => self.resource(&view, &m, req, rid, now),
             // front door routes: not served here
             RouteId::AsMetadata
             | RouteId::Jwks
@@ -593,7 +625,12 @@ impl Api {
             // API-1d 7.1.5: the Agent Cards are the console's
             | RouteId::A2aAgents
             | RouteId::A2aCard
-            | RouteId::A2aJwks => not_found(),
+            | RouteId::A2aJwks
+            // API-1 revision 8 4.6: relay listeners serve no presence writes
+            | RouteId::PresenceSession
+            | RouteId::PresenceClear
+            | RouteId::PresenceCalendar
+            | RouteId::PresenceOoo => not_found(),
         }
     }
 
