@@ -32,7 +32,7 @@ import { pluginMcpServers } from "./plugins/mcp.ts"; // P-PLUGINS.2 (ADR-0462)
 import { DEFAULT_RELAY_URL } from "@oh-my-pi/pi-wire"; // P-COLLAB.3: the public-relay fallback origin
 import { sanitizeModelCompat, validateLocalProvider, type LocalModelDef, type LocalProviderDef } from "./local_providers.ts";
 import { isLocalModel } from "./renderer/model_families.ts"; // cloud-only default: explicit-choice migration
-import { sanitizeAnnounced } from "./renderer/world_updates.ts"; // P-WORLDS.UPDATE1 (ADR-0685)
+import { sanitizeAnnounced } from "./renderer/world_update_keys.ts"; // P-WORLDS.UPDATE1 (ADR-0685); import-free (ADR-0695)
 import { validateCreatorEndpoint, type CreatorEndpointDef } from "./creator_registry.ts"; // CREATOR-0 (ADR-0282)
 import { parseResultWindowSetting, type ResultWindowSetting } from "./result_window.ts"; // P-CTX.2b (ADR-0579)
 import { parsePerCallModelSetting, type PerCallModelSetting } from "./per_call_model.ts"; // P-MODEL.11 (ADR-0602)

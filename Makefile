@@ -1891,6 +1891,11 @@ demo-P-WORLDS.UPDATE1: ## P-WORLDS.UPDATE1 (ADR-0685): a purchased world with a 
 	node --check desktop/scripts/demo_p_worlds_update_1.mjs
 	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_worlds_update_1.mjs; else echo "demo-P-WORLDS.UPDATE1: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi
 
+.PHONY: demo-P-TYPECHECK.1
+demo-P-TYPECHECK.1: ## P-TYPECHECK.1 (ADR-0695): the root typecheck (harness, tools, plugins; no DOM lib) is clean again: the engine's settings_store loads the import-free world_update_keys.ts instead of the renderer's world_updates.ts, whose imports reached ui.ts and bridge.ts. Runs the CI job's typecheck and the announced-keys tests.
+	$(BUN) x tsc --noEmit
+	$(BUN) test $(TEST_IGNORES) desktop/renderer/world_updates.test.ts harness/adr_numbering.test.ts
+
 .PHONY: demo-P-WHATSNEW.1
 demo-P-WHATSNEW.1: ## P-WHATSNEW.1 (ADR-0686): a one-time What's new popup after an upgrade (bundled manifest with pictures, seen version kept engine-side, never over onboarding or the suggestion toast), Dismiss points at About > What's new, About replays it read-only. Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7821, fresh browser profile): LUCID_DEMO_BROWSER_URL=http://127.0.0.1:<cdp> LUCID_DEMO_URL=http://127.0.0.1:7821/ node desktop/scripts/demo_p_whatsnew_1.mjs
 	$(BUN) test $(TEST_IGNORES) desktop/renderer/release_notes.test.ts desktop/renderer/whats_new.test.ts desktop/about.test.ts harness/adr_numbering.test.ts

@@ -6636,3 +6636,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-27):** `preview_curtain.nodeOnStage`, one off-stage rule: the preview and artifact chips hide (card closed, spot forgotten) when their node's center leaves the stage instead of pinning to its edge under a docked panel; the world buddy and the spin-up walker use the same function; demo_p_preview_chip_off1.mjs (failed on the ADR-0693 bundle with the chip at the stage's left edge), demo-P-PREVIEW.CHIPOFF1.
 - **stubbed:** none.
 - **next:** a Visualize "Motion: follow Windows / always animate" choice, so a machine with Windows animation effects off still gets a fluid world (today it drops Auto to reduced and stops automatic motion).
+## P-TYPECHECK.1 (ADR-0695): the root typecheck is clean again
+- **shipped (2026-11-27):** the engine's settings_store loads the world-update announced keys from the new import-free `world_update_keys.ts` instead of `world_updates.ts`, whose imports pulled ui.ts and bridge.ts (DOM types) into the root program; root `tsc --noEmit` 373 errors to 0, so CI's harness job typechecks and runs its tests again; demo-P-TYPECHECK.1.
+- **stubbed:** none.
+- **next:** merge it before #699 so that PR's harness job goes green on rebase.

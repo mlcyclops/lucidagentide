@@ -14,9 +14,10 @@ import type { InstalledPluginView, PluginInstallView } from "./bridge.ts";
 import { nullProvider, type EntitlementProvider } from "./market_gate.ts";
 import type { ToastOpts } from "./ui.ts";
 import {
-  ANNOUNCED_MAX, availableCopy, createWorldUpdates, installFromStore, namesLine, outcomeToast, pendingWorldUpdates, reconcileUpdates, rememberAnnounced,
-  rowUpdate, sanitizeAnnounced, unannounced, updateKey, type InstalledRow, type WorldUpdate,
+  availableCopy, createWorldUpdates, installFromStore, namesLine, outcomeToast, pendingWorldUpdates, reconcileUpdates,
+  rowUpdate, type InstalledRow, type WorldUpdate,
 } from "./world_updates.ts";
+import { ANNOUNCED_MAX, rememberAnnounced, sanitizeAnnounced, unannounced, updateKey } from "./world_update_keys.ts";
 import { setWorldUpdatesAnnounced, worldUpdatesAnnounced } from "../settings_store.ts";
 
 const NOW_MS = Date.parse("2026-11-25T12:00:00.000Z");

@@ -14,9 +14,11 @@
 // engine-side (GET/POST /api/worlds/update-notices, settings_store worldUpdatesAnnounced): renderer localStorage is
 // per origin, and a port-rolled launch (ADR-0458) starts on a new origin with an empty one.
 //
-// No DOM here: the engine imports sanitizeAnnounced, and world_updates.test.ts drives the controller with fakes.
+// No DOM here: world_updates.test.ts drives the controller with fakes. The engine does NOT import this file (its type
+// imports reach ui.ts and bridge.ts); it imports world_update_keys.ts (P-TYPECHECK.1, ADR-0695).
 
 import { decidePackAction, type Entitlement } from "../../harness/market/entitlement.ts";
+import { rememberAnnounced, unannounced } from "./world_update_keys.ts";
 import type { InstalledPluginView, PluginInstallView, PluginsListView } from "./bridge.ts";
 import type { EntitlementProvider } from "./market_gate.ts";
 import { GATE_TEXT, PREMIUM_PLUGINS, isNewerVersion, storeInstalledVersion } from "./plugin_catalog.ts";
@@ -70,37 +72,7 @@ export function reconcileUpdates(pending: readonly WorldUpdate[], installed: rea
 
 // ------------------------------------------------------------------------------------------ announcements
 
-/** At most this many announced keys are kept (the newest). */
-export const ANNOUNCED_MAX = 200;
-const ANNOUNCED_RE = /^[a-z0-9][a-z0-9-]{0,63}@v?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
-
-/** "<id>@<version>": one announcement. */
-export const updateKey = (u: Pick<WorldUpdate, "id" | "to">): string => `${u.id}@${u.to}`;
-
-/** Only well-formed keys, each once (its last position), the newest ANNOUNCED_MAX. Anything else reads as none. */
-export function sanitizeAnnounced(raw: unknown): string[] {
-  if (!Array.isArray(raw)) return [];
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (let i = raw.length - 1; i >= 0 && out.length < ANNOUNCED_MAX; i--) {
-    const k: unknown = raw[i];
-    if (typeof k !== "string" || !ANNOUNCED_RE.test(k) || seen.has(k)) continue;
-    seen.add(k);
-    out.push(k);
-  }
-  return out.reverse();
-}
-
-/** The updates not announced before. Pure. */
-export function unannounced(pending: readonly WorldUpdate[], announced: readonly string[]): WorldUpdate[] {
-  const s = new Set(announced);
-  return pending.filter((u) => !s.has(updateKey(u)));
-}
-
-/** The announced keys after announcing `fresh`. Pure. */
-export function rememberAnnounced(announced: readonly string[], fresh: readonly WorldUpdate[]): string[] {
-  return sanitizeAnnounced([...announced, ...fresh.map(updateKey)]);
-}
+// The announced keys ("<id>@<version>") live in world_update_keys.ts, which the engine loads on its own.
 
 /** "A, B, C +2 more". */
 export function namesLine(names: readonly string[], max = 3): string {
