@@ -973,6 +973,49 @@ impl State {
         }
     }
 
+    /// PH-1 revision 2 (contract section 10.3): an inbound text, already kept in `to`'s thread with `number`: the `msg`
+    /// push to the person's devices that are not live for push, `conv` `sms:<number>`, `from` `phone:<number>`, at
+    /// level all (a text mentions no one and answers nothing), never under Do not disturb, at most one per device and
+    /// conversation every RATE_S seconds. A text is plain at the carrier, so its preview is the inner's `text` (its
+    /// first PREVIEW characters), present only when previews are on (3.9).
+    pub(super) fn pu_sms(&mut self, to: &str, number: &str, msg: &Obj) {
+        const PREVIEW: usize = 200;
+        if !self.pu_on() || !self.push_tokens.contains_key(to) || self.pu_dnd(to) {
+            return;
+        }
+        let conv_key = format!("sms:{number}");
+        if self.pu_level(to, &conv_key) != "all" {
+            return;
+        }
+        let mut inner = obj([
+            ("v", Value::from(1)),
+            ("k", Value::from("msg")),
+            ("ts", Value::from((self.pu.now() * 1000.0) as i64)),
+            ("from", Value::from(format!("phone:{number}"))),
+            ("conv", Value::from(conv_key.clone())),
+            ("id", Value::from(pj::text_of(msg, "id"))),
+            ("thread", Value::from("")),
+            ("files", Value::from(0)),
+            ("enc", Value::Bool(false)),
+            ("reply", Value::Bool(false)),
+            ("sms", Value::Bool(true)),
+        ]);
+        if !self.nt_previews_off(to, &conv_key) {
+            inner.insert("text".into(), Value::from(pj::clip(&pj::text_of(msg, "text"), PREVIEW)));
+        }
+        let now = self.pu.mono();
+        self.pu.last.retain(|_, at| now - *at < RATE_S);
+        for (device, row) in self.nt_offline(to) {
+            let rate = (to.to_string(), device.clone(), conv_key.clone());
+            if self.pu.last.contains_key(&rate) {
+                continue;
+            }
+            if self.nt_push(to, &device, &row, Channel::Alert, inner.clone(), false) {
+                self.pu.last.insert(rate, now);
+            }
+        }
+    }
+
     /// The wrap rider (3.4): the newest CE-1 wrap of (cid, the envelope's sender device, its epoch) to this device
     /// whose `seq` is above the device's key cursor, as `{eph, blob, dck_sha256}`.
     fn nt_rider(&mut self, to: &str, device: &str, cid: &str, env: &Obj) -> Option<Obj> {
@@ -1727,6 +1770,8 @@ impl Hub {
         for (cid, ts) in as_obj(st.channel_read.get(&who.principal)).into_iter().flatten() {
             reads.insert(format!("channel:{cid}"), ts.clone());
         }
+        // PH-1 revision 2: text threads, `sms:<number>`
+        reads.extend(st.sms_reads(&who.principal));
         Ok(obj([("reads", Value::Object(reads))]))
     }
 
@@ -2749,6 +2794,39 @@ mod tests {
         h.st.lock().pu.previews = false;
         let on = h.hello(&ann, "", &Obj::new()).unwrap();
         assert_eq!((&on["push"], &on["push_voip"], &on["notify_previews"]), (&json!(true), &json!(true), &json!(false)));
+    }
+
+    /// PH-1 revision 2 (contract 10.3): an inbound text pushes `msg` with `conv: "sms:<number>"`, `from:
+    /// "phone:<number>"` and, while previews are on, the text as its preview.
+    #[test]
+    fn an_inbound_text_pushes_msg_with_its_number_and_preview() {
+        let (h, mut rx) = hub_on();
+        let ben = who("ben@x", IPHONE);
+        let (key, _) = register(&h, &ben, TOKEN, None, true);
+        let number = "+13055550147";
+        let msg = row(json!({"id": "s-0011223344556677", "dir": "in", "text": "Running late", "ts": pj::now(), "status": "received"}));
+        h.st.lock().pu_sms("ben@x", number, &msg);
+        let jobs = sent(&mut rx);
+        assert_eq!(jobs.len(), 1);
+        let inner = inner_of(&h, &jobs[0], &key);
+        assert_eq!((&inner["k"], &inner["conv"], &inner["from"], &inner["id"]), (&json!("msg"), &json!("sms:+13055550147"), &json!("phone:+13055550147"), &json!("s-0011223344556677")));
+        assert_eq!((&inner["text"], &inner["enc"], &inner["sms"], &inner["dev"]), (&json!("Running late"), &json!(false), &json!(true), &json!(IPHONE)));
+        assert_eq!(payload_of(&jobs[0])["aps"]["category"], json!("msg"));
+        // one per device and conversation every RATE_S
+        h.st.lock().pu_sms("ben@x", number, &msg);
+        assert!(sent(&mut rx).is_empty());
+        // previews off: no text
+        fresh(&h);
+        h.st.lock().pu.previews = false;
+        h.st.lock().pu_sms("ben@x", number, &msg);
+        let jobs = sent(&mut rx);
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(inner_of(&h, &jobs[0], &key).get("text"), None);
+        // the thread's level off: none
+        fresh(&h);
+        level(&h, "sms:+13055550147", json!("off"), "all");
+        h.st.lock().pu_sms("ben@x", number, &msg);
+        assert!(sent(&mut rx).is_empty());
     }
 
     fn sent(rx: &mut Receiver<Job>) -> Vec<Job> {
