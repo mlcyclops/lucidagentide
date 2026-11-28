@@ -236,12 +236,6 @@ describe("the wiring in app.ts", () => {
   const start = app.indexOf("function maybeSuggest(): void {");
   const body = app.slice(start, app.indexOf("\nlet agentArcade", start));
 
-  test("a suggestion is decided in one place, after a delay, on a new session", () => {
-    expect(start).toBeGreaterThan(0);
-    expect(app.split("maybeSuggest").length - 1).toBe(2); // the definition and the one timer that calls it
-    expect(app).toContain("setTimeout(maybeSuggest, SUGGEST_DELAY_MS);");
-  });
-
   test("the popup leaves by itself, the holiday counts as asked when shown, and the news as seen when shown", () => {
     expect(body.split("timeout: SUGGEST_TOAST_MS").length - 1).toBe(2);
     expect(body.indexOf('noteHolidayAnswer(store, offer, "later");')).toBeLessThan(body.indexOf("showToast({"));

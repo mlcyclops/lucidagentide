@@ -37,7 +37,7 @@ export interface LedgerView {
 
 type Pos = { x: number; y: number };
 
-/** Where the ledger's place persists: viz_prefs_store (P-VIZ.PREFS1, ADR-0697), engine-kept and mirrored locally. */
+/** Where the ledger's place persists: ui_prefs (P-VIZ.PREFS1, ADR-0697), engine-kept and mirrored locally. */
 type PosStore = Pick<Storage, "getItem" | "setItem">;
 
 function loadPos(store: PosStore): Pos | null {

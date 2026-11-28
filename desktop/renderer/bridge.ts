@@ -1410,11 +1410,11 @@ export interface LucidBridge {
   worldUpdateNotices(): Promise<string[] | null>;
   /** Replace the announced keys (the engine sanitizes and bounds them). */
   setWorldUpdateNotices(keys: string[]): Promise<string[] | null>;
-  /** P-VIZ.PREFS1 (ADR-0697): the Visualize preferences the engine keeps (key -> stored string); null when the engine
-   *  did not answer. */
-  vizPrefs(): Promise<Record<string, string> | null>;
-  /** Set one Visualize preference (`value` null removes it); the preferences now kept, or null when refused. */
-  setVizPref(key: string, value: string | null): Promise<Record<string, string> | null>;
+  /** P-VIZ.PREFS1 (ADR-0697), P-FIRSTRUN.1 (ADR-0698): the renderer preferences the engine keeps (key -> stored
+   *  string, ui_pref_keys.ts); null when the engine did not answer. */
+  uiPrefs(): Promise<Record<string, string> | null>;
+  /** Set one kept preference (`value` null removes it); the preferences now kept, or null when refused. */
+  setUiPref(key: string, value: string | null): Promise<Record<string, string> | null>;
   /** ADR-0542: the last dev-to-release cleanup the user has not seen yet (null when none), and marking it seen. */
   releaseCleanup(): Promise<ReleaseCleanupView | null>;
   releaseCleanupAck(): Promise<boolean | null>;
@@ -1885,7 +1885,7 @@ function announcedOf(d: unknown): string[] | null {
   const a = d && typeof d === "object" && "announced" in d ? d.announced : null;
   return Array.isArray(a) ? a.filter((k): k is string => typeof k === "string") : null;
 }
-/** P-VIZ.PREFS1: `{ prefs: { [key]: string } }` from /api/viz/prefs (string values only), or null when the engine did
+/** P-VIZ.PREFS1: `{ prefs: { [key]: string } }` from /api/ui/prefs (string values only), or null when the engine did
  *  not answer or refused. */
 function prefsOf(d: unknown): Record<string, string> | null {
   const p = d && typeof d === "object" && "prefs" in d ? d.prefs : null;
@@ -2448,8 +2448,8 @@ export const bridge: LucidBridge = {
   worldUninstall: async (id) => ((await post("/api/worlds/uninstall", { id })) as { ok?: unknown } | null)?.ok === true,
   worldUpdateNotices: async () => announcedOf(await getData("/api/worlds/update-notices")),
   setWorldUpdateNotices: async (keys) => announcedOf(await post("/api/worlds/update-notices", { announced: keys })),
-  vizPrefs: async () => prefsOf(await getData("/api/viz/prefs")), // P-VIZ.PREFS1 (ADR-0697)
-  setVizPref: async (key, value) => prefsOf(await post("/api/viz/prefs", { key, value })),
+  uiPrefs: async () => prefsOf(await getData("/api/ui/prefs")), // P-VIZ.PREFS1 (ADR-0697), P-FIRSTRUN.1 (ADR-0698)
+  setUiPref: async (key, value) => prefsOf(await post("/api/ui/prefs", { key, value })),
   releaseCleanup: () => getData("/api/release-cleanup"),
   releaseCleanupAck: () => post("/api/release-cleanup/ack", {}),
   setActiveSkill: (name, prompt) => post("/api/skill", { name, prompt }),
