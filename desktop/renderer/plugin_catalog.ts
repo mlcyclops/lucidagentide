@@ -3,7 +3,8 @@
 
 // desktop/renderer/plugin_catalog.ts - P-PLUGINS.1 (ADR-0461): the one catalog behind the Plugins drawer.
 //
-// PREMIUM: the LUCID apps sold at $29.99 one-time (ADR-0463) plus the link-outs that are never sold here (LEAPS
+// PREMIUM: the LUCID apps sold at $29.99 one-time (ADR-0463), or at $9.99 a month (the Meeting Hub per license with a
+// quote for teams, and the Tactical GenAI Trainer; P-PLUGINS.PREMIUM2, ADR-0699), plus the link-outs that are never sold here (LEAPS
 // keeps its own subscription; MDMP Engine and Joint Planning Engine are Black Arrow Systems partner apps,
 // ADR-0465), the Lucid Agent Worlds at $9.99 one-time each under their own heading (ADR-0648), and above them the
 // two Lucid Agent World Packs, Patron Class and Sponsor (P-WORLDS.STORE1). FREE: the ADR-0158/0181 integrations
@@ -38,10 +39,15 @@ interface PremiumBase {
    *  WORLD_PACKS_GROUP for the world packs). */
   group?: string;
 }
-/** Sold through LUCID: one-time `price` (the label; the Stripe price is looked up by `lookupKey` server-side).
+/** Sold through LUCID: `price` is the label; the Stripe price is looked up by `lookupKey` server-side. One-time by
+ *  default; `billing: "monthly"` (P-PLUGINS.PREMIUM2, ADR-0699) is a subscription, `perLicense` says it is priced per
+ *  license, and `quoteUrl` (https only, opened in the browser) is where a team asks for several licenses.
  *  `available` is true only once the package is built, signed and verified; until then the card says Coming soon
  *  and sells nothing. */
-export interface SoldPlugin extends PremiumBase { sale: "buy"; lookupKey: string; available: boolean; price: string }
+export interface SoldPlugin extends PremiumBase {
+  sale: "buy"; lookupKey: string; available: boolean; price: string;
+  billing?: "monthly"; perLicense?: boolean; quoteUrl?: string;
+}
 /** Never sold through LUCID: the card opens `href` in the system browser. */
 export interface LinkOutPlugin extends PremiumBase { sale: "link"; href: string; linkLabel: string; partner?: string }
 export type PremiumPlugin = SoldPlugin | LinkOutPlugin;
@@ -50,6 +56,16 @@ export type PremiumPlugin = SoldPlugin | LinkOutPlugin;
 const APP_PRICE = "$29.99";
 /** The one-time price of a Lucid Agent World (ADR-0648). */
 const WORLD_PRICE = "$9.99";
+/** P-PLUGINS.PREMIUM2 (ADR-0699): the monthly price of a LUCID app sold by subscription. */
+const MONTHLY_PRICE = "$9.99";
+/** P-PLUGINS.PREMIUM2: where a team asks for a quote on several Meeting Hub licenses (the Meeting Hub site's form). */
+export const MEETING_HUB_QUOTE_URL = "https://meetinghub.lucid-agents.com/#insider";
+
+/** P-PLUGINS.PREMIUM2: the price line a sold card shows: "One-time $29.99", "$9.99/mo" or "$9.99/mo per license". */
+export function priceLabel(p: Pick<SoldPlugin, "price" | "billing" | "perLicense">): string {
+  if (p.billing !== "monthly") return `One-time ${p.price}`;
+  return `${p.price}/mo${p.perLicense ? " per license" : ""}`;
+}
 /** The drawer heading of the Lucid Agent Worlds: add-on packs for the Visualize view (ADR-0648). */
 export const WORLDS_GROUP = "Lucid Agent Worlds";
 /** P-WORLDS.STORE1: the drawer heading of the Lucid Agent World Packs, the first section on PREMIUM. */
@@ -94,14 +110,17 @@ export const PREMIUM_PLUGINS: PremiumPlugin[] = [
     media: { loop: true, poster: "webp", glyph: "bulb", tone: "violet" },
   },
   {
-    id: "tactical-genai-trainer", name: "Tactical GenAI Trainer", section: "civilian", sale: "buy", lookupKey: "PLG-TGT-OTF", available: false, price: APP_PRICE,
+    // P-PLUGINS.PREMIUM2 (ADR-0699): a monthly subscription once it sells.
+    id: "tactical-genai-trainer", name: "Tactical GenAI Trainer", section: "civilian", sale: "buy", lookupKey: "PLG-TGT-MO", available: false, price: MONTHLY_PRICE, billing: "monthly",
     kicker: "Certification training platform",
     pitch: "Self-paced certification training: 11 curricula and 202 modules across generative AI, cloud architecture, cloud security, and CMMC CUI awareness, with printable contact-hour certificates.",
     lucid: "Will run its scenarios and grading on your LUCID model instead of a Gemini key, so training keeps working on local GPUs with no internet.",
     media: { loop: true, poster: "webp", glyph: "shield", tone: "cyan" },
   },
   {
-    id: "lucid-meeting-hub", name: "LUCID Meeting Hub", section: "civilian", sale: "buy", lookupKey: "PLG-MEETHUB-OTF", available: false, price: APP_PRICE,
+    // P-PLUGINS.PREMIUM2 (ADR-0699): a monthly subscription per license; several licenses go through a quote.
+    id: "lucid-meeting-hub", name: "LUCID Meeting Hub", section: "civilian", sale: "buy", lookupKey: "PLG-MEETHUB-MO", available: false, price: MONTHLY_PRICE,
+    billing: "monthly", perLicense: true, quoteUrl: MEETING_HUB_QUOTE_URL,
     kicker: "Private meeting capture",
     pitch: "Meeting capture without a bot in the room: it detects Teams, Zoom, Webex, and Meet calls, transcribes with Whisper, labels speakers, and writes the summary, decisions, and action items into an encrypted local vault.",
     lucid: "Will install the Hub from here. Today it already pairs with LUCID's Meetings panel, where you search past meetings and send notes and screenshots into your knowledge graph.",
@@ -653,8 +672,8 @@ export function fmtDownloads(n: number | null): string {
 /** The drawer's tabs: the two catalog tiers, and INSTALLED (ADR-0505), what is on this machine. */
 export type DrawerTab = PluginTier | "installed";
 
-/** The drawer opens on PREMIUM unless the user last chose FREE or INSTALLED (ADR-0461/0505). Anything else
- *  stored reads as PREMIUM. */
+/** A drawer tab from a tab button's `data-plg-tier` (ADR-0461/0505); anything else reads as PREMIUM, the tab every
+ *  open lands on (P-PLUGINS.PREMIUM2, ADR-0699). */
 export function parseTierPref(raw: string | null | undefined): DrawerTab {
   return raw === "free" || raw === "installed" ? raw : "premium";
 }

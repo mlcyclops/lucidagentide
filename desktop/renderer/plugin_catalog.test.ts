@@ -10,7 +10,7 @@ import { join } from "node:path";
 import {
   FREE_PLUGINS, PATRON_PACK_ID, PREMIUM_PLUGINS, SPONSOR_PACK_ID, WORLDS_GROUP, WORLD_PACKS_GROUP, addonActionLabel, cardActionLabel, decideAddonAction, decideCardAction,
   isBundle, isNewerVersion, isWorldPlugin, ownedPackMeta, parseCageOrUei, sponsorCredits,
-  parseTierPref, provenanceChip, sortFree, storeInstalledVersion, type AddonFacts, type CardFacts, type InstalledFacts, type PremiumPlugin, type SoldPlugin,
+  parseTierPref, priceLabel, provenanceChip, sortFree, storeInstalledVersion, type AddonFacts, type CardFacts, type InstalledFacts, type PremiumPlugin, type SoldPlugin,
 } from "./plugin_catalog.ts";
 import type { Entitlement, GovAccessStatus } from "../../harness/market/entitlement.ts";
 
@@ -35,8 +35,8 @@ const CONTRACT: Record<string, { section: "civilian" | "government"; lookupKey: 
   myhome: { section: "civilian", lookupKey: "PLG-MYHOME-OTF" },
   agentictrade187: { section: "civilian", lookupKey: "PLG-AT187-OTF" },
   homeschooltutor: { section: "civilian", lookupKey: "PLG-HST-OTF" },
-  "tactical-genai-trainer": { section: "civilian", lookupKey: "PLG-TGT-OTF" },
-  "lucid-meeting-hub": { section: "civilian", lookupKey: "PLG-MEETHUB-OTF" },
+  "tactical-genai-trainer": { section: "civilian", lookupKey: "PLG-TGT-MO" }, // P-PLUGINS.PREMIUM2 (ADR-0699): monthly
+  "lucid-meeting-hub": { section: "civilian", lookupKey: "PLG-MEETHUB-MO" },
   // ADR-0505: listed Coming soon; the entitlements catalog gains this key when the signed build is on sale.
   "remote-spokes": { section: "civilian", lookupKey: "PLG-REMOTESPOKES-OTF" },
   "rapid-survey": { section: "government", lookupKey: "PLG-RAPID-OTF" },
@@ -215,9 +215,19 @@ describe("Lucid Agent Worlds (ADR-0648)", () => {
   const sold = PREMIUM_PLUGINS.filter((p): p is SoldPlugin => p.sale === "buy");
   const worlds = sold.filter(isWorldPlugin);
 
-  test("each sold item carries its own price: apps $29.99, worlds $9.99, Sponsor $49.99, Patron Class $99.99", () => {
+  test("each sold item carries its own price: apps $29.99 one-time or $9.99 a month, worlds $9.99, Sponsor $49.99, Patron Class $99.99", () => {
     const packPrice: Record<string, string> = { [SPONSOR_PACK_ID]: "$49.99", [PATRON_PACK_ID]: "$99.99" };
-    for (const p of sold) expect(p.price).toBe(isBundle(p) ? packPrice[p.id]! : isWorldPlugin(p) ? "$9.99" : "$29.99");
+    for (const p of sold) expect(p.price).toBe(isBundle(p) ? packPrice[p.id]! : isWorldPlugin(p) ? "$9.99" : p.billing === "monthly" ? "$9.99" : "$29.99");
+  });
+
+  test("P-PLUGINS.PREMIUM2: the Meeting Hub and the Trainer are monthly; the Hub per license with a quote for teams", () => {
+    const hub = sold.find((p) => p.id === "lucid-meeting-hub")!, tgt = sold.find((p) => p.id === "tactical-genai-trainer")!;
+    expect(priceLabel(hub)).toBe("$9.99/mo per license");
+    expect(hub.quoteUrl?.startsWith("https://")).toBe(true); // the external opener takes https only
+    expect(priceLabel(tgt)).toBe("$9.99/mo");
+    expect(tgt.quoteUrl).toBeUndefined();
+    expect(sold.filter((p) => p.billing === "monthly").map((p) => p.id).sort()).toEqual(["lucid-meeting-hub", "tactical-genai-trainer"]);
+    expect(priceLabel(sold.find((p) => p.id === "pathfinder")!)).toBe("One-time $29.99");
   });
 
   test("the forty worlds are civilian, on sale, grouped under Lucid Agent Worlds, with world-<key> ids", () => {

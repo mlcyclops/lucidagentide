@@ -519,7 +519,7 @@ function buildShell(): void {
         <button class="rail-btn" data-rail="trainer" data-tip="Trainer|Extract expert know-how into the coverage map, then drill it with lesson-based mini-games" data-tip-icon="brain">${icon("brain", 20)}</button>
         <button class="rail-btn" data-rail="agentBuilder" data-tip="Agent Builder|Design an AI agent on a visual workflow canvas - LUCID builds the gated code for you" data-tip-icon="spark">${icon("spark", 20)}</button>
         <button class="rail-btn" data-rail="skills" data-tip="Skills|Every agent skill - built-in, project, curated - in one directory: source, trust label, enable/disable, inspect & re-scan through the gate" data-tip-icon="bulb">${icon("bulb", 20)}</button>
-        <button class="rail-btn" id="railMarket" data-plg-toggle data-tip="Free plugins|Integrations that come with LUCID: Excalidraw, Git, Obsidian, Whisper and more. Premium apps are one tab over." data-tip-icon="plugins">${icon("plugins", 20)}</button>
+        <button class="rail-btn" id="railMarket" data-plg-toggle data-tip="Plugins|Premium LUCID apps and Lucid Agent Worlds. Free integrations (Excalidraw, Git, Obsidian, Whisper and more) are one tab over." data-tip-icon="plugins">${icon("plugins", 20)}</button>
         <button class="rail-btn" id="railReports" data-tip="Engineering Reports|Generate a role-tailored engineering brief (with podcast audio), and browse every past loop After-Action Report + brief" data-tip-icon="report">${icon("report", 20)}</button>
         <button class="rail-btn" id="railShare" data-tip="Share session (live)|Invite someone to watch this session live, end-to-end encrypted through your relay - view-only" data-tip-icon="shareLive">${icon("shareLive", 20)}<span class="rail-live-dot" id="railShareDot" hidden></span></button>
         <!-- CREATOR-0 (ADR-0282): Creator Studio. Present ONLY in a Creator build (revealed by /api/build-info). -->
@@ -19362,7 +19362,7 @@ function wire(): void {
   // (the titlebar "Commands" button was removed - the palette opens from the rail glyph #railCmd + Ctrl/⌘+K)
   $("#cmdkBtn")?.addEventListener("click", () => palette.show());
   $("#railAbout")?.addEventListener("click", () => openAbout());
-  $("#railMarket")?.addEventListener("click", () => openPluginsDrawer("free")); // P-PLUGINS.1 (ADR-0461): the old marketplace entry
+  $("#railMarket")?.addEventListener("click", () => openPluginsDrawer()); // P-PLUGINS.1 (ADR-0461); P-PLUGINS.PREMIUM2 (ADR-0699): lands on Premium
   $("#prevPlugins")?.addEventListener("click", (e) => pluginsFlyout.toggle(e.currentTarget as HTMLElement)); // P-PLUGINS.1
   window.addEventListener("focus", () => pluginsFlyout.onWindowFocus()); // P-PLUGINS.1: finish a checkout done in the browser
   // P-AUTH.RELOGIN1 (ADR-0640): a sign-in omp disables while LUCID sits in the background shows up on return.
