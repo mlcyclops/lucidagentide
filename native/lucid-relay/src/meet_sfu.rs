@@ -431,10 +431,12 @@ impl State {
             }
         };
         let peer = &self.peers[peer_id];
-        if format == "legacy" && peer.who.guest {
+        // PH-1 revision 3 (section 11.4): a phone stay is not end-to-end encrypted; its joins checked the `phone` cap
+        let phone = self.phone_stay(&room);
+        if format == "legacy" && peer.who.guest && !phone {
             return forbidden(E2EE_GUESTS);
         }
-        if format == "peer" && !peer_capable(&peer.who, peer.caps.as_deref()) {
+        if format == "peer" && !phone && !peer_capable(&peer.who, peer.caps.as_deref()) {
             return Err(E::Conflict(NEEDS_NEW_APP.into()));
         }
         let mut grant = self.sfu_grant(peer_id);
@@ -444,20 +446,33 @@ impl State {
 
     /// _sfu_stay_created: the media mode of the stay this join starts.
     pub(super) fn sfu_stay_created(&mut self, room: &str, who: &Identity, ext: &Obj) {
-        // the stay is already in `stays` here, so a phone stay is asked for directly (sfu_why sees a running stay)
-        let why = if self.sfu.cfg.is_some() && self.phone_starts(room) { "phone" } else { self.sfu_why(room, ext.get("large") == Some(&Value::Bool(true))) };
+        // PH-1: a personal phone call (sfu_why: "phone") runs on the media server; revision 3: a meeting with a PIN
+        // starts like any stay and is armed for dial-in below
+        let why = self.sfu_why(room, ext.get("large") == Some(&Value::Bool(true)));
         let media = if why.is_empty() { "mesh" } else { "sfu" };
         self.sfu.media.insert(room.to_string(), media);
         if media == "sfu" {
             // PH-1: a personal phone call's stay is the LiveKit room its caller is already in
             let lk_room = self.phone_lk_room(room).unwrap_or_else(|| format!("{room}.s{}", pj::token_hex(6)));
-            self.phone_stay_created(room, &lk_room);
             self.sfu.rooms.insert(room.to_string(), lk_room.clone());
             self.sfu.presenter.insert(room.to_string(), String::new());
             // check the media server soon after a large call starts (leftovers of a restart)
             self.sfu.next_sync = self.sfu.next_sync.min(pj::now() + SYNC_SOON);
             log_info(&format!("sfu room={room} principal={} media=sfu why={why} sfu_room={lk_room}", who.principal));
         }
+        // PH-1 revision 3 (section 11.2): every new stay of a meeting with a PIN, mesh or media server, is armed
+        self.phone_stay_created(room);
+    }
+
+    /// PH-1 revision 3 (section 11.3): a phone caller switched the stay: it runs on the media server in the dial-in
+    /// room, with no presenter and no identity format (a phone stay needs none); the sync soon deletes the old
+    /// end-to-end encrypted room nobody uses any more.
+    pub(super) fn sfu_phone_switch(&mut self, room: &str, lk_room: &str) {
+        self.sfu.media.insert(room.to_string(), "sfu");
+        self.sfu.rooms.insert(room.to_string(), lk_room.to_string());
+        self.sfu.presenter.insert(room.to_string(), String::new());
+        self.sfu.format.remove(room);
+        self.sfu.next_sync = self.sfu.next_sync.min(pj::now() + SYNC_SOON);
     }
 
     /// The LiveKit room of a large call's stay (its E2EE `stay`), None for a mesh call.
@@ -740,6 +755,11 @@ impl Hub {
         // PH-1: a phone stay is the one media server call that is not end-to-end encrypted
         if !peer.e2ee && !st.phone_stay(&peer.room) {
             return Err(E::Conflict(E2EE_REQUIRED.into()));
+        }
+        // PH-1 revision 3 (section 11.4): a seat a phone caller switched (a guest keeps its seat and asks here) needs
+        // the `phone` cap
+        if st.phone_stay(&peer.room) && !peer.caps.as_ref().is_some_and(|c| c.iter().any(|x| x == "phone")) {
+            return Err(E::Conflict(phone::NEEDS_UPDATE.into()));
         }
         if peer.admission_pending {
             return forbidden(ADMISSION_FIRST);
