@@ -241,12 +241,15 @@ export interface ArtifactChips {
   has(node: string): boolean;
   /** The chip's height over `node` (px), 0 when it has none or it is off screen. */
   heightOf(node: string): number;
+  /** P-OVERLAP.1: the chip over `node` in stage px as last placed, or null while it has none or is off screen. */
+  rectOf(node: string): { left: number; top: number; right: number; bottom: number } | null;
   destroy(): void;
 }
 
 /** The chips layer inside the stage. `boxOf` is the scene's screenBoxOf (client px); `open` runs on a click. */
 export function mountArtifactChips(stage: HTMLElement, boxOf: (id: string) => { x: number; y: number; r: number } | null, open: (node: string, chip: HTMLElement) => void): ArtifactChips {
   const chips = new Map<string, HTMLButtonElement>();
+  const spots = new Map<string, { x: number; y: number }>();
   let raf = 0;
   const place = (): void => {
     raf = 0;
@@ -255,8 +258,9 @@ export function mountArtifactChips(stage: HTMLElement, boxOf: (id: string) => { 
     for (const [id, chip] of chips) {
       const b = boxOf(id);
       chip.hidden = !b;
-      if (!b) continue;
+      if (!b) { spots.delete(id); continue; }
       const at = chipStackAt(b, s, { w: chip.offsetWidth, h: chip.offsetHeight });
+      spots.set(id, at);
       chip.style.transform = `translate(${at.x}px, ${at.y}px)`;
     }
     raf = requestAnimationFrame(place);
@@ -270,6 +274,7 @@ export function mountArtifactChips(stage: HTMLElement, boxOf: (id: string) => { 
     set(node, a) {
       chips.get(node)?.remove();
       chips.delete(node);
+      spots.delete(node);
       if (a) {
         const badge = a.demo ? "DEMO SAMPLE" : a.sample ? "SAMPLE" : "";
         const chip = document.createElement("button");
@@ -289,12 +294,17 @@ export function mountArtifactChips(stage: HTMLElement, boxOf: (id: string) => { 
       const chip = chips.get(node);
       return chip && !chip.hidden ? chip.offsetHeight : 0;
     },
+    rectOf(node) {
+      const chip = chips.get(node), at = spots.get(node);
+      return chip && at && !chip.hidden ? { left: at.x, top: at.y, right: at.x + chip.offsetWidth, bottom: at.y + chip.offsetHeight } : null;
+    },
     destroy() {
       if (raf) cancelAnimationFrame(raf);
       raf = 0;
       stage.removeEventListener("click", onClick);
       for (const c of chips.values()) c.remove();
       chips.clear();
+      spots.clear();
     },
   };
 }

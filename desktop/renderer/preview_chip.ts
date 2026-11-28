@@ -85,6 +85,8 @@ export interface WorldChips {
   set(id: string, v: ChipState | null): void;
   /** Esc: hide the hover card. True when one was showing. */
   escape(): boolean;
+  /** P-OVERLAP.1: the chip over node `id` in stage px as last placed, or null while it has none or is off screen. */
+  rectOf(id: string): { left: number; top: number; right: number; bottom: number } | null;
   /** For the real-UI check: every chip, its phase, its box on screen (null while hidden) and its card. */
   probe(): Array<{ id: string; phase: string; box: { x: number; y: number; w: number; h: number } | null; card: boolean }>;
   destroy(): void;
@@ -249,6 +251,11 @@ export function mountWorldPreviewChips(stage: HTMLElement, deps: WorldChipDeps):
       hideCard();
       if (focusInCard && back && !back.hidden) back.focus({ preventScroll: true });
       return true;
+    },
+    rectOf(id) {
+      const c = chips.get(id);
+      if (!c?.at || c.btn.hidden) return null;
+      return { left: c.at.x, top: c.at.y, right: c.at.x + c.btn.offsetWidth, bottom: c.at.y + c.btn.offsetHeight };
     },
     probe: () => [...chips].map(([id, c]) => {
       const r = c.btn.hidden ? null : c.btn.getBoundingClientRect();

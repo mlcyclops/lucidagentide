@@ -3038,7 +3038,10 @@ body.resizing .sidebar,body.resizing .inspector{transition:none}
 .seg button.on.acc{color:var(--accent-2)}
 
 /* ───────────────────────── toast / popover ───────────────────────── */
-#toasts{position:fixed;right:18px;top:52px;z-index:120;display:flex;flex-direction:column;gap:10px;align-items:flex-end}
+/* P-OVERLAP.1: above every modal scrim (.modal-ov 200, Ask Lucid 250, About and What's new 300), so a toast a dialog
+   raises (Provider Hub: a key saved, a sign-in failed) is read, not dimmed behind its own backdrop; below context
+   menus (400), the markup popover (1000) and #tip (1200). */
+#toasts{position:fixed;right:18px;top:52px;z-index:310;display:flex;flex-direction:column;gap:10px;align-items:flex-end}
 /* P-PREVIEW-PWA.4 (ADR-0335): `capturePage` photographs on-screen PIXELS, and this stack sits directly over
    the top-right of the right-edge preview panel, so any toast alive at capture time was baked into the
    snapshot a phone guest keeps forever (the field report's card carried an "Opening the preview" pill).
@@ -6508,7 +6511,7 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .fleet-errline span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .fleet-approve{display:flex;align-items:center;gap:7px;min-width:0;padding:6px 9px;background:var(--red-dim);border-top:1px solid rgb(var(--red-rgb) / .4)}
 .fleet-approve-txt{flex:1;min-width:0;font-size:11px;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.fleet-approve-acts{display:flex;gap:5px;flex:none}
+.fleet-approve-acts{display:flex;gap:6px;flex:none} /* P-OVERLAP.1: the ADR-0633 minimum gap (auditBoxes) */
 .fleet-approve-acts .btn-mini{white-space:nowrap}
 /* Full auto-mode: the bolt lights the existing amber while ON - no new token, the staging/quiet amber. */
 .fleet-auto-btn.auto-on{color:var(--amber)}
@@ -9069,7 +9072,9 @@ html[data-pchip-motion="still"] .pchip,html[data-pchip-motion="still"] .pchip .p
 .viz-recind i{width:9px;height:9px;border-radius:50%;background:var(--red);animation:vizRec 1.1s ease-in-out infinite}
 .viz-recind b{color:var(--red);letter-spacing:.12em}
 .viz-rec-cap{color:var(--txt-3)}
-.viz-legend{position:absolute;left:14px;bottom:14px;z-index:2;display:flex;flex-wrap:wrap;gap:6px;max-width:55%;pointer-events:none}
+.viz-legend{position:absolute;left:14px;bottom:14px;z-index:2;display:flex;flex-wrap:wrap;gap:6px;max-width:55%;pointer-events:none;transition:opacity .15s,visibility .15s}
+/* P-OVERLAP.1: the node panel sits over the legend's corner: the legend steps aside instead of showing through its prompt box */
+.viz-legend.under-panel{opacity:0;visibility:hidden}
 .viz-legend-i{display:inline-flex;align-items:center;gap:5px;white-space:nowrap;font-size:10.5px;color:var(--txt-2);padding:2px 8px;border-radius:999px;
   background:color-mix(in srgb,var(--bg-1) 80%,transparent);border:1px solid var(--line-soft)}
 .viz-legend-i i{width:8px;height:8px;border-radius:50%;background:var(--viz-c)}

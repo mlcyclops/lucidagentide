@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 import { describe, expect, test } from "bun:test";
-import { PANEL_GAP, PANEL_HYSTERESIS, PANEL_MARGIN, placePanel } from "./viz_panel_place.ts";
+import { PANEL_GAP, PANEL_HYSTERESIS, PANEL_MARGIN, panelCovers, placePanel } from "./viz_panel_place.ts";
 
 const stage = { w: 1200, h: 700 };
 const panel = { w: 340, h: 300 };
@@ -115,5 +115,22 @@ describe("placePanel off screen", () => {
         expect(p.top + panel.h).toBeLessThanOrEqual(stage.h - PANEL_MARGIN);
       }
     }
+  });
+});
+
+describe("panelCovers (P-OVERLAP.1)", () => {
+  // The role legend: 14 px in from the stage's bottom-left corner.
+  const legend = { left: 14, top: stage.h - 14 - 22, w: 118, h: 22 };
+  test("a panel docked at the stage's bottom-left (node off the left edge) covers the legend", () => {
+    const p = placePanel(stage, panel, { x: -200, y: stage.h, r: 40 }, null);
+    expect(panelCovers({ left: p.left, top: p.top, w: panel.w, h: panel.h }, legend)).toBe(true);
+  });
+  test("a panel beside a node mid-stage, or one just touching the legend's edge, does not", () => {
+    const p = placePanel(stage, panel, { x: 600, y: 200, r: 40 }, null);
+    expect(panelCovers({ left: p.left, top: p.top, w: panel.w, h: panel.h }, legend)).toBe(false);
+    expect(panelCovers({ left: legend.left + legend.w, top: legend.top, w: 100, h: 100 }, legend)).toBe(false);
+  });
+  test("an empty legend (no roles yet) is never covered", () => {
+    expect(panelCovers({ left: 0, top: 0, w: stage.w, h: stage.h }, { left: 14, top: 600, w: 0, h: 0 })).toBe(false);
   });
 });
