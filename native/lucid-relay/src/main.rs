@@ -77,6 +77,7 @@ mod api_issue;
 mod api_listener;
 mod api_map;
 mod api_people;
+mod api_presence;
 mod api_resource;
 mod api_scim;
 mod api_spokes_cred;

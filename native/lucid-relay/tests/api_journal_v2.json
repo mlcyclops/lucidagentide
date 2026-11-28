@@ -33223,6 +33223,380 @@
    ]
   },
   {
+   "name": "r8-presence-read",
+   "map": {
+    "v": 1,
+    "org": "acme",
+    "seq": 7,
+    "issued": 1795000000,
+    "expires": 1797592000,
+    "issuer": {
+     "url": "https://console.acme.com:7443/api/orgs/acme",
+     "jwks": [
+      {
+       "kty": "EC",
+       "crv": "P-256",
+       "kid": "k-2026-11",
+       "x": "8kZelDOuc1JRzHn59r5-DgXRDGOHnCA4fh0aqE8CrMs",
+       "y": "h3THJfr___owQ1gJAVuP_Y0G_SiBw182SjczUS44NOw",
+       "use": "sig",
+       "alg": "ES256",
+       "nbf": 1795000000,
+       "exp": 1802776000
+      }
+     ]
+    },
+    "grace": {
+     "person": 0,
+     "app": 24,
+     "connector": 0,
+     "relay": 0
+    },
+    "failover_after_s": 300,
+    "folded": [],
+    "cleared": [],
+    "relay_origins": {
+     "r_01": "https://relay1.acme.com:9443"
+    },
+    "clients": [
+     {
+      "id": "c_0000000000000001",
+      "name": "mon-0001",
+      "principal": "mon-0001@apps.acme.com",
+      "kind": "monitoring",
+      "owner": "ann@acme.com",
+      "reach": "R0",
+      "scopes": [
+       "monitor.read",
+       "audit.read"
+      ],
+      "ceiling": "internal",
+      "relays": [
+       "*"
+      ],
+      "networks": [
+       "10.40.0.0/23"
+      ],
+      "mtls_required": false,
+      "rate": {
+       "per_minute_each": 120,
+       "per_day_each": 100000
+      },
+      "credentials": [
+       {
+        "type": "private_key_jwt",
+        "kid": "k1",
+        "jwk": {
+         "kty": "EC",
+         "crv": "P-256",
+         "x": "LdD-Wv9AO2xoSncL0KYTdBh9RiR_8iB7Xn7Vn5FXso0",
+         "y": "gXMR9GfxzM5bvMuwPMLXDJP-gMdnNVHQCRqWVfiiqTg"
+        },
+        "expires": 1810552000
+       }
+      ],
+      "created": 1795000000,
+      "expires": 1826536000,
+      "state": "active"
+     },
+     {
+      "id": "c_00000000000000e1",
+      "name": "presence-sync",
+      "principal": "presence-sync@apps.acme.com",
+      "kind": "integration",
+      "owner": "ann@acme.com",
+      "reach": "R0",
+      "scopes": [
+       "presence.read"
+      ],
+      "ceiling": "confidential",
+      "relays": [
+       "*"
+      ],
+      "networks": [
+       "10.40.0.0/23"
+      ],
+      "mtls_required": false,
+      "rate": {
+       "per_minute_each": 120,
+       "per_day_each": 100000
+      },
+      "credentials": [
+       {
+        "type": "private_key_jwt",
+        "kid": "k1",
+        "jwk": {
+         "kty": "EC",
+         "crv": "P-256",
+         "x": "LdD-Wv9AO2xoSncL0KYTdBh9RiR_8iB7Xn7Vn5FXso0",
+         "y": "gXMR9GfxzM5bvMuwPMLXDJP-gMdnNVHQCRqWVfiiqTg"
+        },
+        "expires": 1810552000
+       }
+      ],
+      "created": 1795000000,
+      "expires": 1826536000,
+      "state": "active"
+     }
+    ],
+    "scrape_tokens": [
+     {
+      "sha256": "21bdb6dbd2f896d8caef1715bb82fae171eaa0c360262a070538203a4ec2529f",
+      "hint": "lme_0001",
+      "label": "prometheus-dc1",
+      "relays": [
+       "*"
+      ],
+      "expires": 1800184000
+     }
+    ],
+    "destinations": [
+     {
+      "id": "d_0000000000009a01",
+      "name": "OTLP 1",
+      "kind": "otlp",
+      "preset": "otlp_generic",
+      "signals": [
+       "metrics",
+       "logs"
+      ],
+      "ceiling": "internal",
+      "identities": "as_is",
+      "failover": false,
+      "private_ok": false,
+      "endpoint": "https://otel.acme.com:4318",
+      "settings": {
+       "temporality": "cumulative"
+      },
+      "credential": {
+       "type": "mtls",
+       "ref": "secret:d_0000000000009a01"
+      },
+      "queue": {
+       "max_bytes": 1073741824,
+       "max_age_s": 259200
+      }
+     },
+     {
+      "id": "d_0000000000009c03",
+      "name": "SIEM 3",
+      "kind": "syslog_cef",
+      "preset": "syslog_cef",
+      "signals": [
+       "audit"
+      ],
+      "ceiling": "internal",
+      "identities": "removed",
+      "failover": false,
+      "private_ok": true,
+      "settings": {
+       "host": "siem.acme.internal",
+       "port": 6514,
+       "includeReasons": true
+      },
+      "credential": {
+       "type": "mtls",
+       "ref": "secret:d_0000000000009c03"
+      },
+      "queue": {
+       "max_bytes": 67108864,
+       "max_age_s": 3600
+      }
+     }
+    ]
+   },
+   "needs": [
+    "presence"
+   ]
+  },
+  {
+   "name": "r8-presence-write",
+   "map": {
+    "v": 1,
+    "org": "acme",
+    "seq": 7,
+    "issued": 1795000000,
+    "expires": 1797592000,
+    "issuer": {
+     "url": "https://console.acme.com:7443/api/orgs/acme",
+     "jwks": [
+      {
+       "kty": "EC",
+       "crv": "P-256",
+       "kid": "k-2026-11",
+       "x": "8kZelDOuc1JRzHn59r5-DgXRDGOHnCA4fh0aqE8CrMs",
+       "y": "h3THJfr___owQ1gJAVuP_Y0G_SiBw182SjczUS44NOw",
+       "use": "sig",
+       "alg": "ES256",
+       "nbf": 1795000000,
+       "exp": 1802776000
+      }
+     ]
+    },
+    "grace": {
+     "person": 0,
+     "app": 24,
+     "connector": 0,
+     "relay": 0
+    },
+    "failover_after_s": 300,
+    "folded": [],
+    "cleared": [],
+    "relay_origins": {
+     "r_01": "https://relay1.acme.com:9443"
+    },
+    "clients": [
+     {
+      "id": "c_0000000000000001",
+      "name": "mon-0001",
+      "principal": "mon-0001@apps.acme.com",
+      "kind": "monitoring",
+      "owner": "ann@acme.com",
+      "reach": "R0",
+      "scopes": [
+       "monitor.read",
+       "audit.read"
+      ],
+      "ceiling": "internal",
+      "relays": [
+       "*"
+      ],
+      "networks": [
+       "10.40.0.0/23"
+      ],
+      "mtls_required": false,
+      "rate": {
+       "per_minute_each": 120,
+       "per_day_each": 100000
+      },
+      "credentials": [
+       {
+        "type": "private_key_jwt",
+        "kid": "k1",
+        "jwk": {
+         "kty": "EC",
+         "crv": "P-256",
+         "x": "LdD-Wv9AO2xoSncL0KYTdBh9RiR_8iB7Xn7Vn5FXso0",
+         "y": "gXMR9GfxzM5bvMuwPMLXDJP-gMdnNVHQCRqWVfiiqTg"
+        },
+        "expires": 1810552000
+       }
+      ],
+      "created": 1795000000,
+      "expires": 1826536000,
+      "state": "active"
+     },
+     {
+      "id": "c_00000000000000e1",
+      "name": "presence-sync",
+      "principal": "presence-sync@apps.acme.com",
+      "kind": "integration",
+      "owner": "ann@acme.com",
+      "reach": "R0",
+      "scopes": [
+       "presence.write"
+      ],
+      "ceiling": "confidential",
+      "relays": [
+       "*"
+      ],
+      "networks": [
+       "10.40.0.0/23"
+      ],
+      "mtls_required": false,
+      "rate": {
+       "per_minute_each": 120,
+       "per_day_each": 100000
+      },
+      "credentials": [
+       {
+        "type": "private_key_jwt",
+        "kid": "k1",
+        "jwk": {
+         "kty": "EC",
+         "crv": "P-256",
+         "x": "LdD-Wv9AO2xoSncL0KYTdBh9RiR_8iB7Xn7Vn5FXso0",
+         "y": "gXMR9GfxzM5bvMuwPMLXDJP-gMdnNVHQCRqWVfiiqTg"
+        },
+        "expires": 1810552000
+       }
+      ],
+      "created": 1795000000,
+      "expires": 1826536000,
+      "state": "active"
+     }
+    ],
+    "scrape_tokens": [
+     {
+      "sha256": "21bdb6dbd2f896d8caef1715bb82fae171eaa0c360262a070538203a4ec2529f",
+      "hint": "lme_0001",
+      "label": "prometheus-dc1",
+      "relays": [
+       "*"
+      ],
+      "expires": 1800184000
+     }
+    ],
+    "destinations": [
+     {
+      "id": "d_0000000000009a01",
+      "name": "OTLP 1",
+      "kind": "otlp",
+      "preset": "otlp_generic",
+      "signals": [
+       "metrics",
+       "logs"
+      ],
+      "ceiling": "internal",
+      "identities": "as_is",
+      "failover": false,
+      "private_ok": false,
+      "endpoint": "https://otel.acme.com:4318",
+      "settings": {
+       "temporality": "cumulative"
+      },
+      "credential": {
+       "type": "mtls",
+       "ref": "secret:d_0000000000009a01"
+      },
+      "queue": {
+       "max_bytes": 1073741824,
+       "max_age_s": 259200
+      }
+     },
+     {
+      "id": "d_0000000000009c03",
+      "name": "SIEM 3",
+      "kind": "syslog_cef",
+      "preset": "syslog_cef",
+      "signals": [
+       "audit"
+      ],
+      "ceiling": "internal",
+      "identities": "removed",
+      "failover": false,
+      "private_ok": true,
+      "settings": {
+       "host": "siem.acme.internal",
+       "port": 6514,
+       "includeReasons": true
+      },
+      "credential": {
+       "type": "mtls",
+       "ref": "secret:d_0000000000009c03"
+      },
+      "queue": {
+       "max_bytes": 67108864,
+       "max_age_s": 3600
+      }
+     }
+    ]
+   },
+   "needs": [
+    "presence"
+   ]
+  },
+  {
    "name": "r6-every-name",
    "map": {
     "v": 2,
@@ -33792,6 +34166,32 @@
     "kid": "11111111111111111111111111111111"
    },
    "gate": null
+  },
+  {
+   "name": "r8-drop-presence-read",
+   "action": "client_drop_scope",
+   "target": {
+    "client": "c_00000000000000e1",
+    "scope": "presence.read"
+   },
+   "gate": [
+    "presence",
+    "client_suspend",
+    "c_00000000000000e1"
+   ]
+  },
+  {
+   "name": "r8-drop-presence-write",
+   "action": "client_drop_scope",
+   "target": {
+    "client": "c_00000000000000e1",
+    "scope": "presence.write"
+   },
+   "gate": [
+    "presence",
+    "client_suspend",
+    "c_00000000000000e1"
+   ]
   }
  ]
 }

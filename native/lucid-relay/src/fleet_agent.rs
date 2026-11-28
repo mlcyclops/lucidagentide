@@ -3175,7 +3175,7 @@ pub fn api_audit_of(dir: &Path) -> Option<Arc<crate::api_audit::ApiAudit>> {
 /// Requests a High relay that holds a console's CA still answers (8.7): `nonce`, `meet-crl-get` and reading calls.
 fn write_frame(op: &str, body: &Map<String, Value>) -> bool {
     match op {
-        "nonce" | "meet-crl-get" | "api-heads" | "api-features" | "api-chains" | "api-event-chains" | "api-sign-status" | "api-compliance-read" | "api-hold-status" | "api-subject" | "api-org-policy" | "api-export-status" | "api-spokes" | "api-directory-status" => false,
+        "nonce" | "meet-crl-get" | "api-heads" | "api-features" | "api-chains" | "api-event-chains" | "api-sign-status" | "api-compliance-read" | "api-hold-status" | "api-subject" | "api-org-policy" | "api-export-status" | "api-spokes" | "api-directory-status" | "api-presence" => false,
         "call" => body.get("method").and_then(Value::as_str) != Some("GET"),
         _ => true,
     }
@@ -4354,6 +4354,9 @@ impl Agent {
                                         ("api-directory-status", Some(h)) => served(&h).and_then(|_| h.api_request(op, &body).unwrap_or_else(|| Err(Refusal::of("fleet-op")))),
                                         // API-1 revision 5 6.1: read-only, the hub's org policy (meet_parity_c `api_fleet_request`)
                                         ("api-org-policy", Some(h)) => served(&h).and_then(|_| h.api_request(op, &body).unwrap_or_else(|| Err(Refusal::of("fleet-op")))),
+                                        // API-1 revision 8 5: presence views and writes from the hub's stores (meet.rs `api_request`;
+                                        // a spokes relay has none and answers fleet-op)
+                                        ("api-presence" | "api-presence-write", Some(h)) => served(&h).and_then(|_| h.api_request(op, &body).unwrap_or_else(|| Err(Refusal::of("fleet-op")))),
                                         ("api-tighten" | "api-map", Some(h)) => {
                                             // check, retire and apply with no other journal entry or map between them
                                             let _one = API_JOURNAL_LOCK.lock();

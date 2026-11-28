@@ -37,8 +37,11 @@ pub const JOURNAL_1C: &str = "journal-1c";
 pub const SPOKES: &str = "spokes";
 pub const SPOKES_READ: &str = "spokes-read";
 pub const A2A: &str = "a2a";
+/// Revision 8 3: `presence` (scopes `presence.read` and `presence.write`, ops `api-presence` and
+/// `api-presence-write`, event `presence.changed`).
+pub const PRESENCE: &str = "presence";
 /// What this relay build reports in `features`. Each later slice adds its name here when its handlers land.
-pub const RELAY_FEATURES: &[&str] = &[SCIM_CHECK, EVENTS, COMPLIANCE, ARCHIVE, CONNECTORS, IDPS, CONTENT_CLIENTS, DELEGATED, SPOKES, SPOKES_READ, A2A];
+pub const RELAY_FEATURES: &[&str] = &[SCIM_CHECK, EVENTS, COMPLIANCE, ARCHIVE, CONNECTORS, IDPS, CONTENT_CLIENTS, DELEGATED, SPOKES, SPOKES_READ, A2A, PRESENCE];
 /// The map versions this relay build takes.
 pub const RELAY_MAP_VERSIONS: [u64; 2] = [1, 2];
 /// The folder of the relay sets.
@@ -136,6 +139,8 @@ pub fn map_needs(map: &Value) -> Vec<&'static str> {
     let holds = |c: &Value, scope: &str| c.get("scopes").and_then(Value::as_array).into_iter().flatten().any(|s| s.as_str() == Some(scope));
     let spokes_read = clients.iter().any(|&c| holds(c, "spokes.read"));
     let a2a = map.get("a2a").is_some() || clients.iter().any(|&c| has_key(c, &["a2a", "card"]) || (kind_of(c) != "spokes_hub" && holds(c, "spokes.tasks.submit")));
+    // revision 8 3: a client holding presence.read or presence.write
+    let presence = clients.iter().any(|&c| holds(c, "presence.read") || holds(c, "presence.write"));
     for (on, name) in [
         (map.get("connectors").is_some(), CONNECTORS),
         (map.get("idps").is_some(), IDPS),
@@ -144,6 +149,7 @@ pub fn map_needs(map: &Value) -> Vec<&'static str> {
         (spokes, SPOKES),
         (spokes_read, SPOKES_READ),
         (a2a, A2A),
+        (presence, PRESENCE),
     ] {
         if on {
             out.push(name);
@@ -168,6 +174,8 @@ pub fn relay_entry_gate(action: &str, target: &Value) -> Option<(&'static str, &
         "client_drop_target" => suspend(SPOKES),
         "client_drop_scope" if field("scope") == "spokes.read" => suspend(SPOKES_READ),
         "client_drop_scope" if field("scope") == "spokes.tasks.submit" => suspend(SPOKES),
+        // revision 8 3: a drop of presence.read or presence.write needs `presence`
+        "client_drop_scope" if matches!(field("scope"), "presence.read" | "presence.write") => suspend(PRESENCE),
         "client_drop_credential" if field("type") == "spokes_node" => suspend(SPOKES),
         "client_drop_scope" if !R3_SCOPES.contains(&field("scope")) => Some((MAP_V2, "client_suspend", json!(field("client")))),
         "client_drop_credential" if field("type") == "entra_wif" => Some((MAP_V2, "client_suspend", json!(field("client")))),
@@ -329,8 +337,9 @@ mod tests {
         assert_eq!(a["map"], json!([1, 2]));
         let r = Report::of_answer(&a, 5).unwrap();
         assert!(r.has(MAP_V2));
-        // revision 4 2.3 item 1 plus the revision 5 3.3 and revision 6 2.4 names; `journal-1c` is a connector's only
-        assert_eq!(r.features, [SCIM_CHECK, EVENTS, COMPLIANCE, ARCHIVE, CONNECTORS, IDPS, CONTENT_CLIENTS, DELEGATED, SPOKES, SPOKES_READ, A2A]);
+        // revision 4 2.3 item 1 plus the revision 5 3.3, revision 6 2.4 and revision 8 3 names; `journal-1c` is a
+        // connector's only
+        assert_eq!(r.features, [SCIM_CHECK, EVENTS, COMPLIANCE, ARCHIVE, CONNECTORS, IDPS, CONTENT_CLIENTS, DELEGATED, SPOKES, SPOKES_READ, A2A, PRESENCE]);
         assert!(!r.has(JOURNAL_1C));
         assert!(r.has(A2A));
         assert_eq!(r.archive_orgs, ["acme"]);
@@ -473,5 +482,20 @@ mod tests {
         let set = BTreeMap::from([("r_1".to_string(), Some(rep(&[1, 2], &[SPOKES]))), ("r_2".to_string(), Some(rep(&[1, 2], &[])))]);
         assert_eq!(lacking(&set, &[SPOKES]), ["r_2"]);
         assert_eq!(lacking(&set, &[SPOKES_READ]), ["r_1", "r_2"]);
+    }
+
+    /// API-1 revision 8 3: a client holding presence.* needs `presence`, a relay reports it, and a drop of either
+    /// scope falls back to client_suspend while it is closed.
+    #[test]
+    fn presence_needs_and_its_fallback() {
+        assert!(RELAY_FEATURES.contains(&PRESENCE));
+        assert_eq!(map_needs(&json!({"v": 1, "clients": [{"kind": "integration", "scopes": ["presence.read"]}]})), [PRESENCE]);
+        assert_eq!(map_needs(&json!({"v": 1, "clients": [{"kind": "integration", "scopes": ["presence.write"]}]})), [PRESENCE]);
+        assert_eq!(map_needs(&json!({"v": 1, "clients": [{"kind": "integration", "scopes": ["spokes.read", "presence.read"]}]})), [SPOKES_READ, PRESENCE]);
+        let suspend = Some((PRESENCE, "client_suspend", json!("c_1")));
+        assert_eq!(relay_entry_gate("client_drop_scope", &json!({"client": "c_1", "scope": "presence.read"})), suspend);
+        assert_eq!(relay_entry_gate("client_drop_scope", &json!({"client": "c_1", "scope": "presence.write"})), suspend);
+        let set = BTreeMap::from([("r_1".to_string(), Some(rep(&[1, 2], &[PRESENCE]))), ("r_2".to_string(), Some(rep(&[1, 2], &[SPOKES])))]);
+        assert_eq!(lacking(&set, &[PRESENCE]), ["r_2"]);
     }
 }

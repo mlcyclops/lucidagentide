@@ -1692,7 +1692,7 @@ impl crate::fleet_agent::ApiHooks for MeetFleet {
 
     fn api_request(&self, op: &str, body: &Value) -> Option<Result<Value, crate::fleet_wire::Refusal>> {
         // MR-1 2.4: a standby or fenced node takes no api map, journal entry, hold or export (it would diverge)
-        let writes = matches!(op, "api-map" | "api-tighten" | "api-hold" | "api-export" | "api-export-cancel");
+        let writes = matches!(op, "api-map" | "api-tighten" | "api-hold" | "api-export" | "api-export-cancel" | "api-presence-write");
         if let Some(Err((code, words))) = self.relay.upgrade().filter(|_| writes).map(|r| r.hub.cluster_writes()) {
             return Some(Err(crate::fleet_wire::Refusal::new(503, code, words)));
         }
@@ -1703,11 +1703,26 @@ impl crate::fleet_agent::ApiHooks for MeetFleet {
             "api-export" | "api-export-status" | "api-export-cancel" => crate::api_exports_relay::request(&r, op, body),
             // API-1 revision 4 13.1
             "api-directory-status" => crate::api_sso_status::request(&r, body),
+            // API-1 revision 8 5: the hub's presence views and writes
+            "api-presence" => crate::api_presence::ReadArgs::of(body).and_then(|a| r.hub.api_presence_read(&a.org, &a.people, a.after.as_deref(), a.limit)),
+            "api-presence-write" => {
+                let answer = crate::api_presence::WriteArgs::of(body).and_then(|a| r.hub.api_presence_write(&a.org, &a.client_id, &a.client_name, &a.principal, &a.kind, &a.body));
+                // revision 8 7: the relay's families follow each write
+                let (writes, sessions) = r.hub.presence_metrics();
+                crate::api_catalog::counters::set_presence(writes, sessions);
+                answer
+            }
             _ => {
                 let answer = r.hub.api_fleet_request(op, body);
                 // 5.3.3: a new pin or an applied journal entry reaches the org's archive (the lock is released here)
                 if answer.is_ok() && matches!(op, "api-map" | "api-tighten") {
-                    crate::api_exports_relay::state_changed(&r, body.get("org").and_then(Value::as_str).unwrap_or_default());
+                    let org = body.get("org").and_then(Value::as_str).unwrap_or_default();
+                    crate::api_exports_relay::state_changed(&r, org);
+                    // API-1 revision 8 4.6: a client suspended, expired, deleted or without presence.write stops counting
+                    if let Some(store) = r.hub.api_org_snapshot(org) {
+                        let now = crate::codec::now_ms() / 1000;
+                        r.hub.presence_retain_clients(org, &|client: &str| crate::api_presence::writer_live(&store, org, client, now));
+                    }
                 }
                 answer
             }

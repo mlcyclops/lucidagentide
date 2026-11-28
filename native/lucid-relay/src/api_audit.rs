@@ -115,12 +115,13 @@ pub const IDENTITY_LIST_MAX: usize = 16;
 /// `bytes` (a `spokes.mail` entry's envelope size). Revision 5 12.1 and 12.2 add `connector` (a connector source's id),
 /// `conv` (a cid), `items` (a count), `tool` (an MCP tool name), `approval` (32 hex) and `age_s`. API-1d 11 adds the
 /// A2A fields `agent`, `skill`, `task` (A2A task id), `bytes_in`, `origin` (a push origin), `attempt` and
-/// `card_sha256` (`a2a.card.signed`).
-pub const PLAIN_FIELDS: [&str; 58] = [
+/// `card_sha256` (`a2a.card.signed`). API-1 revision 8 7 adds `relays` (a `presence.write` entry's relays that stored
+/// the write, comma separated).
+pub const PLAIN_FIELDS: [&str; 59] = [
     "rid", "source", "relay", "action", "scope", "route", "resource", "result", "check", "jti", "bytes_out", "count", "status", "code", "method", "map_seq", "map_hash", "tseq", "op", "kind", "aud",
     "exp", "cnf", "auth", "until", "destination", "kid", "hold", "on", "relay_hold", "job", "parts", "zip_bytes", "state", "provider", "person_source", "token_id", "error",
     "matter", "grant", "idp", "family", "auth_time", "actor_profile", "bytes", "connector", "conv", "items", "tool", "approval", "age_s", "agent", "skill", "task", "bytes_in",
-    "origin", "attempt", "card_sha256",
+    "origin", "attempt", "card_sha256", "relays",
 ];
 /// Revision 4 11 (revision 3 10.4 `free_text`): fields kept only in the `as_is` chain, dropped from the transformed
 /// representations (a subset of `PLAIN_FIELDS`).

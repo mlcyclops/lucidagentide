@@ -746,6 +746,30 @@ impl ConsoleApi {
         }
     }
 
+    /// API-1 revision 8 4.2, 4.6 on the front door: `op` (`api-presence` or `api-presence-write`) with `body` to every
+    /// relay of the org's set that is connected, reports `presence` and that `reaches` (the client's relays), all at
+    /// once and in id order. A relay silent for `api_presence::CALL_MS` (or whose link fails) is None; its own refusal
+    /// is passed on.
+    pub fn presence_fanout(&self, link: Option<&dyn FleetLink>, org: &str, reaches: &dyn Fn(&str) -> bool, op: &str, body: &Value) -> Vec<crate::api_presence::Outcome> {
+        use crate::fleet_wire::Refusal;
+        let Some(link) = link else { return Vec::new() };
+        let relays: Vec<String> = self.relay_set(org).into_keys().filter(|r| reaches(r.as_str()) && link.connected(r) && self.relay_has(r, crate::api_features::PRESENCE)).collect();
+        std::thread::scope(|s| {
+            let asks: Vec<_> = relays
+                .iter()
+                .map(|relay| {
+                    let body = body.clone();
+                    s.spawn(move || match link.request(relay, op, body, crate::api_presence::CALL_MS) {
+                        Ok(v) => Some(Ok(v)),
+                        Err(LinkError::Refused { status, code, error }) => Some(Err(Refusal::new(status, &code, &error))),
+                        Err(_) => None,
+                    })
+                })
+                .collect();
+            relays.iter().cloned().zip(asks).map(|(relay, h)| (relay, h.join().unwrap_or(None))).collect()
+        })
+    }
+
     /// API-1d 4.2: the CRL tokens the spokes relays bound to `org` hold now (their `relays` view, `crl.token`), for the
     /// check of a pasted service hub certificate. A relay that does not answer gives none.
     pub fn spokes_crls(&self, link: Option<&dyn FleetLink>, org: &str) -> Vec<String> {
