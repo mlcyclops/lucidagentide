@@ -153,6 +153,8 @@ pub(super) struct Rec {
     /// WA-1 revision 6: the guest's email (claimed, or the verified one) and whether a checked sign-in proved it.
     pub(super) email: String,
     pub(super) email_verified: bool,
+    /// PH-1 revision 3 (section 11.4): the knock's `caps` listed `phone` (its seat may take a phone stay).
+    phone: bool,
 }
 
 /// In memory: the guest port's origin and link secret, the lobby rows, each room's lobby option (this stay), who the
@@ -532,6 +534,7 @@ impl State {
             admission: Value::Null,
             email: String::new(),
             email_verified: false,
+            phone: false,
         };
         self.guests.rec.insert(id.clone(), rec);
         id
@@ -1067,6 +1070,8 @@ impl Hub {
             }
             let now = pj::now();
             let (gid, key, key_sha) = wa::knock_page(body, &link.room, &link.nonce)?;
+            // PH-1 revision 3 (section 11.4): the page lists `phone` in its knock's `caps`
+            let phone = wa::caps(body)?.0.is_some_and(|c| c.iter().any(|x| x == "phone"));
             if st.guests.rec.contains_key(&gid) {
                 return Err(E::Conflict(wa::ID_USED.into()));
             }
@@ -1106,6 +1111,7 @@ impl Hub {
                 r.rules = Some(rules.clone());
                 r.email = email.clone();
                 r.email_verified = !verified.is_null();
+                r.phone = phone;
             }
             st.guests_lobby_event(&link.room, "");
             st.wa_bypass(&id);
@@ -1184,13 +1190,17 @@ impl Hub {
     /// _guests_enter: the admitted guest takes its seat (a join with the lock held). It sees only the chat of this
     /// stay, never older history.
     fn guests_enter(&self, st: &mut State, id: &str) -> R<Obj> {
-        let (room, who, address, exp, keyed, log_hours) = {
+        let (room, who, address, exp, keyed, log_hours, phone) = {
             let r = &st.guests.rec[id];
-            (r.room.clone(), r.who.clone(), r.address.clone(), r.exp, !r.key.is_empty(), r.rules.as_ref().and_then(|x| pj::as_int(x.get("log_hours"))))
+            (r.room.clone(), r.who.clone(), r.address.clone(), r.exp, !r.key.is_empty(), r.rules.as_ref().and_then(|x| pj::as_int(x.get("log_hours"))), r.phone)
         };
         let seated = pj::now();
         // a guest with its key encrypts like a member (WA-1 4.3)
-        let ext = obj([("client", Value::Object(obj([("app", Value::from("guest")), ("platform", Value::from("web"))]))), ("e2ee", Value::Bool(keyed))]);
+        let mut ext = obj([("client", Value::Object(obj([("app", Value::from("guest")), ("platform", Value::from("web"))]))), ("e2ee", Value::Bool(keyed))]);
+        // PH-1 revision 3 (section 11.4): the knock's `phone` cap
+        if phone {
+            ext.insert("caps".into(), Value::Array(vec![Value::from("phone")]));
+        }
         let mut answer = match self.join_held(st, &room, &who, &address, false, &ext) {
             Ok(answer) => answer,
             Err(E::Forbidden(e)) if e == sfu::E2EE_GUESTS => {

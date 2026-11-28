@@ -338,7 +338,8 @@ impl State {
 impl Hub {
     /// meeting_create (`POST /v1/meetings`): schedule a meeting in a new room; every attendee (who must be in the
     /// directory) and the organizer's other sessions hear `meeting` `invite`. `cohosts` (people in the directory)
-    /// become co-organizers of its calls when they join. `phone` (PH-1 section 6): true gives it a dial-in PIN.
+    /// become co-organizers of its calls when they join. `phone` (PH-1 section 6): true gives it a dial-in PIN
+    /// (revision 3: absent or null means true on a relay with a conference number).
     #[allow(clippy::too_many_arguments)]
     pub fn meeting_create(&self, session: &str, who: &Identity, title: Body, start: Body, end: Body, attendees_v: Body, description: Body, recurrence_v: Body, tz: Body, cohosts_v: Body, phone_v: Body) -> R<Obj> {
         let title = meeting_title(title)?;
@@ -382,6 +383,8 @@ impl Hub {
                 ("updated", f(now)),
                 ("canceled", Value::Null),
             ]);
+            // PH-1 revision 3 (section 11.1): without `phone`, a relay with a conference number gives a PIN
+            let dial_in = dial_in.or_else(|| st.phone_conference().then_some(true));
             st.phone_meeting_set(&mut m, dial_in)?;
             st.meetings.insert(room.clone(), Value::Object(m.clone()));
             st.dirty = true;
