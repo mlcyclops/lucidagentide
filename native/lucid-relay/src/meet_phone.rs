@@ -150,7 +150,9 @@ struct Rule {
 }
 
 /// A phone stay: a personal call (a `ph-` room, from its caller's webhook or the call a person places, until it ends)
-/// or a meeting's stay that allows phone callers (from its first join until it is empty).
+/// or a meeting's stay that allows phone callers (from its first join until it is empty). Revision 3 (section 11.2):
+/// a meeting's stay is armed (`switched: false`, its dial-in room held for the dispatch rule, the call itself an
+/// ordinary encrypted one) until its first phone caller switches it.
 struct PhoneStay {
     kind: &'static str,
     lk_room: String,
@@ -158,6 +160,8 @@ struct PhoneStay {
     owner: String,
     callers: Vec<Caller>,
     rule: Option<Arc<Mutex<Rule>>>,
+    /// A phone stay for media, E2EE, grants and joins (a personal call always; a meeting once a caller joined).
+    switched: bool,
 }
 
 impl PhoneStay {
@@ -413,44 +417,42 @@ impl State {
         Ok(())
     }
 
-    /// The phone stay `room` is or would start as ("personal" or "meeting"), None when it is none (or phone is off):
-    /// a live phone stay decides; a stay running already stays as it began; a new stay of a meeting that allows phone
-    /// callers is a meeting phone stay.
-    pub(super) fn phone_kind(&self, room: &str) -> Option<&'static str> {
+    /// A phone stay of `room` that is one for media, E2EE, grants and joins: a personal call, or a meeting's stay a
+    /// phone caller switched (revision 3: an armed meeting stay is an ordinary encrypted call).
+    fn phone_live(&self, room: &str) -> Option<&PhoneStay> {
         self.ph.cfg.as_ref()?;
-        if let Some(stay) = self.ph.stays.get(room) {
-            return Some(stay.kind);
-        }
-        if self.stays.contains_key(room) {
-            return None;
-        }
-        self.phone_meeting_on(room).then_some(MEETING)
+        self.ph.stays.get(room).filter(|s| s.switched)
     }
 
-    /// The stay starting now in `room` (already in `stays`, so `phone_kind` no longer sees it as new) is a phone
-    /// stay: a personal call waiting for its owner, or a meeting that allows phone callers.
-    pub(super) fn phone_starts(&self, room: &str) -> bool {
-        self.ph.cfg.is_some() && (self.ph.stays.contains_key(room) || self.phone_meeting_on(room))
+    /// The phone stay `room` is ("personal" or "meeting"), None when it is none (or phone is off). Revision 3: a new
+    /// stay of a meeting with a PIN starts as an ordinary one (armed, section 11.2).
+    pub(super) fn phone_kind(&self, room: &str) -> Option<&'static str> {
+        self.phone_live(room).map(|s| s.kind)
     }
 
     /// The meeting in `room` allows phone callers (it has a PIN, it is not canceled, the relay has a conference number).
     fn phone_meeting_on(&self, room: &str) -> bool {
-        self.ph.cfg.as_ref().is_some_and(|c| c.conference()) && as_obj(self.meetings.get(room)).is_some_and(|m| !pj::truthy(m.get("canceled")) && !pj::text_of(m, "phone_pin").is_empty())
+        self.phone_conference() && as_obj(self.meetings.get(room)).is_some_and(|m| !pj::truthy(m.get("canceled")) && !pj::text_of(m, "phone_pin").is_empty())
+    }
+
+    /// The relay has a conference number (revision 3: a new meeting gets a PIN unless its organizer says no).
+    pub(super) fn phone_conference(&self) -> bool {
+        self.ph.cfg.as_ref().is_some_and(|c| c.conference())
     }
 
     /// `room`'s current stay is a phone stay.
     pub(super) fn phone_stay(&self, room: &str) -> bool {
-        self.ph.stays.contains_key(room)
+        self.phone_live(room).is_some()
     }
 
     /// `room` is a personal phone call (microphone only, never a screen).
     pub(super) fn phone_personal(&self, room: &str) -> bool {
-        self.ph.stays.get(room).is_some_and(|s| s.kind == PERSONAL)
+        self.phone_live(room).is_some_and(|s| s.kind == PERSONAL)
     }
 
     /// A personal call's LiveKit room (its stay starts in it).
     pub(super) fn phone_lk_room(&self, room: &str) -> Option<String> {
-        self.ph.stays.get(room).map(|s| s.lk_room.clone())
+        self.phone_live(room).map(|s| s.lk_room.clone())
     }
 
     /// The SFU sync may delete this `lucid-phone_*` room: phone is on, no phone stay holds it, and it is ROOM_GRACE old.
@@ -461,20 +463,17 @@ impl State {
     /// The SFU sync keeps this participant of `room`'s stay: a phone participant (LiveKit kind SIP, or one of its
     /// callers) of a live phone stay.
     pub(super) fn phone_keeps(&self, room: &str, identity: &str, sip: bool) -> bool {
-        self.ph.stays.get(room).is_some_and(|s| sip || s.callers.iter().any(|c| c.identity == identity))
+        self.phone_live(room).is_some_and(|s| sip || s.callers.iter().any(|c| c.identity == identity))
     }
 
     /// _phone_may_join (sfu_may_join, before anything changes): None when `room` is no phone matter. A `ph-` room
-    /// without its phone stay has ended (410); guests and web seats cannot take a phone stay (409); a personal call
-    /// is its owner's (403); the join must list the `phone` cap (409).
+    /// without its phone stay has ended (410); a personal call is its owner's (403); every seat, web and guest ones
+    /// too (revision 3, section 11.4), must list the `phone` cap (409).
     pub(super) fn phone_may_join(&self, room: &str, who: &Identity, ext: &Obj) -> Option<R<()>> {
         self.ph.cfg.as_ref()?;
         let Some(kind) = self.phone_kind(room) else {
             return ph_room(room).then(|| Err(E::Gone(ENDED.into())));
         };
-        if who.guest || who.kind == "web" {
-            return Some(Err(E::Conflict(NEEDS_UPDATE.into())));
-        }
         if kind == PERSONAL && self.ph.stays.get(room).is_some_and(|s| s.owner != who.principal) {
             return Some(forbidden(NOT_YOURS));
         }
@@ -488,11 +487,12 @@ impl State {
         Some(Ok(()))
     }
 
-    /// _phone_stay_created (sfu_stay_created): a personal call's stay starts in its caller's room; a meeting that
-    /// allows phone callers starts a meeting phone stay and its dispatch rule.
-    pub(super) fn phone_stay_created(&mut self, room: &str, lk_room: &str) {
+    /// _phone_stay_created (sfu_stay_created, every new stay, mesh or media server): a personal call's stay starts
+    /// in its caller's room; a meeting that allows phone callers is armed (section 11.2): a meeting stay not yet
+    /// switched, its own dial-in room `lucid-phone_dialin_<12 hex>` and the dispatch rule to it.
+    pub(super) fn phone_stay_created(&mut self, room: &str) {
         if let Some(stay) = self.ph.stays.get(room) {
-            log_info(&format!("phone stay room={room} kind={} sfu_room={lk_room}", stay.kind));
+            log_info(&format!("phone stay room={room} kind={} sfu_room={}", stay.kind, stay.lk_room));
             return;
         }
         if !self.phone_meeting_on(room) {
@@ -500,8 +500,9 @@ impl State {
         }
         let pin = as_obj(self.meetings.get(room)).map(|m| pj::text_of(m, "phone_pin")).unwrap_or_default();
         let cell = Arc::new(Mutex::new(Rule::default()));
-        self.ph.stays.insert(room.to_string(), PhoneStay { kind: MEETING, lk_room: lk_room.to_string(), owner: String::new(), callers: Vec::new(), rule: Some(cell.clone()) });
-        log_info(&format!("phone stay room={room} kind={MEETING} sfu_room={lk_room}"));
+        let lk_room = format!("{LK_PREFIX}dialin_{}", pj::token_hex(6));
+        self.ph.stays.insert(room.to_string(), PhoneStay { kind: MEETING, lk_room: lk_room.clone(), owner: String::new(), callers: Vec::new(), rule: Some(cell.clone()), switched: false });
+        log_info(&format!("phone armed room={room} dialin_room={lk_room}"));
         let (Some(cfg), Some(sfu)) = (self.ph.cfg.clone(), self.sfu_cfg()) else { return };
         let owned = self.ph.owned.clone();
         let (room, lk_room) = (room.to_string(), lk_room.to_string());
@@ -510,7 +511,7 @@ impl State {
 
     /// _phone_join_extra (sfu_join_extra): `{kind, callers}` of a phone stay.
     pub(super) fn phone_join_extra(&self, room: &str) -> Option<Obj> {
-        let stay = self.ph.stays.get(room)?;
+        let stay = self.phone_live(room)?;
         Some(obj([("kind", Value::from(stay.kind)), ("callers", stay.callers_view())]))
     }
 
@@ -596,6 +597,9 @@ impl State {
         let name = if shown == format!("Phone {number}") { String::new() } else { shown };
         if let Some(room) = self.phone_room_of(lk_room) {
             let Some(stay) = self.ph.stays.get_mut(&room) else { return };
+            // revision 3 (section 11.3): the first phone caller switches an armed meeting stay, once
+            let switch = !stay.switched;
+            stay.switched = true;
             match stay.callers.iter_mut().find(|c| c.identity == identity) {
                 Some(c) => c.state = CONNECTED,
                 None => {
@@ -604,12 +608,29 @@ impl State {
                 }
             }
             log_info(&format!("phone joined room={room} identity={identity}"));
+            if switch {
+                self.phone_switch(&room, lk_room);
+            }
             self.phone_tell(&room);
             return;
         }
         if lk_room.starts_with(LK_PREFIX) {
             self.phone_inbound(lk_room, identity, number, name, line);
         }
+    }
+
+    /// Section 11.3: the stay now runs on the media server in its dial-in room without end-to-end encryption, and
+    /// every seat hears `phone_switch {room, callers}` and stays seated (it rejoins with the `phone` cap; dropping
+    /// the last seat would end the stay and its dial-in room with the caller in it).
+    fn phone_switch(&mut self, room: &str, lk_room: &str) {
+        let Some(callers) = self.ph.stays.get(room).map(PhoneStay::callers_view) else { return };
+        self.sfu_phone_switch(room, lk_room);
+        let event = obj([("type", Value::from("phone_switch")), ("room", Value::from(room)), ("callers", callers)]);
+        let seats: Vec<String> = self.peers.values().filter(|p| p.room == room).map(|p| p.peer_id.clone()).collect();
+        for id in &seats {
+            self.push_peer(id, &event);
+        }
+        log_info(&format!("phone switch room={room} sfu_room={lk_room} seats={}", seats.len()));
     }
 
     /// Section 5.1: a call to a personal line opens a `ph-` phone stay and rings the line's person; a line nobody
@@ -636,7 +657,7 @@ impl State {
             room = new_room();
         }
         let caller = Caller { identity: identity.to_string(), number: number.clone(), name: name.clone(), kind: "in", state: CONNECTED, line: line.clone(), owner: owner.clone(), invite: String::new(), answered: false };
-        self.ph.stays.insert(room.clone(), PhoneStay { kind: PERSONAL, lk_room: lk_room.to_string(), owner: owner.clone(), callers: vec![caller], rule: None });
+        self.ph.stays.insert(room.clone(), PhoneStay { kind: PERSONAL, lk_room: lk_room.to_string(), owner: owner.clone(), callers: vec![caller], rule: None, switched: true });
         log_info(&format!("phone in room={room} sfu_room={lk_room} line={line} principal={owner}"));
         self.phone_ring(&room, &owner, &number, &name, &line);
     }
@@ -876,12 +897,12 @@ impl Hub {
                     room = new_room();
                 }
                 let lk_room = format!("{LK_PREFIX}out_{}", pj::token_hex(6));
-                st.ph.stays.insert(room.clone(), PhoneStay { kind: PERSONAL, lk_room, owner: who.principal.clone(), callers: Vec::new(), rule: None });
+                st.ph.stays.insert(room.clone(), PhoneStay { kind: PERSONAL, lk_room, owner: who.principal.clone(), callers: Vec::new(), rule: None, switched: true });
                 (room, true)
             }
             Some(Value::String(r)) => {
                 let seated = st.stays.contains_key(r.as_str()) && st.peers.values().any(|p| p.room == *r && p.who.principal == who.principal && !p.admission_pending);
-                let Some(stay) = st.ph.stays.get(r.as_str()).filter(|_| seated) else { return forbidden(NOT_SEATED) };
+                let Some(stay) = st.ph.stays.get(r.as_str()).filter(|s| seated && s.switched) else { return forbidden(NOT_SEATED) };
                 if stay.callers.len() >= PER_STAY {
                     return Err(E::Status(429, TOO_MANY_HERE.into(), false));
                 }
@@ -1251,7 +1272,8 @@ mod tests {
         assert_eq!(refusal(h.join(&room, &ben, "", false, Some(&caps(json!(["phone"]))))), NOT_YOURS);
         assert_eq!(refusal(h.join(&room, &ann2, "", false, Some(&caps(json!(["peer_identity"]))))), NEEDS_UPDATE);
         let guest = Identity { guest: true, ..person("guest-0123456789abcdef@guest.invalid", "") };
-        assert_eq!(refusal(h.join(&room, &guest, "", false, Some(&caps(json!(["phone"]))))), NEEDS_UPDATE);
+        assert_eq!(refusal(h.join(&room, &guest, "", false, Some(&caps(json!(["phone"]))))), NOT_YOURS);
+        assert_eq!(refusal(h.join(&room, &guest, "", false, None)), NOT_YOURS);
         // the owner answers: no end-to-end encryption, the caller in `phone`, the microphone only and the keypad's data
         let joined = h.join(&room, &ann, "", false, Some(&caps(json!(["peer_identity", "phone"])))).unwrap();
         assert_eq!((&joined["media"], &joined["e2ee"]), (&json!("sfu"), &json!({"required": false})));
@@ -1352,23 +1374,56 @@ mod tests {
         assert_eq!(made["phone"]["numbers"], json!(["+19415550199"]));
         let room = made["room"].as_str().unwrap().to_string();
         assert_eq!(refusal(h.meeting_create(&sa, &ann, Some(&json!("x")), Some(&json!(start)), Some(&json!(end)), Some(&json!([])), None, None, None, None, Some(&json!("yes")))), BAD_PHONE);
-        // the stay is a meeting phone stay: no end-to-end encryption, the `phone` cap, the camera too
+        // revision 3 (section 11.2): the stay starts as an ordinary mesh call, armed: no `phone`, any caps
+        let joined = h.join(&room, &ann, "", false, Some(&caps(json!(["peer_identity"])))).unwrap();
+        assert_eq!(joined["media"], json!("mesh"));
+        assert!(joined.get("phone").is_none());
+        let peer = joined["peer"].as_str().unwrap().to_string();
+        let (lk_room, cell) = {
+            let st = h.st.lock();
+            let stay = &st.ph.stays[&room];
+            assert!(!stay.switched && !st.phone_stay(&room) && st.phone_kind(&room).is_none());
+            assert!(!st.phone_room_unheld(&stay.lk_room, 0.0), "the sync keeps the held dial-in room");
+            (stay.lk_room.clone(), stay.rule.clone().unwrap())
+        };
+        assert!(lk_room.starts_with("lucid-phone_dialin_") && lk_room.len() == "lucid-phone_dialin_".len() + 12, "{lk_room}");
+        // the stay ends with its last seat: the rule goes; the next stay is armed again with a new dial-in room
+        h.leave(&peer, &ann).unwrap();
+        assert!(!h.st.lock().ph.stays.contains_key(&room) && cell.lock().ended);
+        let joined = h.join(&room, &ann, "", false, Some(&caps(json!(["peer_identity"])))).unwrap();
+        let peer = joined["peer"].as_str().unwrap().to_string();
+        let lk_room = h.st.lock().ph.stays[&room].lk_room.clone();
+        // section 11.3: a dial-in caller switches it; the seat hears `phone_switch` and stays seated
+        h.phone_webhook(&event("participant_joined", &lk_room, "sip_pin", "+19415550199")).unwrap();
+        let switched = |h: &Hub, peer: &str| -> Vec<Obj> { h.st.lock().peers[peer].events.iter().filter(|e| pj::text_of(e, "type") == "phone_switch").cloned().collect() };
+        let heard = switched(&h, &peer);
+        assert_eq!(heard.len(), 1);
+        assert_eq!((&heard[0]["room"], &heard[0]["callers"][0]["identity"]), (&json!(room), &json!("sip_pin")));
+        {
+            let st = h.st.lock();
+            assert!(st.peers.contains_key(&peer) && st.stays.contains_key(&room) && st.phone_stay(&room));
+            assert_eq!(st.sfu_stay(&room), Some(lk_room.clone()));
+            assert!(!st.sfu_encrypted(&room) && st.phone_keeps(&room, "sip_pin", false));
+        }
+        // the rejoin (a seat takeover) needs the `phone` cap and is a meeting phone stay on the dial-in room
         assert_eq!(refusal(h.join(&room, &ann, "", false, Some(&caps(json!(["peer_identity"]))))), NEEDS_UPDATE);
         let joined = h.join(&room, &ann, "", false, Some(&caps(json!(["peer_identity", "phone"])))).unwrap();
-        assert_eq!((&joined["e2ee"], &joined["phone"]), (&json!({"required": false}), &json!({"kind": "meeting", "callers": []})));
+        assert_eq!((&joined["media"], &joined["e2ee"]), (&json!("sfu"), &json!({"required": false})));
+        assert_eq!(joined["phone"]["kind"], json!("meeting"));
+        assert_eq!(joined["phone"]["callers"][0]["identity"], json!("sip_pin"));
         let token = joined["sfu"]["token"].as_str().unwrap();
         let claims: Value = serde_json::from_slice(&crate::codec::unb64u(token.split('.').nth(1).unwrap()).unwrap()).unwrap();
+        assert_eq!(claims["video"]["room"], json!(lk_room));
         assert_eq!(claims["video"]["canPublishSources"], json!(["microphone", "camera"]));
-        let lk_room = claims["video"]["room"].as_str().unwrap().to_string();
-        assert!(h.st.lock().ph.stays[&room].rule.is_some());
-        // a dial-in caller joins and leaves the stay's LiveKit room
         let peer = joined["peer"].as_str().unwrap().to_string();
-        h.phone_webhook(&event("participant_joined", &lk_room, "sip_pin", "+19415550199")).unwrap();
-        let heard: Vec<Obj> = h.st.lock().peers[&peer].events.iter().filter(|e| pj::text_of(e, "type") == "phone").cloned().collect();
-        assert_eq!(heard.last().unwrap()["callers"][0]["identity"], json!("sip_pin"));
-        assert!(h.st.lock().phone_keeps(&room, "sip_pin", false));
+        // a second caller does not switch again
+        let before = switched(&h, &peer).len();
+        h.phone_webhook(&event("participant_joined", &lk_room, "sip_pin2", "+19415550199")).unwrap();
+        assert_eq!(switched(&h, &peer).len(), before);
+        assert_eq!(h.st.lock().ph.stays[&room].callers.len(), 2);
         h.phone_webhook(&event("participant_left", &lk_room, "sip_pin", "+19415550199")).unwrap();
-        assert!(h.st.lock().ph.stays[&room].callers.is_empty(), "a meeting stays when its callers leave");
+        h.phone_webhook(&event("participant_left", &lk_room, "sip_pin2", "+19415550199")).unwrap();
+        assert!(h.st.lock().phone_stay(&room), "callers leaving does not switch back");
         // the stay ends with its last seat; turning phone off takes the PIN away
         h.leave(&peer, &ann).unwrap();
         assert!(!h.st.lock().ph.stays.contains_key(&room));
@@ -1381,10 +1436,48 @@ mod tests {
     }
 
     #[test]
+    fn every_new_meeting_gets_a_pin_and_web_and_guest_seats_need_the_cap() {
+        let h = hub();
+        let ann = person("ann@x", "aaaaaaaaaaaaaaaa");
+        let (sa, _) = hello(&h, &ann, json!(["phone"]));
+        let (start, end) = (pj::now() + 60.0, pj::now() + 3600.0);
+        let make = |phone: Option<&Value>| h.meeting_create(&sa, &ann, Some(&json!("Plan")), Some(&json!(start)), Some(&json!(end)), Some(&json!([])), None, None, None, None, phone);
+        // section 11.1: absent or null `phone` means a PIN on a relay with a conference number; false means none
+        let made = make(None).unwrap();
+        let pin = made["phone"]["pin"].as_str().unwrap();
+        assert!(pin.len() == 6 && pin.bytes().all(|c| c.is_ascii_digit()), "{pin}");
+        assert!(make(Some(&json!(null))).unwrap()["phone"]["pin"].is_string());
+        assert!(make(Some(&json!(false))).unwrap().get("phone").is_none());
+        // section 11.4: a web seat joins the armed (ordinary) stay; the switch tells every seat and keeps them
+        let room = made["room"].as_str().unwrap().to_string();
+        // another person: one person's second seat in a room takes over their first
+        let web = Identity { kind: "web".into(), ..person("bob@x", "wwwwwwwwwwwwwwww") };
+        let a = h.join(&room, &ann, "", false, Some(&caps(json!(["peer_identity", "phone"])))).unwrap();
+        let w = h.join(&room, &web, "", false, Some(&caps(json!(["phone"])))).unwrap();
+        assert!(a.get("phone").is_none() && w.get("phone").is_none());
+        let lk_room = h.st.lock().ph.stays[&room].lk_room.clone();
+        h.phone_webhook(&event("participant_joined", &lk_room, "sip_pin", "+19415550199")).unwrap();
+        for joined in [&a, &w] {
+            let peer = joined["peer"].as_str().unwrap();
+            let st = h.st.lock();
+            assert!(st.peers[peer].events.iter().any(|e| pj::text_of(e, "type") == "phone_switch"), "{peer}");
+        }
+        assert_eq!(refusal(h.join(&room, &web, "", false, Some(&caps(json!([]))))), NEEDS_UPDATE);
+        let w = h.join(&room, &web, "", false, Some(&caps(json!(["phone"])))).unwrap();
+        assert_eq!((&w["e2ee"], &w["phone"]["kind"]), (&json!({"required": false}), &json!("meeting")));
+        let guest = Identity { guest: true, ..person("guest-0123456789abcdef@guest.invalid", "") };
+        assert_eq!(refusal(h.join(&room, &guest, "", false, None)), NEEDS_UPDATE);
+        // without a conference number: absent creates none, true stays 409
+        h.st.lock().ph.cfg = Some(Arc::new(parse(&settings(false)).unwrap()));
+        assert!(make(None).unwrap().get("phone").is_none());
+        assert_eq!(refusal(make(Some(&json!(true)))), NO_CONFERENCE);
+    }
+
+    #[test]
     fn the_sync_keeps_live_phone_participants_and_old_unheld_phone_rooms_go() {
         let h = hub();
         let mut st = h.st.lock();
-        st.ph.stays.insert("ph-aaaaaaaaaa".into(), PhoneStay { kind: PERSONAL, lk_room: "lucid-phone_x".into(), owner: "ann@x".into(), callers: Vec::new(), rule: None });
+        st.ph.stays.insert("ph-aaaaaaaaaa".into(), PhoneStay { kind: PERSONAL, lk_room: "lucid-phone_x".into(), owner: "ann@x".into(), callers: Vec::new(), rule: None, switched: true });
         assert!(st.phone_keeps("ph-aaaaaaaaaa", "sip_1", true) && !st.phone_keeps("ph-aaaaaaaaaa", "ghost", false) && !st.phone_keeps("big", "sip_1", true));
         assert!(!st.phone_room_unheld("lucid-phone_x", 0.0), "held");
         assert!(st.phone_room_unheld("lucid-phone_y", 0.0));
