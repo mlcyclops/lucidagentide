@@ -58,6 +58,9 @@ pub use sfu::{E2EE_BODY_MAX, E2EE_ROSTER_BODY_MAX};
 // PH-1 (docs/phone/contract.md): phone numbers for people and a conference number, through LiveKit SIP.
 #[path = "meet_phone.rs"]
 pub mod phone;
+// PH-1 revision 2 (docs/phone/contract.md section 10): texts from a person's phone number through the provider's API.
+#[path = "meet_sms.rs"]
+pub mod sms;
 #[path = "meet_guests.rs"]
 pub mod guests;
 #[path = "meet_bridge.rs"]
@@ -579,6 +582,8 @@ pub struct State {
     /// In memory: PH-1's settings, phone-capable sessions, phone stays and webhook ids (persisted state: the meetings'
     /// `phone_pin` and ext["phone"]).
     ph: phone::Phone,
+    /// In memory: PH-1 revision 2's texting settings and outbound rate book (persisted state: ext["sms"]).
+    sms: sms::Sms,
 }
 
 /// _empty_stage. `spotlight`: the peer everyone sees large ("" for none); `cohosts`: the co-organizers' principals.
@@ -1649,6 +1654,7 @@ impl State {
         self.control_prune();
         self.sfu_prune();
         self.phone_prune(now);
+        self.sms_prune(now);
         self.guests_sweep();
         self.bridge_prune(now);
         self.ce_prune(now);
@@ -2012,6 +2018,7 @@ impl Hub {
             pc_docs: pc_docs::DocsRate::default(),
             wa: wa::Wa::new(),
             ph: phone::Phone::default(),
+            sms: sms::Sms::default(),
         };
         let hub = Hub { st: Mutex::new(st), cond: Condvar::new(), signer, links, state_dir, save_lock: Mutex::new(()), stop: AtomicBool::new(false), console_hooks: Mutex::new(None), denied_until: Mutex::new(HashMap::new()), gate: Mutex::new(None), cluster: std::sync::OnceLock::new() };
         if hub.state_dir.is_some() {

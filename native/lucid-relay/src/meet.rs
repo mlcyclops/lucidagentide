@@ -2057,6 +2057,8 @@ fn serve(settings: Settings) -> ! {
     crate::api_listener::start(&relay).unwrap_or_else(|e| die(&e));
     // PH-1 section 4: the media server's webhooks on their own TLS listener (nothing without `phone`)
     crate::meet_hub::phone::start(&settings, hub.clone()).unwrap_or_else(|e| die(&e));
+    // PH-1 revision 2 (section 10.1): voip.ms text callbacks on their own TLS listener (nothing without `phone.sms`)
+    crate::meet_hub::sms::start(&settings, hub.clone()).unwrap_or_else(|e| die(&e));
     relay.start_upkeep();
     log_info(&format!(
         "listening on {}:{} (certificate server: {})",

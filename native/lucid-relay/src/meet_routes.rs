@@ -64,6 +64,19 @@ fn get_route(path: &str) -> Option<Route> {
             c.relay.hub.notify_reads(&who)
         },
         "/v1/dm/history" => dm_history,
+        // PH-1 revision 2 (contract section 10.3): the caller's text threads and a thread's messages
+        "/v1/sms/threads" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            let session = c.q("session", "");
+            c.gate(&who, None, "", &session)?;
+            c.relay.hub.sms_threads(&session, &who)
+        },
+        "/v1/sms/history" => |c: &mut Ctx| {
+            let who = c.who(false)?;
+            let session = c.q("session", "");
+            c.gate(&who, None, "", &session)?;
+            c.relay.hub.sms_history(&session, &who, &c.q("number", ""), &c.q("after", "0"), &c.q("limit", "50"))
+        },
         "/v1/channels" => |c: &mut Ctx| {
             let who = c.who(false)?;
             let session = c.q("session", "");
@@ -411,6 +424,15 @@ fn post_route(path: &str) -> Option<Route> {
         "/v1/phone/call" => |c: &mut Ctx| {
             let (who, b, session) = session_gate(c)?;
             c.relay.hub.phone_call(&session, &who, b.get("to"), b.get("room"))
+        },
+        // PH-1 revision 2 (contract section 10.3): a text from the caller's line, and a text thread's read mark
+        "/v1/sms" => |c: &mut Ctx| {
+            let (who, b, session) = session_gate(c)?;
+            c.relay.hub.sms_send(&session, &who, b.get("to"), b.get("text"))
+        },
+        "/v1/sms/read" => |c: &mut Ctx| {
+            let (who, b, session) = session_gate(c)?;
+            c.relay.hub.sms_read(&session, &who, b.get("number"), b.get("ts"))
         },
         // NT-1 section 3.5: the caller's own device declines one of their invitations
         "/v1/invite/settle" => |c: &mut Ctx| {

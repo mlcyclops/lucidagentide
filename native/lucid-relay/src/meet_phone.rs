@@ -68,8 +68,9 @@ pub(super) const REPLAYED: &str = "this webhook was already received";
 const NO_LENGTH: &str = "the webhook needs a Content-Length";
 const BAD_EVENT: &str = "the webhook body must be a JSON object with its event id";
 // relay.json `phone` (section 2)
-const SHAPE: &str = "relay settings: phone must be {webhook_listen, webhook_from, lines, outbound_trunk, conference}";
-const FIELDS: [&str; 5] = ["webhook_listen", "webhook_from", "lines", "outbound_trunk", "conference"];
+const SHAPE: &str = "relay settings: phone must be {webhook_listen, webhook_from, lines, outbound_trunk, conference, sms}";
+// `sms` (revision 2, section 10.1) is checked by meet_sms
+const FIELDS: [&str; 6] = ["webhook_listen", "webhook_from", "lines", "outbound_trunk", "conference", "sms"];
 const LISTEN: &str = "relay settings: phone.webhook_listen must be host:port (where the media server's webhooks arrive)";
 const FROM: &str = "relay settings: phone.webhook_from must list the media servers' address ranges (CIDR)";
 const LINES: &str = "relay settings: phone.lines must map phone numbers (E.164, like +19415550100) to people's email addresses";
@@ -224,8 +225,8 @@ fn status_of(status: Option<u16>) -> String {
     status.map(|s| s.to_string()).unwrap_or_else(|| "failed".into())
 }
 
-/// `host:port` of `webhook_listen` (an IPv6 host in brackets).
-fn listen_parts(text: &str) -> Option<(String, u16)> {
+/// `host:port` of `webhook_listen` (and of `sms.callback_listen`; an IPv6 host in brackets).
+pub(super) fn listen_parts(text: &str) -> Option<(String, u16)> {
     let (host, port) = text.rsplit_once(':')?;
     let host = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')).unwrap_or(host);
     let port = port.parse::<u16>().ok().filter(|p| *p > 0)?;
@@ -391,10 +392,12 @@ impl State {
     pub(super) fn phone_configure(&mut self, s: &m::Settings) -> Result<(), String> {
         if s.phone.is_null() {
             self.ph.cfg = None;
-            return Ok(());
+            return self.sms_configure(None);
         }
         let cfg = parse(&s.phone)?;
         let Some(sfu) = self.sfu_cfg() else { return Err(NEEDS_SFU.into()) };
+        // revision 2 (section 10.1): texts from the same lines
+        self.sms_configure(s.phone.get("sms"))?;
         for (number, principal) in &cfg.lines {
             if !self.directory.contains_key(principal) {
                 log_info(&format!("phone line={number} principal={principal} unknown (it rings once they sign in)"));
@@ -797,6 +800,16 @@ impl State {
         }
         Some(Value::Object(obj([("numbers", Value::from(cfg.numbers.clone())), ("pin", Value::from(pin))])))
     }
+
+    /// The line `principal` holds (revision 2: their texts go out from it).
+    pub(super) fn phone_line_of(&self, principal: &str) -> Option<String> {
+        self.ph.cfg.as_ref()?.line_of(principal).map(str::to_string)
+    }
+
+    /// Who holds the line `number` (revision 2: texts to it go to their thread).
+    pub(super) fn phone_owner_of(&self, number: &str) -> Option<String> {
+        self.ph.cfg.as_ref()?.owner_of(number).map(str::to_string)
+    }
 }
 
 impl Hub {
@@ -816,11 +829,16 @@ impl Hub {
         } else {
             st.ph.sessions.remove(&session);
         }
+        let sms = st.sms_on();
         drop(st);
         if let (Some(line), Some(Value::Object(you))) = (cfg.line_of(&who.principal), reply.get_mut("you")) {
             you.insert("phone_line".into(), Value::from(line));
             if !cfg.outbound.is_empty() {
                 you.insert("phone_out".into(), Value::Bool(true));
+            }
+            // revision 2 (section 10.3): the person can text from the line
+            if sms {
+                you.insert("phone_sms".into(), Value::Bool(true));
             }
         }
         if cfg.conference() {
