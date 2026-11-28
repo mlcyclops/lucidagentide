@@ -779,7 +779,9 @@ function effectiveRelay(): { wsBase: string; httpBase: string; label: string; so
   const hosted = /^wss?:\/\/relay\.aiworkshopapps\.com(?:[:/]|$)/i.test(r.wsBase);
   const pwaBase = envPwaBase ?? (hosted ? "https://lucid-agent.web.app/remote" : undefined);
   const gated = gatedEnv ? (gatedEnv === "1" || gatedEnv.toLowerCase() === "true") : (!!pwaBase || hosted);
-  return { wsBase: r.wsBase, httpBase: r.httpBase, label: r.label, source: r.source, pwaBase, gated };
+  // P-SHARE.RELAY1 (ADR-0700): the hosted relay is TechLead 187 LLC's (Google Cloud), never "self-hosted", however
+  // its URL was saved (the LUCID relay button or typed into the self-hosted field).
+  return { wsBase: r.wsBase, httpBase: r.httpBase, label: r.label, source: hosted ? "lucid" : r.source, pwaBase, gated };
 }
 
 // P-COLLAB.10 (ADR-0196): the one shared session this backend is WATCHING as a guest (Phase 1: one at a time).

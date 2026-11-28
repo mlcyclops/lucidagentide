@@ -870,7 +870,8 @@ export interface ManagedPolicy {
 // P-COLLAB.3 (ADR-0192): the live-share surface. `CollabParticipantView` mirrors the host's roster entry;
 // `CollabShareStatus` is what the Share panel polls; `CollabRelay` is the authorized relay (null = none).
 export interface CollabParticipantView { peerId: number; name: string; role: "host" | "guest"; access: "view" | "edit" }
-export interface CollabRelay { wsBase: string; httpBase: string; label: string; source: "self-hosted" | "public" | "embedded"; pwaBase?: string; gated?: boolean }
+/** `source` "lucid" (P-SHARE.RELAY1, ADR-0700): the first-party hosted relay, run by TechLead 187 LLC on Google Cloud. */
+export interface CollabRelay { wsBase: string; httpBase: string; label: string; source: "lucid" | "self-hosted" | "public" | "embedded"; pwaBase?: string; gated?: boolean }
 /** P-COLLAB.7: the embedded-relay ("be the relay") status the toggle polls. `managed.locked` disables the
  *  control (+ "Managed by <org>"); `managed.allowServe:false` means the org forbids hosting a relay. */
 /** P-COLLAB.14: a bindable address the "be the relay" toggle can offer (loopback / LAN / VPN). */

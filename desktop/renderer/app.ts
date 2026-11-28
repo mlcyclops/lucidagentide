@@ -17886,10 +17886,25 @@ function dockSec(id: string, title: string, defaultOpen: boolean, inner: string,
  *  and sends phone invites to the LUCID web app; the same URL desktop/scripts/configure_remote_relay.ts writes. */
 const LUCID_HOSTED_RELAY = "wss://relay.aiworkshopapps.com";
 
+/** P-SHARE.RELAY1 (ADR-0700): the chip beside a relay's name. The engine reports the hosted relay as "lucid" (dev.ts
+ *  effectiveRelay), so it reads as TechLead 187 LLC's relay, never "self-hosted". */
+function relaySourceTag(source: string | undefined): string {
+  if (source === "lucid") return `<span class="share-peer-tag lucid" data-tip="LUCID relay|Run by TechLead 187 LLC on Google Cloud. The session stays end-to-end encrypted: the relay never reads it.">TechLead 187 LLC relay</span>`;
+  const text = source === "public" ? "public relay" : source === "embedded" ? "no third party" : "self-hosted relay";
+  return `<span class="share-peer-tag">${text}</span>`;
+}
+
+/** P-SHARE.RELAY1 (ADR-0700): the LUCID relay's own glyph: a hub broadcasting two waves, which fade in turn (styles.css
+ *  `.relay-glyph`; opacity only, nothing moves). */
+const RELAY_GLYPH = `<svg class="relay-glyph" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round">`
+  + `<circle class="rg-core" cx="12" cy="12" r="2.6" fill="currentColor" stroke="none"/>`
+  + `<path class="rg-w1" d="M8.2 8.2a5.4 5.4 0 0 0 0 7.6M15.8 8.2a5.4 5.4 0 0 1 0 7.6"/>`
+  + `<path class="rg-w2" d="M5.1 5.1a9.8 9.8 0 0 0 0 13.8M18.9 5.1a9.8 9.8 0 0 1 0 13.8"/></svg>`;
+
 function shareBodyHtml(st: CollabShareStatus | null, p2p?: CollabP2PConfig | null, auth?: { gated: boolean; signedIn: boolean; email?: string }, collapsed: Record<string, boolean> = {}, ui?: { allowEdit: boolean; preferDirect: boolean }): string {
   if (!st) return `<div class="share-err">${icon("info", 14)} Couldn't reach the backend. Is the GUI server running?</div>`;
   if (st.active) {
-    const src = st.relaySource === "public" ? "public relay" : "self-hosted relay";
+    const src = st.relaySource === "lucid" ? "TechLead 187 LLC relay" : st.relaySource === "public" ? "public relay" : "self-hosted relay"; // P-SHARE.RELAY1
     const roster = st.participants.length
       ? st.participants.map((p) => `<li class="share-peer"><span class="share-peer-dot"></span>${esc(p.name)} <span class="share-peer-tag">${esc(p.access)}</span></li>`).join("")
       : `<li class="share-peer-empty">${icon("clock", 13)} Waiting for someone to join…</li>`;
@@ -17947,15 +17962,14 @@ function shareBodyHtml(st: CollabShareStatus | null, p2p?: CollabP2PConfig | nul
   if (!st.relay) {
     return dockSec("sec-relay-setup", "Relay setup", true, `
       <div class="share-setup-note">${icon("shield", 13)}<span>No relay is configured yet. Pick one: the <b>LUCID relay</b> (sign in with Google once; a phone can open the invite in the LUCID web app and, if you allow it, drive), or your own <b>self-hosted</b> relay for a sovereign, air-gapped posture.</span></div>
-      <div class="dock-foot"><button class="btn-mini ok" data-share-relay-hosted>${icon("shareLive", 12)} Use the LUCID relay</button></div>
+      <div class="share-hosted"><button type="button" class="share-hosted-cta" data-share-relay-hosted data-tip="Use the LUCID relay|Run by TechLead 187 LLC on Google Cloud. Sign in with Google once; the session stays end-to-end encrypted.">${RELAY_GLYPH}<span>Use the LUCID relay</span></button><span class="share-hosted-sub">TechLead 187 LLC \u00b7 Google Cloud</span></div>
       <label class="share-lbl">Or a self-hosted relay URL</label>
       <div class="share-field"><input class="share-link-input" id="shareRelayUrl" type="text" placeholder="wss://relay.your-org.internal" spellcheck="false" /></div>
       <label class="share-check"><input type="checkbox" id="shareRelayPublic" /> <span>Use the public relay (<code>my.omp.sh</code>) instead - fine for a quick demo, not for sensitive work.</span></label>
       <div id="shareRelayErr" class="modal-err" hidden></div>`, collapsed)
       + `<div class="dock-foot"><button class="btn-mini ok" data-share-relay-save>${icon("check", 12)} Save relay</button></div>`;
   }
-  const src = st.relay.source === "public" ? "public relay" : st.relay.source === "embedded" ? "no third party" : "self-hosted relay";
-  const relayReady = `<div class="share-ready-note">${icon("check", 13)}<span>Relay ready: <b>${esc(st.relay.label)}</b> <span class="share-peer-tag">${esc(src)}</span></span></div>`;
+  const relayReady = `<div class="share-ready-note">${icon("check", 13)}<span>Relay ready: <b>${esc(st.relay.label)}</b> ${relaySourceTag(st.relay.source)}</span></div>`;
   // P-REMOTE.2c: a GATED relay needs THIS desktop signed in (Google) before it can connect, so offer sign-in
   // right here - no detour through the Compiled KB marketplace. Not signed in, the sign-in step replaces Start
   // (you cannot host a gated relay without a token); signed in, show the account plus a sign-out.

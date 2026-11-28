@@ -6138,7 +6138,33 @@ td.row-act .btn-mini{padding:3px 8px;font-size:10.5px}
 .share-peer{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--txt);background:var(--bg-2);border-radius:7px;padding:6px 9px}
 .share-peer-dot{width:7px;height:7px;border-radius:50%;background:var(--cyan);flex:none}
 .share-peer-tag{margin-left:auto;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--txt-3);
-  background:var(--bg-0);border:1px solid var(--line);border-radius:5px;padding:1px 6px}
+  background:var(--bg-0);border:1px solid var(--line);border-radius:5px;padding:1px 6px;white-space:nowrap}
+/* P-SHARE.RELAY1 (ADR-0700): the hosted relay's chip names who runs it */
+.share-peer-tag.lucid{color:var(--accent-2);border-color:color-mix(in srgb,var(--accent) 40%,transparent);background:color-mix(in srgb,var(--accent) 12%,transparent)}
+/* P-SHARE.RELAY1 (ADR-0700): "Use the LUCID relay", the setup's main choice: big, centered, in the theme's accent,
+   with its own glyph whose waves fade in turn under a slow glow. Under reduced motion the global reset stops both
+   pulses, and the resting state is the one shown: a steady glow and fully lit waves. */
+.share-hosted{display:flex;flex-direction:column;align-items:center;gap:7px;margin:14px 0 16px}
+.share-hosted-cta{display:inline-flex;align-items:center;justify-content:center;gap:10px;min-width:min(100%,264px);max-width:100%;box-sizing:border-box;
+  padding:12px 24px;border:1px solid rgb(var(--accent-2-rgb) / .55);border-radius:13px;cursor:pointer;
+  background:linear-gradient(150deg,var(--accent),var(--accent-deep));color:var(--on-fill);font:inherit;font-size:14px;font-weight:650;letter-spacing:.01em;
+  box-shadow:0 0 0 1px rgb(var(--accent-rgb) / .25),0 6px 18px -6px rgb(var(--accent-rgb) / .55),inset 0 1px 0 rgb(var(--tint-rgb) / .22);
+  animation:relayGlow 2.8s ease-in-out infinite;transition:filter var(--t),border-color var(--t)}
+.share-hosted-cta>span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.share-hosted-cta:hover{filter:brightness(1.08) saturate(1.05);border-color:rgb(var(--accent-2-rgb) / .9)}
+.share-hosted-cta:active{filter:brightness(.96)}
+.share-hosted-cta:focus-visible{outline:2px solid var(--accent-2);outline-offset:3px}
+.share-hosted-sub{max-width:100%;font-family:var(--mono);font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--txt-3);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.relay-glyph{flex:none;filter:drop-shadow(0 0 4px rgb(var(--tint-rgb) / .35))}
+.relay-glyph .rg-core{animation:relayCore 2.8s ease-in-out infinite}
+.relay-glyph .rg-w1{animation:relayWave 2.8s ease-in-out infinite}
+.relay-glyph .rg-w2{animation:relayWave 2.8s ease-in-out .45s infinite}
+@keyframes relayGlow{
+  0%,100%{box-shadow:0 0 0 1px rgb(var(--accent-rgb) / .25),0 6px 18px -6px rgb(var(--accent-rgb) / .55),inset 0 1px 0 rgb(var(--tint-rgb) / .22)}
+  50%{box-shadow:0 0 0 1px rgb(var(--accent-2-rgb) / .45),0 0 26px -2px rgb(var(--accent-rgb) / .6),inset 0 1px 0 rgb(var(--tint-rgb) / .22)}}
+@keyframes relayCore{0%,100%{opacity:.8}50%{opacity:1}}
+@keyframes relayWave{0%,100%{opacity:.3}40%{opacity:1}}
 .share-peer-empty{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--txt-3);padding:6px 2px}
 .share-peer-empty .ic{color:var(--txt-4)}
 .btn-mini.danger{color:var(--red);border-color:color-mix(in srgb,var(--red) 40%,transparent)}
