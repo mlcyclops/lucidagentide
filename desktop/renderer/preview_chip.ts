@@ -20,7 +20,7 @@
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
 import { laneShots, laneShotsStripHtml, onLaneShots } from "./lane_shots.ts"; // P-LANESHOTS.1: the agent's snapshots
-import { chipCardAt, chipStackAt, chipText, type ChipState } from "./preview_curtain.ts";
+import { chipCardAt, chipStackAt, chipText, nodeOnStage, type ChipState } from "./preview_curtain.ts";
 import { setTip } from "./ui.ts";
 
 export type ChipSize = "full" | "compact";
@@ -85,6 +85,8 @@ export interface WorldChips {
   set(id: string, v: ChipState | null): void;
   /** Esc: hide the hover card. True when one was showing. */
   escape(): boolean;
+  /** P-OVERLAP.1: the chip over node `id` in stage px as last placed, or null while it has none or is off screen. */
+  rectOf(id: string): { left: number; top: number; right: number; bottom: number } | null;
   /** For the real-UI check: every chip, its phase, its box on screen (null while hidden) and its card. */
   probe(): Array<{ id: string; phase: string; box: { x: number; y: number; w: number; h: number } | null; card: boolean }>;
   destroy(): void;
@@ -112,7 +114,8 @@ export function mountWorldPreviewChips(stage: HTMLElement, deps: WorldChipDeps):
   let tabbing = false;
 
   const placeOne = (id: string, c: Chip, s: DOMRect): void => {
-    const b = deps.boxOf(id);
+    const seen = deps.boxOf(id);
+    const b = seen && nodeOnStage(seen, s) ? seen : null; // P-PREVIEW.CHIPOFF1: off the stage, not pinned to its edge
     c.btn.hidden = !b;
     if (!b) { c.at = null; if (cardFor === id) hideCard(); return; }
     c.at = chipStackAt(b, s, { w: c.btn.offsetWidth, h: c.btn.offsetHeight }, deps.below(id));
@@ -249,6 +252,11 @@ export function mountWorldPreviewChips(stage: HTMLElement, deps: WorldChipDeps):
       hideCard();
       if (focusInCard && back && !back.hidden) back.focus({ preventScroll: true });
       return true;
+    },
+    rectOf(id) {
+      const c = chips.get(id);
+      if (!c?.at || c.btn.hidden) return null;
+      return { left: c.at.x, top: c.at.y, right: c.at.x + c.btn.offsetWidth, bottom: c.at.y + c.btn.offsetHeight };
     },
     probe: () => [...chips].map(([id, c]) => {
       const r = c.btn.hidden ? null : c.btn.getBoundingClientRect();

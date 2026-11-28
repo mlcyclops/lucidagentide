@@ -38,6 +38,16 @@ const TILT_DEG = 7;
 
 const clamp = (v: number, lo: number, hi: number): number => Math.max(lo, Math.min(Math.max(lo, hi), v));
 
+/** A box in stage pixels: its top-left corner and its size. */
+export interface StageBox { left: number; top: number; w: number; h: number }
+
+/** P-OVERLAP.1: the panel covers `other` (the role legend in the stage's corner), so `other` steps aside while the
+ *  panel is there instead of showing through it. An empty box (no roles yet) is never covered. */
+export function panelCovers(panel: StageBox, other: StageBox): boolean {
+  if (other.w <= 0 || other.h <= 0) return false;
+  return panel.left < other.left + other.w && other.left < panel.left + panel.w && panel.top < other.top + other.h && other.top < panel.top + panel.h;
+}
+
 /** Place a panel of `panel` size beside `node` inside a stage of `stage` size; `prev` is the side it had last
  *  frame (null when it just opened). */
 export function placePanel(stage: { w: number; h: number }, panel: { w: number; h: number }, node: NodeBox, prev: PanelSide | null): PanelPlacement {

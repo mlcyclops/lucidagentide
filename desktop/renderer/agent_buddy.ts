@@ -22,6 +22,7 @@ import { DRAG_SLOP, loopDelay, placeModule } from "./agents_rail.ts";
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
 import { baseTier, pollDelay, type PerfTier } from "./perf_tier.ts";
+import { nodeOnStage } from "./preview_curtain.ts"; // P-PREVIEW.CHIPOFF1: one off-stage rule for buddies and chips
 import type { BuddyIdea, BuddyReply, BuddySurface, FleetStatusView } from "./bridge.ts";
 import { setTip, type ToastOpts } from "./ui.ts";
 import { tipValue } from "./tip_text.ts";
@@ -84,6 +85,29 @@ export function defaultSpot(anchor: Rect, canvas: Rect, size: Size, scale = 1): 
     { x: (anchor.left - canvas.left) / s + 6, y: (anchor.top - canvas.top) / s - size.h - 2 },
     size, { w: canvas.width / s, h: canvas.height / s },
   );
+}
+
+/** P-OVERLAP.1: the composer's rect with its top raised to the highest of `above`, the bars a lane stacks over its
+ *  composer (approval, recover, progress, queue, files) that are on screen now, so the default spot sits over the
+ *  whole stack and never on an Allow/Deny bar. Empty rects (a hidden bar) do not count. */
+export function liftAnchor(anchor: Rect, above: readonly Rect[]): Rect {
+  let top = anchor.top;
+  for (const r of above) if (r.width > 0 && r.height > 0 && r.top < top) top = r.top;
+  return { left: anchor.left, top, width: anchor.width, height: anchor.height + (anchor.top - top) };
+}
+
+/** A box in stage px; `right` and `bottom` are exclusive. */
+export interface Box { left: number; top: number; right: number; bottom: number }
+
+/** P-OVERLAP.1: a world buddy at `p` that would cover `keep` (its node's chips) steps sideways off them: to their
+ *  left `gap` px clear, or to their right when the left has no room on a `stageW`-wide stage. A buddy already
+ *  clear stays where it is. */
+export function sidestep(p: Pt, size: Size, keep: Box | null, stageW: number, gap = 4): Pt {
+  if (!keep) return p;
+  const clear = p.x + size.w <= keep.left || p.x >= keep.right || p.y + size.h <= keep.top || p.y >= keep.bottom;
+  if (clear) return p;
+  const left = keep.left - gap - size.w;
+  return { x: left >= 2 || keep.right + gap + size.w > stageW - 2 ? left : keep.right + gap, y: p.y };
 }
 
 const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
@@ -188,6 +212,8 @@ export interface WorldBuddySource {
   folderOf(id: string): string | null;
   /** The fleet lane id behind the node, or null. */
   laneOf(id: string): string | null;
+  /** P-OVERLAP.1: what already stands over the node (its preview and artifact chips) in stage px, or null. */
+  keepClear(id: string): Box | null;
 }
 
 export interface AgentBuddiesDeps {
@@ -235,6 +261,8 @@ interface Buddy {
   spotKey: string;
   canvas: HTMLElement;
   anchor: HTMLElement | null;
+  /** P-OVERLAP.1: the bars stacked over the anchor (a lane's approval, recover, progress, queue and file rows). */
+  stack: HTMLElement[];
   host: HTMLElement;
   btn: HTMLButtonElement;
   badge: HTMLElement;
@@ -266,6 +294,14 @@ function applyPalette(el: HTMLElement, p: AgentPalette): void {
 }
 
 const shown = (el: HTMLElement | null): el is HTMLElement => !!el && el.isConnected && el.getClientRects().length > 0;
+/** P-OVERLAP.1: a lane card's bars between its transcript and its composer (fleet_grid's card body). */
+const laneStack = (canvas: HTMLElement): HTMLElement[] => {
+  const out: HTMLElement[] = [];
+  for (let e = canvas.querySelector(":scope > .fleet-out-wrap")?.nextElementSibling; e && !e.classList.contains("fleet-compose"); e = e.nextElementSibling) {
+    if (e instanceof HTMLElement) out.push(e);
+  }
+  return out;
+};
 /** P-SPINUP.1 (ADR-0668): this surface's agent is still starting and its spin-up walker (agent_spinup.ts, same key,
  *  same canvas) stands in for the buddy until it has faded out. */
 const spinningUp = (b: Pick<Buddy, "canvas" | "key">): boolean => !!b.canvas.querySelector(`:scope > .spw-host[data-spw-key="${CSS.escape(b.key)}"]`);
@@ -356,7 +392,7 @@ export function mountAgentBuddies(d: AgentBuddiesDeps): AgentBuddies {
   }
 
   // ── buddy elements ──
-  function makeBuddy(key: string, where: Where, agent: string, laneId: string | null, folder: string, canvas: HTMLElement, anchor: HTMLElement | null): Buddy {
+  function makeBuddy(key: string, where: Where, agent: string, laneId: string | null, folder: string, canvas: HTMLElement, anchor: HTMLElement | null, stack: HTMLElement[] = []): Buddy {
     const host = document.createElement("div");
     host.className = "abd-host";
     host.dataset.where = where;
@@ -370,13 +406,14 @@ export function mountAgentBuddies(d: AgentBuddiesDeps): AgentBuddies {
     btn.dataset.abdKey = key;
     if (laneId) btn.dataset.abdLane = laneId;
     const b: Buddy = {
-      key, where, agent, laneId, folder, spotKey: where === "main" ? "main" : `${where}:${normFolder(folder)}`, canvas, anchor, host, btn,
+      key, where, agent, laneId, folder, spotKey: where === "main" ? "main" : `${where}:${normFolder(folder)}`, canvas, anchor, stack, host, btn,
       badge: document.createElement("i"), chip: host.querySelector(".abd-chip") as HTMLElement, st: "idle", name: "", pal: "", pos: { x: 0, y: 0 }, dragging: false, chipTimer: 0, ro: null,
     };
     if (where !== "world" && typeof ResizeObserver !== "undefined") {
       b.ro = new ResizeObserver(() => { if (buddies.get(key) === b) layoutAnchored(b); });
       b.ro.observe(canvas);
       if (anchor) b.ro.observe(anchor);
+      for (const s of stack) b.ro.observe(s); // a bar shown or hidden changes its size, so the buddy moves with it
     }
     b.badge.className = "abd-badge";
     b.badge.setAttribute("aria-hidden", "true");
@@ -441,7 +478,7 @@ export function mountAgentBuddies(d: AgentBuddiesDeps): AgentBuddies {
     const canvas = { w: c.width / s, h: c.height / s };
     const spot = spots[b.spotKey];
     if (spot && "fx" in spot) { setPos(b, fromFraction(spot, size, canvas)); return; }
-    const a = shown(b.anchor) ? b.anchor.getBoundingClientRect() : null;
+    const a = shown(b.anchor) ? liftAnchor(b.anchor.getBoundingClientRect(), b.stack.filter(shown).map((e) => e.getBoundingClientRect())) : null;
     setPos(b, a ? defaultSpot(a, c, size, s) : clampToCanvas({ x: 8, y: canvas.h - size.h - 72 }, size, canvas));
   }
 
@@ -449,7 +486,7 @@ export function mountAgentBuddies(d: AgentBuddiesDeps): AgentBuddies {
   function worldBase(b: Buddy, att: Attachment, nodeId: string, s: DOMRect): Pt | null {
     const box = att.src.boxOf(nodeId);
     // A node off the stage (panned or orbited away) takes its buddy with it, never piled on the stage's edge.
-    if (!box || box.x < s.left || box.x > s.right || box.y < s.top || box.y > s.bottom) return null;
+    if (!box || !nodeOnStage(box, s)) return null;
     const k = scaleOf(att.stage, s);
     const size = sizeOf(b);
     return { x: (box.x - box.r - s.left) / k - size.w / 2, y: (box.y - box.r - s.top) / k - size.h / 2 };
@@ -462,8 +499,11 @@ export function mountAgentBuddies(d: AgentBuddiesDeps): AgentBuddies {
     b.host.hidden = false;
     const k = scaleOf(att.stage, s);
     const off = spots[b.spotKey];
-    const o = off && "dx" in off ? off : { dx: 0, dy: 0 };
-    setPos(b, clampToCanvas({ x: base.x + o.dx, y: base.y + o.dy }, sizeOf(b), { w: s.width / k, h: s.height / k }));
+    const size = sizeOf(b);
+    const stage = { w: s.width / k, h: s.height / k };
+    // A spot the user dragged it to is theirs; the default one steps off the node's chips (P-OVERLAP.1).
+    const at = off && "dx" in off ? { x: base.x + off.dx, y: base.y + off.dy } : sidestep(base, size, att.src.keepClear(nodeId), stage.w);
+    setPos(b, clampToCanvas(at, size, stage));
     if (cur === b) placePop();
   }
   const attOf = (b: Buddy): { att: Attachment; node: string } | null => {
@@ -791,7 +831,7 @@ export function mountAgentBuddies(d: AgentBuddiesDeps): AgentBuddies {
         seen.add(key);
         let b = buddies.get(key);
         if (b && (b.canvas !== canvas || normFolder(b.folder) !== normFolder(lane.cwd))) { dropBuddy(key); b = undefined; }
-        b ??= makeBuddy(key, "lane", laneId, laneId, lane.cwd, canvas, card.querySelector<HTMLElement>(".fleet-compose"));
+        b ??= makeBuddy(key, "lane", laneId, laneId, lane.cwd, canvas, card.querySelector<HTMLElement>(".fleet-compose"), laneStack(canvas));
         paintBuddy(b);
         layoutAnchored(b);
       }

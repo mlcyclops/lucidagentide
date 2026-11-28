@@ -9,7 +9,7 @@ import { describe, expect, it } from "bun:test";
 import {
   askFraming, AUTO_GAP_MS, buddyTip, clampToCanvas, defaultSpot, GLOW_S, glowDelay, fromFraction, ideaCount, isStale, loadPositions,
   readBuddySettings, saveBuddySettings, savePositions, shouldAutoSuggest, STALE_MS, toFraction,
-  hiddenKey, HIDDEN_MAX, loadHidden, saveHidden,
+  hiddenKey, HIDDEN_MAX, liftAnchor, loadHidden, saveHidden, sidestep,
 } from "./agent_buddy.ts";
 
 const size = { w: 32, h: 24 };
@@ -67,6 +67,42 @@ describe("defaultSpot", () => {
     const zoomed = { left: 0, top: 0, width: 1600, height: 1200 };
     const anchor = { left: 200, top: 1000, width: 1000, height: 100 };
     expect(defaultSpot(anchor, zoomed, size, 2)).toEqual({ x: 106, y: 500 - 26 });
+  });
+});
+
+describe("liftAnchor (P-OVERLAP.1)", () => {
+  const compose = { left: 100, top: 550, width: 800, height: 40 };
+  it("an approval bar shown over the composer lifts the default spot above the bar, off its text", () => {
+    const approve = { left: 100, top: 516, width: 800, height: 34 };
+    const lifted = liftAnchor(compose, [approve]);
+    expect(lifted.top).toBe(516);
+    const canvasRect = { left: 100, top: 50, width: 800, height: 600 };
+    const spot = defaultSpot(lifted, canvasRect, size);
+    expect(spot.y + size.h).toBeLessThanOrEqual(approve.top - 50); // the buddy's bottom is above the bar (canvas px)
+  });
+  it("the highest of several bars wins; hidden bars (empty rects) do not count", () => {
+    const hidden = { left: 0, top: 0, width: 0, height: 0 };
+    const progress = { left: 100, top: 500, width: 800, height: 50 };
+    expect(liftAnchor(compose, [hidden, progress]).top).toBe(500);
+    expect(liftAnchor(compose, [hidden])).toEqual(compose);
+  });
+});
+
+describe("sidestep (P-OVERLAP.1)", () => {
+  const chips = { left: 300, top: 100, right: 450, bottom: 135 };
+  it("a buddy on its node's chips moves to their left, a gap clear, at the same height", () => {
+    const p = sidestep({ x: 330, y: 120 }, size, chips, 1200);
+    expect(p).toEqual({ x: 300 - 4 - size.w, y: 120 });
+    expect(p.x + size.w).toBeLessThanOrEqual(chips.left);
+  });
+  it("goes to their right when the stage has no room on the left", () => {
+    const edge = { left: 10, top: 100, right: 160, bottom: 135 };
+    expect(sidestep({ x: 20, y: 110 }, size, edge, 1200)).toEqual({ x: 164, y: 110 });
+  });
+  it("a buddy already clear of the chips, or a node without chips, stays put", () => {
+    expect(sidestep({ x: 100, y: 120 }, size, chips, 1200)).toEqual({ x: 100, y: 120 });
+    expect(sidestep({ x: 330, y: 135 }, size, chips, 1200)).toEqual({ x: 330, y: 135 }); // touching below is clear
+    expect(sidestep({ x: 330, y: 120 }, size, null, 1200)).toEqual({ x: 330, y: 120 });
   });
 });
 

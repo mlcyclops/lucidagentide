@@ -73,11 +73,12 @@ Every overlay a PR adds names its tier here. Settings currently has no tier: it 
 | Popover | 95, 96 | `.popover` (2918), `.vdock` voice panel (3202) |
 | Settings | 97, 98 | `#setScrim`, `#settings` window or panel (ADR-0615); popovers opened from Settings lift to 99 |
 | Palette | 100, 101 | `#scrim` (2885), `.palette` (2889) |
-| Sheet | 110, 111, 115, 120, 121 | `.fb-scrim`/`.fb` (4935-4939), `.plg-layer` (1975), `#toasts` (3004), `.dod-scrim`/`.fb.dod` (5657) |
+| Sheet | 110, 111, 115, 120, 121 | `.fb-scrim`/`.fb` (4935-4939), `.plg-layer` (1975), `.dod-scrim`/`.fb.dod` (5657) |
 | Coach | 142 | `.coach-card` tour (3572) |
 | Modal | 200 | `.modal-ov` (4130), `.figma-scrim` (1853), `.mkt-scrim` (1937), `.goal-scrim` (2127) |
 | Ask Lucid | 250 | `.ald`, `.ald-pill` (7999, 8050); popovers opened from inside it lift to 251 (`popoverLayer`, ADR-0632); when docked, `.viz-view` and `.orbit-view` end at its edge |
 | Cinematic | 300 | `.boot-cine` (3539), `.about-ov` (4177) |
+| Toast | 310 | `#toasts` (3044): above every scrim, so a toast a dialog raises (the Provider Hub's "Nothing to save") is read, not dimmed behind its own backdrop (P-OVERLAP.1, ADR-0693); below context menus and `#tip` |
 | Context menu | 400 | `.ctx-menu` (5299) |
 | Tooltip | 1200 | `#tip` (2865) |
 

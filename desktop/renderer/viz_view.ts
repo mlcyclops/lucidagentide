@@ -132,7 +132,7 @@ import {
   isBuiltinStyle, isTapped, layoutPositions, markAsked, nodeIntensity, PERSONAS, teamOf, tick, vizTierOpts,
   type BuiltinStyle, type Persona, type VizApproval, type VizAsk, type VizEvent, type VizLayout, type VizNode, type VizState, type VizStyle, type VizTurn,
 } from "./viz_model.ts";
-import { placePanel, type NodeBox, type PanelSide } from "./viz_panel_place.ts";
+import { panelCovers, placePanel, type NodeBox, type PanelSide } from "./viz_panel_place.ts";
 import { mountApprovals, type ApprovalsView } from "./viz_approvals.ts"; // P-VIZ.APPROVE1 (ADR-0655)
 import { mountVizScene, type SceneHit, type SceneNode, type SceneWorld, type VizSceneHandle, type VizTheme, type VizViewMode } from "./viz_scene.ts";
 import { mountThrowTray, type ThrowTray } from "./viz_throw.ts";
@@ -962,6 +962,12 @@ export function openViz(opts: { onClose?: () => void } = {}): void {
     boxOf: (id) => scene?.screenBoxOf(id) ?? null,
     folderOf: (id) => laneOf(id)?.cwd || null,
     laneOf: (id) => laneOf(id)?.id ?? null,
+    // P-OVERLAP.1: the node's preview and artifact chips, one box, so its buddy stands beside them, never on them.
+    keepClear: (id) => {
+      const a = previewChips?.rectOf(id) ?? null, b = chips?.rectOf(id) ?? null;
+      if (!a || !b) return a ?? b;
+      return { left: Math.min(a.left, b.left), top: Math.min(a.top, b.top), right: Math.max(a.right, b.right), bottom: Math.max(a.bottom, b.bottom) };
+    },
   });
   // P-SPINUP.1 (ADR-0668): a mini Lucid paces over each lane node that is still starting, with a status bubble.
   detachSpinup = d.attachSpinup($("[data-viz-stage]", view) as HTMLElement, {
@@ -1903,6 +1909,7 @@ function closePanel(): void {
   const box = panelEl("[data-viz-panel]");
   box.hidden = true;
   box.classList.remove("flip", "resizing");
+  panelEl("[data-viz-legend]").classList.remove("under-panel"); // P-OVERLAP.1
   clearLaneOutput(panelEl("[data-viz-panel] [data-fleet-out]"));
   panelEl("[data-viz-panel-acts]").innerHTML = "";
   if (box.contains(document.activeElement)) scene?.canvas.focus({ preventScroll: true });
@@ -2197,6 +2204,9 @@ function followPanel(): void {
       box.style.setProperty("--viz-tail", `${at.tailY}px`);
       box.classList.toggle("lost", lost);
     }
+    // P-OVERLAP.1: the role legend steps aside while the panel (and its prompt box) sits over it.
+    const lg = panelEl("[data-viz-legend]");
+    lg.classList.toggle("under-panel", panelCovers({ left: at.left, top: at.top, w: box.offsetWidth, h: box.offsetHeight }, { left: lg.offsetLeft, top: lg.offsetTop, w: lg.offsetWidth, h: lg.offsetHeight }));
     p.raf = requestAnimationFrame(step);
   };
   step(); // placed before the first paint, not a frame late at the stage's corner
