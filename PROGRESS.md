@@ -6628,3 +6628,7 @@ Roadmap phases (each its own future increment + ADR for its frozen-contract delt
 - **shipped (2026-11-25):** v2.7.2-beta.1 = 2.7.1 plus #676..#691: the eleven P-WORLDS.2 worlds (in the app catalog and on the live store), Visualize draws every fleet lane, the lane-style Agent Worlds panel, session history export/import, docs links, durable Patron sign-in and world Update buttons, the What's new popup (this release's entry: nine cards with bundled screenshots and world posters), no 3D black flash, built-in world options, tray reactions and richer mini games; published as a GitHub prerelease by the beta_release dispatch.
 - **stubbed:** stable installs do not auto-update to a beta (electron-updater reads /releases/latest); install the beta build once to follow the beta channel. World options and built-in options still live in renderer localStorage (ADR-0688 follow-up).
 - **next:** promote to v2.7.2 stable after beta feedback; World Forge Phase 0 (ADR-0689).
+## P-TYPECHECK.1 (ADR-0695): the root typecheck is clean again
+- **shipped (2026-11-27):** the engine's settings_store loads the world-update announced keys from the new import-free `world_update_keys.ts` instead of `world_updates.ts`, whose imports pulled ui.ts and bridge.ts (DOM types) into the root program; root `tsc --noEmit` 373 errors to 0, so CI's harness job typechecks and runs its tests again; demo-P-TYPECHECK.1.
+- **stubbed:** none.
+- **next:** merge it before #699 so that PR's harness job goes green on rebase.
