@@ -3,7 +3,8 @@
 // op bodies of 5 as a relay reads them (`ReadArgs`, `WriteArgs`, served by `Hub::api_presence_read` and
 // `Hub::api_presence_write`), the merge of 4.2 across the relays that answered, the answers of 4.6 for a write sent to
 // several relays, and the 4.6 rule for which clients' sessions, calendar blocks and out of office records still count
-// (`writer_live`, applied by `Hub::presence_retain_clients` after every map and journal entry). The routes themselves
+// (`writer_live`, checked before each write a relay applies and applied by `Hub::presence_retain_clients` after every
+// map and journal entry and from the relay's upkeep, at start and every minute). The routes themselves
 // run in `api_resource` (pipeline, audit, rate) and the fan-out in `ConsoleApi::presence_fanout` (front door) and
 // `api_listener` (a relay's own hub).
 
@@ -113,7 +114,8 @@ pub fn read_query(query: &str) -> Result<ReadQuery, Problem> {
     let mut people: Option<&str> = None;
     let mut after: Option<&str> = None;
     let mut limit: Option<&str> = None;
-    for (k, v) in query.split('&').filter(|p| !p.is_empty()).filter_map(|p| p.split_once('=')) {
+    // a parameter without `=` is kept with an empty value, so `?people` is refused rather than read as no filter
+    for (k, v) in query.split('&').filter(|p| !p.is_empty()).map(|p| p.split_once('=').unwrap_or((p, ""))) {
         let slot = match k {
             "people" => &mut people,
             "after" => &mut after,
@@ -414,10 +416,10 @@ fn split(outcomes: Vec<Outcome>) -> Result<(Vec<(String, Value)>, Vec<String>, V
     Ok((ok, silent, refused))
 }
 
-/// A relay's refusal code as a route answers it (the codes of 4.6, 6 and the fleet op; anything else is
-/// `bad-request`).
+/// A relay's refusal code as a route answers it (the codes of 4.6, 6 and the fleet op, and `suspended` for a writer
+/// the relay's own map no longer holds live; anything else is `bad-request`).
 fn known_code(code: &str) -> &'static str {
-    ["not-covered", "org-not-served", "presence-value", "presence-limit", "bad-body", "not-found", "query", "cursor"].into_iter().find(|c| *c == code).unwrap_or("bad-request")
+    ["not-covered", "org-not-served", "presence-value", "presence-limit", "bad-body", "not-found", "query", "cursor", "suspended"].into_iter().find(|c| *c == code).unwrap_or("bad-request")
 }
 
 /// 4.2: a read's answer. `People`: the objects in the order asked, uncovered people (no relay answered for them) left
@@ -547,6 +549,25 @@ mod tests {
         assert_eq!(read_query("limit=501").unwrap_err().1, "query");
         assert_eq!(path_parts("/api/orgs/acme/v1/presence/ann%40acme.example/sessions/s-1/clear"), Some((ANN.into(), Some("s-1".into()))));
         assert_eq!(path_parts("/api/orgs/acme/v1/presence/ann@acme.example/calendar"), Some((ANN.into(), None)));
+    }
+
+    #[test]
+    fn r8_valueless_query_parameters_are_refused_not_ignored() {
+        // `?people` is not the whole directory, and a bare `after` or `limit` is not the default
+        assert_eq!(read_query("people").unwrap_err().1, "query");
+        assert_eq!(read_query("people&people=ann@acme.example").unwrap_err().1, "query", "given twice");
+        assert_eq!(read_query("limit").unwrap_err().1, "query");
+        assert_eq!(read_query("after").unwrap_err().1, "cursor");
+        assert_eq!(read_query(&format!("people={ANN}&limit")).unwrap_err().1, "query");
+        // unknown parameters, with or without a value, are still ignored
+        assert_eq!(read_query("verbose&x=1").unwrap(), ReadQuery::Page { after: None, limit: LIMIT_DEFAULT });
+    }
+
+    #[test]
+    fn r8_a_relays_suspended_refusal_of_a_write_is_passed_on() {
+        let refused = |code: &str| vec![(R1.to_string(), Some(Err(Refusal::new(403, code, "refused"))))];
+        assert_eq!(write_answer("ooo", refused("suspended")).unwrap_err(), (403, "suspended", "refused".to_string()));
+        assert_eq!(write_answer("ooo", refused("something-else")).unwrap_err().1, "bad-request");
     }
 
     #[test]

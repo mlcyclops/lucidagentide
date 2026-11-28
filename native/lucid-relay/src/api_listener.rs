@@ -274,12 +274,12 @@ impl Data for Own<'_> {
     }
 
     /// API-1 revision 8 4.2, 4.6: reads from this relay's own hub only (writes are the front door's).
-    fn presence(&self, _org: &str, reaches: &dyn Fn(&str) -> bool, op: &str, body: &Value) -> Option<Vec<crate::api_presence::Outcome>> {
+    fn presence(&self, _org: &str, reaches: &dyn Fn(&str) -> bool, op: &str, body: &Value) -> Option<Result<Vec<crate::api_presence::Outcome>, crate::api_presence::Problem>> {
         if op != "api-presence" || !reaches(self.id) {
             return None;
         }
         let answer = self.source.presence(body)?;
-        Some(vec![(self.id.to_string(), Some(answer))])
+        Some(Ok(vec![(self.id.to_string(), Some(answer))]))
     }
 }
 

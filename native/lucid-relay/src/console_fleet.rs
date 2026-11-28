@@ -8009,7 +8009,7 @@ impl crate::api_resource::Data for FleetData<'_> {
 
     /// API-1 revision 8 4.2, 4.6: `api-presence` and `api-presence-write` to the client's relays that report
     /// `presence` (`ConsoleApi::presence_fanout`).
-    fn presence(&self, org: &str, reaches: &dyn Fn(&str) -> bool, op: &str, body: &Value) -> Option<Vec<crate::api_presence::Outcome>> {
+    fn presence(&self, org: &str, reaches: &dyn Fn(&str) -> bool, op: &str, body: &Value) -> Option<Result<Vec<crate::api_presence::Outcome>, crate::api_presence::Problem>> {
         let link = self.fleet.link.get().cloned();
         Some(self.fleet.api.presence_fanout(link.as_deref(), org, reaches, op, body))
     }

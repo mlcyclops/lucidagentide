@@ -544,8 +544,8 @@ pub trait Data {
     /// API-1 revision 8 4.2, 4.6: `op` (`api-presence` or `api-presence-write`) with `body` to every relay the client
     /// reaches (`reaches`) that reports `presence`: the front door asks each connected one over the fleet link (in id
     /// order, a relay silent for 10 s is None), a Meet relay's listener answers reads from its own hub. None: no
-    /// presence here (404).
-    fn presence(&self, _org: &str, _reaches: &dyn Fn(&str) -> bool, _op: &str, _body: &Value) -> Option<Vec<crate::api_presence::Outcome>> {
+    /// presence here (404); Err: refused before any relay was asked (409 `relay-outdated` while `presence` is closed).
+    fn presence(&self, _org: &str, _reaches: &dyn Fn(&str) -> bool, _op: &str, _body: &Value) -> Option<Result<Vec<crate::api_presence::Outcome>, crate::api_presence::Problem>> {
         None
     }
 }
@@ -1272,7 +1272,7 @@ fn presence_read(site: &Site, call: &Call, ok: &Allowed) -> Result<Reply, No> {
         _ => pr::read_query(call.query).map_err(presence_no)?,
     };
     let reaches = |r: &str| ok.reaches(r);
-    let outcomes = site.data.presence(call.org, &reaches, "api-presence", &pr::read_body(call.org, &q)).ok_or_else(|| no(404, "not-found", NOT_FOUND))?;
+    let outcomes = site.data.presence(call.org, &reaches, "api-presence", &pr::read_body(call.org, &q)).ok_or_else(|| no(404, "not-found", NOT_FOUND))?.map_err(presence_no)?;
     let body = pr::read_answer(&q, outcomes).map_err(presence_no)?;
     if call.route.id == RouteId::PresenceOne {
         let one = body["presence"].as_array().and_then(|a| a.first()).cloned().ok_or_else(|| no(404, "not-found", NOT_FOUND))?;
@@ -1310,7 +1310,7 @@ fn presence_write(site: &Site, call: &Call, ok: &Allowed, body: Option<&Body>) -
     let name = tok::find_client(site.store, call.org, &ok.client).and_then(|c| c.get("name")).and_then(Value::as_str).unwrap_or(ok.client.as_str()).to_string();
     let reaches = |r: &str| ok.reaches(r);
     let wire = pr::write_body(call.org, &ok.client, &name, &principal, kind, &request);
-    let outcomes = site.data.presence(call.org, &reaches, "api-presence-write", &wire).ok_or_else(|| no(404, "not-found", NOT_FOUND))?;
+    let outcomes = site.data.presence(call.org, &reaches, "api-presence-write", &wire).ok_or_else(|| no(404, "not-found", NOT_FOUND))?.map_err(presence_no)?;
     let answer = pr::write_answer(kind, outcomes).map_err(presence_no)?;
     let relays: Vec<&str> = answer["relays"].as_array().into_iter().flatten().filter_map(Value::as_str).collect();
     let mut e = entry_of(call, "presence.write");
@@ -2829,7 +2829,7 @@ mod tests {
         fn console(&self) -> Value {
             Fleet.console()
         }
-        fn presence(&self, _org: &str, reaches: &dyn Fn(&str) -> bool, op: &str, body: &Value) -> Option<Vec<crate::api_presence::Outcome>> {
+        fn presence(&self, _org: &str, reaches: &dyn Fn(&str) -> bool, op: &str, body: &Value) -> Option<Result<Vec<crate::api_presence::Outcome>, crate::api_presence::Problem>> {
             let view = |availability: &str, activity: &str, ooo: Value| {
                 json!({"principal": ANN, "availability": availability, "activity": activity, "out_of_office": ooo, "status": null, "presence": "available", "mobile": false})
             };
@@ -2848,7 +2848,7 @@ mod tests {
                 };
                 out.push((relay.to_string(), answer));
             }
-            Some(out)
+            Some(Ok(out))
         }
     }
 
@@ -3003,15 +3003,15 @@ mod tests {
         fn console(&self) -> Value {
             Fleet.console()
         }
-        fn presence(&self, _org: &str, reaches: &dyn Fn(&str) -> bool, op: &str, body: &Value) -> Option<Vec<crate::api_presence::Outcome>> {
+        fn presence(&self, _org: &str, reaches: &dyn Fn(&str) -> bool, op: &str, body: &Value) -> Option<Result<Vec<crate::api_presence::Outcome>, crate::api_presence::Problem>> {
             if !reaches(R1) {
-                return Some(Vec::new());
+                return Some(Ok(Vec::new()));
             }
             let answer = match op {
                 "api-presence" => crate::api_presence::ReadArgs::of(body).and_then(|a| self.0.api_presence_read(&a.org, &a.people, a.after.as_deref(), a.limit)),
                 _ => crate::api_presence::WriteArgs::of(body).and_then(|a| self.0.api_presence_write(&a.org, &a.client_id, &a.client_name, &a.principal, &a.kind, &a.body)),
             };
-            Some(vec![(R1.to_string(), Some(answer))])
+            Some(Ok(vec![(R1.to_string(), Some(answer))]))
         }
     }
 

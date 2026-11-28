@@ -482,6 +482,15 @@ impl Relay {
                 relay.adopt_pending();
                 relay.prune_pki();
                 relay.pc_upkeep();
+                // API-1 revision 8 4.6: a presence writer whose registration ran out (no map or journal entry tells
+                // the relay) stops counting; the first tick runs at start, after the hub's state is loaded. A standby
+                // or fenced node changes nothing (it takes no presence write either).
+                if relay.hub.cluster_writes().is_ok() {
+                    let heads = relay.hub.api_hello_heads();
+                    for org in heads.as_object().into_iter().flat_map(|o| o.keys()) {
+                        m::presence_retain(&relay.hub, org);
+                    }
+                }
                 relay.refusals.flush();
             }));
             if r.is_err() {
