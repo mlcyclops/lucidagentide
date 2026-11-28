@@ -9268,6 +9268,9 @@ html[data-pchip-motion="still"] .pchip,html[data-pchip-motion="still"] .pchip .p
 .viz-vmenu .viz-seg button.on{color:var(--txt)}
 .viz-vmenu [data-viz-quality]{max-width:100%;min-width:0;padding:5px 10px}
 .viz-vmenu [data-viz-quality]>span{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* P-VIZ.MOTION1 (ADR-0696): why the view moves less, a block paragraph under the Motion choice (invariant #11) */
+.viz-vmenu-note{align-self:stretch;max-width:260px;margin:0;font-size:11.5px;line-height:1.45;color:var(--txt-3)}
+.viz-vmenu-note[hidden]{display:none}
 /* P-WORLDS.1 (ADR-0648): the World options in the View menu, and the Worlds menu (installed worlds, Get, Export, Import). */
 .viz-vmenu [data-viz-wopts-slot]{align-self:stretch;display:flex;flex-direction:column;gap:8px}
 .viz-vmenu [data-viz-wopts-slot]:empty{display:none}

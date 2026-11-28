@@ -237,8 +237,13 @@ const MODE_KEY = "lucid.perfMode";
 /** The cycle order: the original four first (auto → full → reduced → minimal), then the GPU tiers. */
 const MODE_CYCLE: readonly PerfMode[] = ["auto", "full", "reduced", "minimal", "ultra", "cinematic"];
 
+/** P-VIZ.MOTION1 (ADR-0696): how a surface reads the tier. `animate`: the user set this surface to animate whatever
+ *  the OS reduced-motion setting says, so that setting does not lower Auto here (battery, CPU and GPU still do). */
+export interface TierLens { animate?: boolean }
+
 export interface PerfTierWatcher {
-  tier(): PerfTier;
+  /** The resolved tier; with `lens.animate`, as if the OS did not ask for reduced motion. */
+  tier(lens?: TierLens): PerfTier;
   mode(): PerfMode;
   /** Cycle auto → full → reduced → minimal → ultra → cinematic → auto; persists; notifies subscribers. Clears a
    *  governor step-down. */
@@ -249,10 +254,11 @@ export interface PerfTierWatcher {
   /** P-VIZ.GPU1: the frame-time governor missed its budget. Under Auto, cap the tier one below the current one for
    *  the rest of the session (or until the user picks a mode) and notify; an explicit mode is never touched.
    *  Returns the new tier, or null when nothing changed. P-VIZ.NOFLASH1: `to` (supportedTier) lands further down in
-   *  one go; a `to` that is not below the next tier down is ignored (one step). */
-  stepDown(to?: PerfTier): PerfTier | null;
-  /** P-VIZ.GPU1: the tier the governor stepped Auto down from (null: no step-down). */
-  steppedFrom(): PerfTier | null;
+   *  one go; a `to` that is not below the next tier down is ignored (one step). `lens` is the caller's view of the
+   *  tier (the step is taken from, and returned as, `tier(lens)`); every subscriber is told when the cap moves. */
+  stepDown(to?: PerfTier, lens?: TierLens): PerfTier | null;
+  /** P-VIZ.GPU1: the tier the governor stepped Auto down from (null: no step-down), seen through `lens`. */
+  steppedFrom(lens?: TierLens): PerfTier | null;
 }
 
 /** localStorage when available (renderer), else null (tests inject their own store). */
@@ -281,7 +287,8 @@ export function watchPerfTier(kv?: KVStore | null, gpuProbe: () => Promise<GpuPr
   let gpuInfo: GpuProbe | null = null;
   /** P-VIZ.GPU1: the governor's cap under Auto (null = none). */
   let cap: PerfTier | null = null;
-  const resolve = (): PerfTier => capTier(resolveTier(mode, signals), mode === "auto" ? cap : null);
+  const seen = (lens?: TierLens): PerfSignals => (lens?.animate ? { ...signals, reducedMotion: false } : signals);
+  const resolve = (lens?: TierLens): PerfTier => capTier(resolveTier(mode, seen(lens)), mode === "auto" ? cap : null);
   let cur = resolve();
   const subs: Array<(t: PerfTier, m: PerfMode) => void> = [];
   const notify = (): void => {
@@ -321,7 +328,7 @@ export function watchPerfTier(kv?: KVStore | null, gpuProbe: () => Promise<GpuPr
       /* no battery info - stay plugged-in */
     });
   return {
-    tier: () => cur,
+    tier: (lens) => (lens?.animate ? resolve(lens) : cur),
     mode: () => mode,
     cycleMode() {
       mode = MODE_CYCLE[(MODE_CYCLE.indexOf(mode) + 1) % MODE_CYCLE.length]!;
@@ -335,19 +342,23 @@ export function watchPerfTier(kv?: KVStore | null, gpuProbe: () => Promise<GpuPr
       subs.push(cb);
     },
     gpu: () => gpuInfo,
-    stepDown(to) {
+    stepDown(to, lens) {
       if (mode !== "auto") return null;
-      const one = stepDownTier(cur);
+      const from = resolve(lens);
+      const one = stepDownTier(from);
       const next = to !== undefined && PERF_TIERS.indexOf(to) < PERF_TIERS.indexOf(one) ? to : one;
-      if (next === cur) return null;
+      if (next === from) return null;
       cap = next;
-      recompute();
-      return cur;
+      // P-VIZ.MOTION1: the cap can lower a lens's tier while `cur` (what the rest of the app reads) stays put, so the
+      // subscribers hear about it either way.
+      cur = resolve();
+      notify();
+      return resolve(lens);
     },
-    steppedFrom() {
+    steppedFrom(lens) {
       if (mode !== "auto" || cap === null) return null;
-      const uncapped = resolveTier(mode, signals);
-      return uncapped !== cur ? uncapped : null;
+      const uncapped = resolveTier(mode, seen(lens));
+      return uncapped !== resolve(lens) ? uncapped : null;
     },
   };
 }

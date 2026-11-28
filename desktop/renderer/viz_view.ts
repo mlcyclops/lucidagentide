@@ -113,7 +113,7 @@ import {
 } from "./lane_view.ts";
 import { laneStages, stagedChip } from "./lane_view_model.ts";
 import { clampPanelSize, dragPanelSize, loadPanelSize, savePanelSize, stepPanelSize, type PanelEdge, type PanelSize } from "./viz_panel_size.ts";
-import { mayStepDown, pollDelay, supportedTier, type GovernorStats, type PerfTierWatcher } from "./perf_tier.ts";
+import { mayStepDown, pollDelay, supportedTier, type GovernorStats, type PerfTierWatcher, type TierLens } from "./perf_tier.ts";
 import { vizBus, type VizBusEvent } from "./viz_bus.ts";
 import { createDemo, type VizDemo } from "./viz_demo.ts";
 import { artifactPopupState, closeArtifactPopup, mountArtifactChips, openArtifactPopup, type ArtifactChips } from "./viz_artifact_popup.ts"; // P-WORLDS.BUILD1 (ADR-0653)
@@ -308,17 +308,23 @@ let ledgerView: LedgerView | null = null;
 /** Main's folder (the current workspace), applied to Main's entry on every repaint. */
 let mainFolder: string | null = null;
 
-/** `reactions` (P-VIZ.TRAY2, ADR-0690): the throw tray's reactions group is folded out. */
-interface Prefs { view: VizViewMode; layout: VizLayout; style: VizStyle; reactions: boolean }
+/** `reactions` (P-VIZ.TRAY2, ADR-0690): the throw tray's reactions group is folded out. `motion` (P-VIZ.MOTION1,
+ *  ADR-0696): "system" follows the OS reduced-motion setting, "always" animates this view whatever it says. */
+interface Prefs { view: VizViewMode; layout: VizLayout; style: VizStyle; reactions: boolean; motion: "system" | "always" }
 function loadPrefs(): Prefs {
   try {
     const p = JSON.parse(localStorage.getItem(PREFS_KEY) ?? "{}") as Partial<Prefs>;
     // P-WORLDS.1: a saved world style stays saved; until it loads (or if it is gone) the scene draws anime.
-    return { view: p.view === "2d" ? "2d" : "3d", layout: p.layout === "constellation" ? "constellation" : "orbit", style: parseStyle(p.style), reactions: parseReactionsOpen(p.reactions) };
-  } catch { return { view: "3d", layout: "orbit", style: "anime", reactions: false }; }
+    return { view: p.view === "2d" ? "2d" : "3d", layout: p.layout === "constellation" ? "constellation" : "orbit", style: parseStyle(p.style), reactions: parseReactionsOpen(p.reactions), motion: p.motion === "always" ? "always" : "system" };
+  } catch { return { view: "3d", layout: "orbit", style: "anime", reactions: false, motion: "system" }; }
 }
 let prefs: Prefs = loadPrefs();
 function savePrefs(): void { try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch { /* the choice still applies for this session */ } }
+/** P-VIZ.MOTION1 (ADR-0696): how this view reads the perf tier, and whether it holds its motion back. With Motion set
+ *  to Always animate, the OS reduced-motion setting neither lowers Auto here nor stops the figures; on "system" both
+ *  follow it, as before. Everything else in the app keeps following the OS. */
+const vizLens = (): TierLens => ({ animate: prefs.motion === "always" });
+const vizReduced = (): boolean => !!motionMq?.matches && prefs.motion !== "always";
 
 // ---------------------------------------------------------------------------------------------- P-WORLDS.1 (ADR-0648)
 // Lucid Agent Worlds: the installed worlds (viz_worlds.loadWorlds, refreshed on every open and after an import),
@@ -777,10 +783,10 @@ export function initViz(d: VizDeps): void {
   });
   // P-VIZ.NOFLASH1: the scene on screen takes the new tier's lighter settings at once (live, same context) while the
   // new tier's scene builds beneath it; the swap happens on that scene's first whole frame.
-  d.perf.onChange((tier) => {
+  d.perf.onChange(() => {
     if (!isOpen()) return;
     paintQuality();
-    (outgoing ?? scene)?.relieve(vizTierOpts(tier, !!motionMq?.matches));
+    (outgoing ?? scene)?.relieve(vizTierOpts(d.perf.tier(vizLens()), vizReduced()));
     remount();
   });
 }
@@ -892,14 +898,14 @@ export function openViz(opts: { onClose?: () => void } = {}): void {
     kitLineup: (o?: Parameters<typeof kitLineup>[0]): KitLineupReport => kitLineup(o),
     // P-VIZ.GPU1 (ADR-0651): the Quality mode and tier, the probed GPU, a governor step-down, and what the renderer
     // is doing (pixel ratio, MSAA, bloom, SSAO, DOF, contact shadows, the frame-time check). Read-only.
-    quality: () => (deps ? { mode: deps.perf.mode(), tier: deps.perf.tier(), gpu: deps.perf.gpu(), steppedFrom: deps.perf.steppedFrom(), scene: scene?.quality() ?? null } : null),
+    quality: () => (deps ? { mode: deps.perf.mode(), tier: deps.perf.tier(vizLens()), gpu: deps.perf.gpu(), steppedFrom: deps.perf.steppedFrom(vizLens()), scene: scene?.quality() ?? null } : null),
     // P-VIZ.NOFLASH1: a missed frame budget, through the very path the scene's governor takes (Auto only, spaced by
     // mayStepDown; no measured frames, so one step), so demo_p_viz_noflash_1.mjs can force the step-down remount.
     // True when the tier stepped down.
     governorMiss: (): boolean => {
-      const before = deps?.perf.tier();
+      const before = deps?.perf.tier(vizLens());
       onFrameBudget("miss", null);
-      return deps?.perf.tier() !== before;
+      return deps?.perf.tier(vizLens()) !== before;
     },
     // P-WORLDS.BUILD1 (ADR-0653): each node's build (the book and the scaffold drawn for it, with its chip's box)
     // and the artifact popup's state (gate verdict, iframe sandbox and src). Read-only.
@@ -942,7 +948,7 @@ export function openViz(opts: { onClose?: () => void } = {}): void {
     .finally(() => { if (seq === openSeq) endStyleWait(); });
   if (!!demo !== ledgerIsDemo) { ledger = createLedger(); ledgerIsDemo = !!demo; mainFolder = null; }
   loadMainFolder();
-  ledgerView = mountLedger($("[data-viz-stage]", view) as HTMLElement, () => !!motionMq?.matches);
+  ledgerView = mountLedger($("[data-viz-stage]", view) as HTMLElement, vizReduced);
   builds = createBuildBook(); // P-WORLDS.BUILD1 (ADR-0653): builds live as long as the model
   chips = mountArtifactChips($("[data-viz-stage]", view) as HTMLElement, (id) => scene?.screenBoxOf(id) ?? null, openChip);
   const d = deps;
@@ -1188,7 +1194,7 @@ function onViewClick(ev: Event): void {
   if (sample && !sample.disabled) { playSample(sample.dataset.vizNode ?? "", sample.dataset.vizGameSample ?? ""); return; } // P-WORLDS.BUILD2
 }
 
-/** Layout and Quality, folded out of the header so it stays one row (UX checklist: complexity budget). A narrow
+/** Layout, Quality and Motion, folded out of the header so it stays one row (UX checklist: complexity budget). A narrow
  *  header (P-VIZ.5) folds Record and Recordings in here too. */
 function openViewMenu(anchor: HTMLElement): void {
   if (viewPop) { viewPop.close(); viewPop = null; return; }
@@ -1205,6 +1211,12 @@ function openViewMenu(anchor: HTMLElement): void {
     </div>
     <div class="viz-vmenu-h">Quality</div>
     <button type="button" class="btn-mini orbit-btn" data-viz-quality></button>
+    <div class="viz-vmenu-h">Motion</div>
+    <div class="viz-seg" role="group" aria-label="Motion">
+      <button type="button" data-viz-motion="system" data-tip="${tipAttr("Follow system", "Moves less when your system asks apps to reduce motion (Windows: Animation effects off; macOS: Reduce motion on).")}">Follow system</button>
+      <button type="button" data-viz-motion="always" data-tip="${tipAttr("Always animate", "Figures, light streams and effects move whatever the system setting says. Only this view; the rest of LUCID still follows the system.")}">Always animate</button>
+    </div>
+    <p class="viz-vmenu-note" data-viz-motion-note hidden>Your system asks apps to reduce motion, so this view holds its animation back. Always animate turns it on here.</p>
     <div class="viz-vmenu-h">Approvals</div>
     <label class="viz-wopt" data-tip="${tipAttr("Fly to approvals", "When an agent asks for approval, the camera flies to it and its badge pulses. It never takes the keyboard from what you are typing.")}"><span>Fly to approvals</span><input type="checkbox" data-viz-flyask${flyAsks ? " checked" : ""}></label>
     <div data-viz-wopts-slot>${worldOptionsHtml()}</div>
@@ -1229,6 +1241,8 @@ function openViewMenu(anchor: HTMLElement): void {
     const lb = t.closest("[data-viz-layout]") as HTMLElement | null;
     if (lb) { prefs.layout = lb.dataset.vizLayout === "constellation" ? "constellation" : "orbit"; savePrefs(); paintViewMenu(); syncScene(); if (!autoCam) scene?.fit(); return; } // auto glides to the new layout itself
     if (t.closest("[data-viz-quality]")) { cycleQuality(); return; }
+    const mb = t.closest<HTMLElement>("[data-viz-motion]");
+    if (mb) { setMotion(mb.dataset.vizMotion === "always" ? "always" : "system"); p.reposition(); return; }
     if (t.closest("[data-viz-rec]")) { if (rec) stopRec("user"); else startRec(); return; }
     if (t.closest("[data-viz-recs]")) { p.close(); viewPop = null; openRecs(anchor); return; }
     // P-WORLDS.CAST2 (ADR-0650): a world's swatch option, and the Cast section.
@@ -1321,26 +1335,41 @@ function paintViewMenu(): void {
   const menu = viewPop?.node;
   if (!menu) return;
   for (const b of menu.querySelectorAll<HTMLElement>("[data-viz-layout]")) { const on = b.dataset.vizLayout === prefs.layout; b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on)); }
+  // P-VIZ.MOTION1 (ADR-0696): the choice, and why the view moves less while it follows a reduced-motion system
+  for (const b of menu.querySelectorAll<HTMLElement>("[data-viz-motion]")) { const on = b.dataset.vizMotion === prefs.motion; b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on)); }
+  const note = menu.querySelector<HTMLElement>("[data-viz-motion-note]");
+  if (note) note.hidden = !vizReduced();
   paintQuality();
 }
 
 function paintQuality(): void {
   const b = viewPop ? ($("[data-viz-quality]", viewPop.node) as HTMLElement | null) : null;
   if (!b || !deps) return;
-  const m = deps.perf.mode(), tier = deps.perf.tier();
+  const m = deps.perf.mode(), tier = deps.perf.tier(vizLens());
   // P-VIZ.GPU1 (ADR-0651): Auto names the GPU it decided on ("Auto · ultra (RTX 4070)").
   const gpu = deps.perf.gpu();
-  const from = deps.perf.steppedFrom();
+  const from = deps.perf.steppedFrom(vizLens());
   b.innerHTML = `${icon("gauge", 13)}<span>${esc(m === "auto" ? `Auto \u00b7 ${tier}${gpu?.name ? ` (${gpu.name})` : ""}` : m[0]!.toUpperCase() + m.slice(1))}</span>`; // P-VIZ.UI1: a long GPU name ellipsizes; the tip names it
   const gpuLine = gpu?.cls ? ` GPU: ${gpu.name ?? "unknown"}, ${gpu.cls}.` : "";
   const stepLine = from ? ` Stepped down from ${from}: frames missed the budget.` : "";
   b.setAttribute("data-tip", tipValue("Quality", `Auto, Full, Reduced, Minimal, Ultra or Cinematic: the same Performance mode as the Knowledge Graph. Auto picks by GPU, battery and CPU, and steps down one level when frames miss the budget. Cinematic: ultra plus ambient occlusion and depth of field. Ultra: 12000 particles, sharper pixels, smoothed edges, contact shadows, bloom on light worlds too. Full: 6000 particles, 60 fps, glass refraction and bloom. Reduced: 2500 particles, 30 fps. Minimal: 600 particles, 20 fps, no lightning. Now: ${tier}.${gpuLine}${stepLine}`));
 }
 
+/** P-VIZ.MOTION1 (ADR-0696): Follow system or Always animate. Saved with the view's prefs; the scene on screen takes
+ *  the new settings at once and the new tier's scene builds beneath it (the same swap a Quality change makes). */
+function setMotion(m: Prefs["motion"]): void {
+  if (prefs.motion === m || !deps) return;
+  prefs.motion = m;
+  savePrefs();
+  paintViewMenu();
+  (outgoing ?? scene)?.relieve(vizTierOpts(deps.perf.tier(vizLens()), vizReduced()));
+  remount();
+}
+
 function cycleQuality(): void {
   if (!deps) return;
   const m = deps.perf.cycleMode(); // notifies onChange, which repaints and remounts
-  showToast({ title: `Quality: ${m}`, desc: m === "auto" ? `Following GPU, battery and CPU (now: ${deps.perf.tier()}). The Knowledge Graph uses the same mode.` : "The Knowledge Graph uses the same mode.", timeout: 2400 });
+  showToast({ title: `Quality: ${m}`, desc: m === "auto" ? `Following GPU, battery and CPU (now: ${deps.perf.tier(vizLens())}). The Knowledge Graph uses the same mode.` : "The Knowledge Graph uses the same mode.", timeout: 2400 });
 }
 
 /** P-VIZ.GPU1 (ADR-0651): the scene's 3 s frame-time check missed: Auto steps down (an explicit tier is the user's
@@ -1351,8 +1380,8 @@ function onFrameBudget(verdict: "ok" | "miss", stats: GovernorStats | null): voi
   const now = performance.now();
   if (!mayStepDown(now, lastStepAt)) return; // P-VIZ.NOFLASH1: at most one step per settle and checks
   // P-VIZ.NOFLASH1: straight to the tier the measured frame time supports (one remount, not one per tier)
-  const to = stats?.frames ? supportedTier(deps.perf.tier(), stats.meanMs, (t) => 1000 / vizTierOpts(t, false).fps) : undefined;
-  const next = deps.perf.stepDown(to);
+  const to = stats?.frames ? supportedTier(deps.perf.tier(vizLens()), stats.meanMs, (t) => 1000 / vizTierOpts(t, false).fps) : undefined;
+  const next = deps.perf.stepDown(to, vizLens());
   if (!next) return;
   lastStepAt = now;
   showToast({ title: `Quality: Auto \u00b7 ${next}`, desc: "Frames missed the budget, so Visualize stepped down one level. Pick a Quality level in View to choose your own.", timeout: 3200 });
@@ -1409,7 +1438,7 @@ function mount(failMsg: string | null = null): void {
   let s: VizSceneHandle;
   try {
     // P-VIZ.STYLEOPT1 (ADR-0688): a built-in style's Particles option scales the tier's budgets
-    s = mountVizScene(stage, scaleParticles(vizTierOpts(deps.perf.tier(), !!motionMq?.matches), curWorld ? 1 : curLook().particles), theme, prefs.view, autoCam);
+    s = mountVizScene(stage, scaleParticles(vizTierOpts(deps.perf.tier(vizLens()), vizReduced()), curWorld ? 1 : curLook().particles), theme, prefs.view, autoCam);
   } catch (e) {
     scene = null;
     retireOutgoing();
@@ -1697,7 +1726,7 @@ async function pollFleet(): Promise<void> {
   const m = model;
   if (!m || !deps || fleetBusy) return;
   window.clearTimeout(fleetTimer);
-  const tier = deps.perf.tier();
+  const tier = deps.perf.tier(vizLens());
   if (demo) {
     const now = Date.now(), lanes = demo.lanes(now);
     applyFleet(m, lanes, now, "anthropic/claude-opus-4.6");
@@ -1761,7 +1790,7 @@ async function pollRuns(): Promise<void> {
       if (lv?.runs) applyRuns(m, lv.runs, Date.now(), lane.id);
     }
   }
-  runsTimer = window.setTimeout(() => void pollRuns(), pollDelay(RUNS_MS, deps.perf.tier(), document.hidden));
+  runsTimer = window.setTimeout(() => void pollRuns(), pollDelay(RUNS_MS, deps.perf.tier(vizLens()), document.hidden));
 }
 
 /** Watch (read-only, owns no turn) the most recently active live lanes, so their streams show even when
@@ -2641,7 +2670,7 @@ function scaffoldFor(id: string): WorldScaffold | null {
   const site = buildSiteFor(def, n.kind === "hub" ? "hub" : "agent", def ? def.environment.edges.colorA : effStyle() === "professional" ? "#ffd166" : "#8fe3ff");
   let seed = 7;
   for (let i = 0; i < id.length; i++) seed = (seed * 31 + id.charCodeAt(i)) | 0;
-  const sc = createScaffold({ style: site.style, color: site.color, tier: deps.perf.tier(), flat: prefs.view === "2d", seed });
+  const sc = createScaffold({ style: site.style, color: site.color, tier: deps.perf.tier(vizLens()), flat: prefs.view === "2d", seed });
   const ok = scene.anchor(id, "build", {
     object: sc.group, offset: site.anchor, update: sc.update,
     dispose: () => { sc.dispose(); if (scaffolds.get(id) === sc) scaffolds.delete(id); },
@@ -2690,7 +2719,7 @@ function noteBuild(source: string, e: { readonly type: string }): void {
  *  build whose node joined the scene late, and drop the build of a node that left. */
 function syncScaffolds(): void {
   if (!scene || !deps || !model) return;
-  const sig = `${effStyle()}|${buildWorld()?.id ?? ""}|${prefs.view}|${deps.perf.tier()}`;
+  const sig = `${effStyle()}|${buildWorld()?.id ?? ""}|${prefs.view}|${deps.perf.tier(vizLens())}`;
   if (sig !== scaffoldSig) {
     scaffoldSig = sig;
     for (const id of [...scaffolds.keys()]) scene.anchor(id, "build", null);
