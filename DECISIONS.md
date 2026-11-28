@@ -28800,3 +28800,22 @@ The core tension: anything that changes a world's code inherits renderer privile
   - Both apps stay `available: false` (Coming soon).
 
 **Consequences.** The Civilian and Government apps follow the Worlds right after two rows at any drawer width. The rail button's tooltip now says Premium first. The two lookup keys change from `-OTF` to `-MO`. Nothing sells them yet: before either flips to `available`, the entitlements catalog needs recurring Stripe prices under those keys, and the store's checkout must honor `subscription` for plugin packs. The quote link points at the Meeting Hub site's interest form (`#insider`) until a dedicated quote page exists. `demo_p_plugins_premium_2.mjs` (`make demo-P-PLUGINS.PREMIUM2`) runs wide (1600x1000) and narrow (1100x800). It clicks the rail button for real, picks Free, reopens and asserts Premium. It asserts exactly two rows of worlds (8 at 4 columns, 6 at 3) and a topmost toggle that unfolds all 40 and folds them back. It checks the Civilian heading right below and a search with no fold. It asserts the Hub's "$9.99/mo per license" with a topmost https "Request a quote", and the Trainer's "$9.99/mo". auditBoxes runs on the worlds heading and both cards. The demo failed on the old bundle (the rail opened Free).
+## ADR-0700 -- P-SHARE.RELAY1: the LUCID relay is the setup's main button and is named for who runs it (2026-11-28, Accepted)
+**Context.** Session Share's Relay setup offered the first-party hosted relay (ADR-0613) as a small right-aligned `btn-mini`, with the same weight as the self-hosted URL field below it. Once the hosted relay was chosen, "Relay ready" labeled it "self-hosted relay". The settings store knows only `self-hosted | public`, so the hosted URL is saved as self-hosted. But the hosted relay is TechLead 187 LLC's, on Google Cloud. The chip also word-wrapped ("SELF-" / "HOSTED RELAY"), against invariant #11.
+
+**Decision.**
+- **The relay is named for who runs it.** `effectiveRelay` (dev.ts) already recognizes the hosted relay by host to gate it. It now reports that relay's `source` as `"lucid"`, however the URL was saved. The settings store and its migration-free shape are unchanged. `/api/collab/status`, the share's `relaySource` and the collab audit carry `lucid` (the audit takes any short string), and `CollabRelay.source` in bridge.ts gains `"lucid"`.
+- **The chip.** The renderer's `relaySourceTag` maps `lucid` to an accent chip, "TechLead 187 LLC relay". Its tooltip says the relay runs on Google Cloud and never reads the end-to-end-encrypted session. The live-share header uses the same name.
+- **The button.** "Use the LUCID relay" becomes `.share-hosted-cta`: about 264x48, centered in its section, and drawn from the active theme's tokens (`--accent` to `--accent-deep` gradient, `--on-fill` text, `--accent-rgb` glow, so all 23 themes get it). It carries its own inline SVG glyph, a hub with two waves that fade in turn, under a slow glow pulse (`relayGlow`, 2.8 s). A mono caption under it reads "TechLead 187 LLC · Google Cloud".
+- **Reduced motion.** The pulses change only opacity and shadow. The app's global reduced-motion reset (styles.css) still stops them, as it does every animation, so a system that asks for reduced motion sees a steady glow and fully lit waves.
+- **No more wrapping.** `.share-peer-tag` is `white-space: nowrap`.
+
+**Consequences.** The hosted relay is the obvious first choice, and nothing calls it self-hosted. A self-hosted or public relay keeps its old chip. On a machine with Windows "Animation effects" off, the button does not pulse, by design.
+
+`demo_p_share_relay_1.mjs` (`make demo-P-SHARE.RELAY1`) runs with the dock floating, snapped right and snapped left, in wide (1600x1000) and narrow (1100x800) windows; the narrow pass emulates reduced motion. Each run asserts:
+- the button is at least 240x40, centered within 2 px, gradient-filled, with the glyph and the glow;
+- the glow pulses, or holds steady and lit under reduced motion;
+- the button is topmost at its center, and auditBoxes passes on the setup section;
+- a real click saves the LUCID relay, and "Relay ready" shows a one-line "TechLead 187 LLC relay" chip, with no self-hosted chip in the dock.
+
+It failed on the old bundle (the button was still `btn-mini ok`). Light and dark themes were checked by screenshot.

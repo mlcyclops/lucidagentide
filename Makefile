@@ -1908,6 +1908,7 @@ demo-P-VIZ.PREFS1: ## P-VIZ.PREFS1 (ADR-0697): the engine keeps Visualize's pref
 	node --check desktop/scripts/demo_p_viz_prefs_1.mjs
 	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_viz_prefs_1.mjs; else echo "demo-P-VIZ.PREFS1: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi
 
+<<<<<<< HEAD
 .PHONY: demo-P-FIRSTRUN.1
 demo-P-FIRSTRUN.1: ## P-FIRSTRUN.1 (ADR-0698): one-time toasts ("Make LucidAgent yours", Lucid's holiday and What's new suggestions) stay one-time across a port-rolled launch: their memory, Lucid's suggestion state and the special theme are kept by the engine (/api/ui/prefs) and mirrored in localStorage. Real-UI proof, wide and narrow (fresh QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7811): LUCID_DEMO_BROWSER_URL=http://127.0.0.1:<cdp> LUCID_DEMO_URL=http://127.0.0.1:7811/ node desktop/scripts/demo_p_firstrun_1.mjs
 	$(BUN) test $(TEST_IGNORES) desktop/renderer/ui_prefs_store.test.ts desktop/renderer/lucid_suggest.test.ts tools/ux_pr_gate.test.ts harness/adr_numbering.test.ts
@@ -1919,6 +1920,13 @@ demo-P-PLUGINS.PREMIUM2: ## P-PLUGINS.PREMIUM2 (ADR-0699): the Plugins drawer la
 	$(BUN) test $(TEST_IGNORES) desktop/renderer/plugin_catalog.test.ts desktop/renderer/plugins_flyout.test.ts tools/ux_pr_gate.test.ts harness/adr_numbering.test.ts
 	node --check desktop/scripts/demo_p_plugins_premium_2.mjs
 	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_plugins_premium_2.mjs; else echo "demo-P-PLUGINS.PREMIUM2: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi
+=======
+.PHONY: demo-P-SHARE.RELAY1
+demo-P-SHARE.RELAY1: ## P-SHARE.RELAY1 (ADR-0700): Session Share's "Use the LUCID relay" is a big centered theme-gradient button with an animated SVG glyph and a glow pulse, and the hosted relay reads as the TechLead 187 LLC relay, never self-hosted. Real-UI proof, dock floating and snapped, wide and narrow (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7811): LUCID_DEMO_BROWSER_URL=http://127.0.0.1:<cdp> LUCID_DEMO_URL=http://127.0.0.1:7811/ node desktop/scripts/demo_p_share_relay_1.mjs
+	$(BUN) test $(TEST_IGNORES) desktop/collab/manager.test.ts desktop/collab/collab_audit.test.ts tools/ux_pr_gate.test.ts harness/adr_numbering.test.ts
+	node --check desktop/scripts/demo_p_share_relay_1.mjs
+	@if { [ -n "$$LUCID_DEMO_CDP_URL" ] || [ -n "$$LUCID_DEMO_BROWSER_URL" ]; } && [ -n "$$LUCID_DEMO_URL" ]; then node desktop/scripts/demo_p_share_relay_1.mjs; else echo "demo-P-SHARE.RELAY1: set LUCID_DEMO_BROWSER_URL (or LUCID_DEMO_CDP_URL) and LUCID_DEMO_URL to run the real-UI proof"; fi
+>>>>>>> f14d5c3c (P-SHARE.RELAY1 (ADR-0700): the LUCID relay is the big centered setup button and reads as the TechLead 187 LLC relay)
 
 .PHONY: demo-P-WHATSNEW.1
 demo-P-WHATSNEW.1: ## P-WHATSNEW.1 (ADR-0686): a one-time What's new popup after an upgrade (bundled manifest with pictures, seen version kept engine-side, never over onboarding or the suggestion toast), Dismiss points at About > What's new, About replays it read-only. Real-UI proof (QA engine: bun desktop/scripts/fleet_demo/start_qa_fleet.mjs 7821, fresh browser profile): LUCID_DEMO_BROWSER_URL=http://127.0.0.1:<cdp> LUCID_DEMO_URL=http://127.0.0.1:7821/ node desktop/scripts/demo_p_whatsnew_1.mjs
