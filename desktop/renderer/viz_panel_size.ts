@@ -3,8 +3,8 @@
 
 // desktop/renderer/viz_panel_size.ts - P-VIZ.LANE1 (ADR-0683): the Agent Worlds node panel's user size. Pure: the
 // size a drag or an arrow key asks for, clamped to the stage (never under PANEL_MIN_W x PANEL_MIN_H, never past the
-// stage less its margins), and the persisted choice (localStorage `lucid.viz.panelSize.v1`). No saved size means
-// the panel's natural size. viz_view applies it; viz_panel_place keeps the panel beside its node at any size.
+// stage less its margins), and the persisted choice (`lucid.viz.panelSize.v1`, engine-kept since P-VIZ.PREFS1). No
+// saved size means the panel's natural size. viz_view applies it; viz_panel_place keeps the panel beside its node at any size.
 
 import { PANEL_MARGIN, type PanelSide } from "./viz_panel_place.ts";
 
