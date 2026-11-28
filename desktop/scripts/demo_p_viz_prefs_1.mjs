@@ -5,7 +5,7 @@
 //
 // P-VIZ.PREFS1 (ADR-0697): Visualize's preferences survive a launch on a new port. Against an isolated QA engine:
 //   1. Visualize opens with the real control; in the View menu, real clicks pick the Constellation layout and Always
-//      animate, and untick Fly to approvals; the engine now keeps them (GET /api/viz/prefs);
+//      animate, and untick Fly to approvals; the engine now keeps them (GET /api/ui/prefs, ADR-0698's name);
 //   2. the renderer origin's localStorage is wiped, which is exactly what a port-rolled launch (ADR-0458) gives the
 //      renderer, and the page reloads;
 //   3. in a wide (1600x1000) and a narrow (1100x800) window, Visualize opens and the View menu shows the same three
@@ -58,7 +58,7 @@ export async function verifyVizPrefs(page, base) {
   };
   const enginePrefs = () => page.evaluate(async () => {
     const t = document.querySelector('meta[name="lucid-token"]')?.content ?? "";
-    const r = await fetch("/api/viz/prefs", { headers: { "x-lucid-token": t } });
+    const r = await fetch("/api/ui/prefs", { headers: { "x-lucid-token": t } });
     return (await r.json().catch(() => null))?.data?.prefs ?? null;
   });
   const quality = () => page.evaluate(() => window.__vizProbe?.quality?.() ?? null);
@@ -107,7 +107,7 @@ export async function verifyVizPrefs(page, base) {
       const p = await enginePrefs();
       const v = p?.[VIEW_KEY] ? JSON.parse(p[VIEW_KEY]) : null;
       return v?.layout === "constellation" && v?.motion === "always" && p?.[FLY_KEY] === "0" ? p : null;
-    }, "the engine did not keep the choices (GET /api/viz/prefs)", 5000);
+    }, "the engine did not keep the choices (GET /api/ui/prefs)", 5000);
     results.push({ engine: { [VIEW_KEY]: JSON.parse(kept[VIEW_KEY]), [FLY_KEY]: kept[FLY_KEY] } });
 
     // 2. a port-rolled launch: a new origin, an empty localStorage
@@ -136,7 +136,7 @@ export async function verifyVizPrefs(page, base) {
     // Leave the QA engine as it was: Follow system, Orbit, Fly to approvals on.
     await page.evaluate(async (vk, fk) => {
       const t = document.querySelector('meta[name="lucid-token"]')?.content ?? "";
-      for (const key of [vk, fk]) await fetch("/api/viz/prefs", { method: "POST", headers: { "content-type": "application/json", "x-lucid-token": t }, body: JSON.stringify({ key, value: null }) }).catch(() => {});
+      for (const key of [vk, fk]) await fetch("/api/ui/prefs", { method: "POST", headers: { "content-type": "application/json", "x-lucid-token": t }, body: JSON.stringify({ key, value: null }) }).catch(() => {});
       localStorage.removeItem(vk); localStorage.removeItem(fk);
     }, VIEW_KEY, FLY_KEY).catch(() => {});
     if (await shown("#vizView [data-viz-stage]").catch(() => false)) await page.$eval("[data-viz-close]", (b) => b.click()).catch(() => {});

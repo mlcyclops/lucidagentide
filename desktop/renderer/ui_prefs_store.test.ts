@@ -1,20 +1,20 @@
 // Copyright (c) 2026 TechLead 187 LLC
 // SPDX-License-Identifier: BUSL-1.1
 
-// desktop/renderer/viz_prefs_store.test.ts - P-VIZ.PREFS1 (ADR-0697): Visualize's preferences kept by the engine,
-// mirrored in localStorage. The store against a fake mirror and a fake engine, and the engine's own record
-// (settings_store vizPrefs / setVizPref) against a temp settings file.
+// desktop/renderer/ui_prefs_store.test.ts - P-VIZ.PREFS1 (ADR-0697), P-FIRSTRUN.1 (ADR-0698): renderer preferences
+// kept by the engine, mirrored in localStorage. The store against a fake mirror and a fake engine, and the engine's own
+// record (settings_store uiPrefs / setUiPref) against a temp settings file.
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { setVizPref, vizPrefs } from "../settings_store.ts";
-import { VIZ_PREF_MAX, type VizPrefKey } from "./viz_pref_keys.ts";
-import { createVizPrefs } from "./viz_prefs_store.ts";
+import { setUiPref, uiPrefs } from "../settings_store.ts";
+import { UI_PREF_MAX, type UiPrefKey } from "./ui_pref_keys.ts";
+import { createUiPrefs } from "./ui_prefs_store.ts";
 
-const VIEW: VizPrefKey = "lucid.viz.v1";
-const OPTS: VizPrefKey = "lucid.worlds.options.v1";
+const VIEW: UiPrefKey = "lucid.viz.v1";
+const OPTS: UiPrefKey = "lucid.worlds.options.v1";
 
 function mirror(init: Record<string, string> = {}): Storage & { data: Map<string, string> } {
   const data = new Map(Object.entries(init));
@@ -33,15 +33,15 @@ function engine(kept: Record<string, string> | null) {
   return {
     saves,
     reply: () => answer(kept),
-    remote: { load: () => loaded, save: async (k: VizPrefKey, v: string | null) => { saves.push([k, v]); return {}; } },
+    remote: { load: () => loaded, save: async (k: UiPrefKey, v: string | null) => { saves.push([k, v]); return {}; } },
   };
 }
 
-describe("createVizPrefs", () => {
+describe("createUiPrefs", () => {
   test("a launch on a new port (empty mirror) reads what the engine kept, and mirrors it for the next paint", async () => {
     const m = mirror();
     const e = engine({ [VIEW]: '{"motion":"always"}', "lucid.other": "ignored" });
-    const s = createVizPrefs(m, e.remote);
+    const s = createUiPrefs(m, e.remote);
     expect(s.getItem(VIEW)).toBeNull(); // the first paint, before the engine answers
     e.reply();
     expect(await s.ready).toBe(true);
@@ -53,7 +53,7 @@ describe("createVizPrefs", () => {
   test("an install from before this existed hands its mirrored preferences to the engine once", async () => {
     const m = mirror({ [VIEW]: '{"style":"world:baseball"}', [OPTS]: '{"world-x":{"a":1}}' });
     const e = engine({});
-    const s = createVizPrefs(m, e.remote);
+    const s = createUiPrefs(m, e.remote);
     e.reply();
     expect(await s.ready).toBe(false); // nothing new to read
     expect(e.saves).toEqual([[VIEW, '{"style":"world:baseball"}'], [OPTS, '{"world-x":{"a":1}}']]);
@@ -62,7 +62,7 @@ describe("createVizPrefs", () => {
 
   test("a choice made before the engine answered is kept over the engine's older value", async () => {
     const e = engine({ [VIEW]: '{"motion":"system"}' });
-    const s = createVizPrefs(mirror(), e.remote);
+    const s = createUiPrefs(mirror(), e.remote);
     s.setItem(VIEW, '{"motion":"always"}');
     e.reply();
     await s.ready;
@@ -73,7 +73,7 @@ describe("createVizPrefs", () => {
   test("a write goes to the mirror and the engine; removing sends null; an engine that is down loses nothing here", async () => {
     const m = mirror();
     const saves: Array<[string, string | null]> = [];
-    const s = createVizPrefs(m, { load: async () => null, save: async (k, v) => { saves.push([k, v]); throw new Error("engine down"); } });
+    const s = createUiPrefs(m, { load: async () => null, save: async (k, v) => { saves.push([k, v]); throw new Error("engine down"); } });
     s.setItem("lucid.viz.panelSize.v1", '{"w":400,"h":500}');
     s.removeItem("lucid.viz.panelSize.v1");
     s.setItem("lucid.viz.autoCamera", "0");
@@ -83,10 +83,19 @@ describe("createVizPrefs", () => {
     expect(m.data.has("lucid.viz.panelSize.v1")).toBe(false);
   });
 
-  test("a key that is not a Visualize preference stays in the mirror only", async () => {
+  test("P-FIRSTRUN.1: a first-run toast seen and a holiday already asked survive a launch on a new port", async () => {
+    const e = engine({ "lucid.personalNudged": "1", "lucid.suggest.holiday": '{"never":false,"asked":["thanksgiving-2026"]}' });
+    const s = createUiPrefs(mirror(), e.remote); // a new origin: nothing mirrored
+    e.reply();
+    expect(await s.ready).toBe(true);
+    expect(s.getItem("lucid.personalNudged")).toBe("1");
+    expect(JSON.parse(s.getItem("lucid.suggest.holiday") ?? "{}").asked).toEqual(["thanksgiving-2026"]);
+  });
+
+  test("a key that is not a kept preference stays in the mirror only", async () => {
     const m = mirror();
     const e = engine({});
-    const s = createVizPrefs(m, e.remote);
+    const s = createUiPrefs(m, e.remote);
     s.setItem("lucid.something.else", "x");
     e.reply();
     await s.ready;
@@ -95,7 +104,7 @@ describe("createVizPrefs", () => {
   });
 });
 
-describe("engine-side record (settings_store vizPrefs / setVizPref)", () => {
+describe("engine-side record (settings_store uiPrefs / setUiPref)", () => {
   const prev = process.env.LUCID_GUI_SETTINGS_FILE;
   const dirs: string[] = [];
   afterEach(() => {
@@ -112,19 +121,19 @@ describe("engine-side record (settings_store vizPrefs / setVizPref)", () => {
 
   test("one known key per call, kept in the settings file; null removes it", () => {
     const file = isolated();
-    expect(vizPrefs()).toEqual({});
-    expect(setVizPref(VIEW, '{"motion":"always"}')).toEqual({ [VIEW]: '{"motion":"always"}' });
-    expect(setVizPref(OPTS, "{}")).toEqual({ [VIEW]: '{"motion":"always"}', [OPTS]: "{}" });
-    expect(JSON.parse(readFileSync(file, "utf8")).vizPrefs).toEqual({ [VIEW]: '{"motion":"always"}', [OPTS]: "{}" });
-    expect(setVizPref(VIEW, null)).toEqual({ [OPTS]: "{}" });
+    expect(uiPrefs()).toEqual({});
+    expect(setUiPref(VIEW, '{"motion":"always"}')).toEqual({ [VIEW]: '{"motion":"always"}' });
+    expect(setUiPref(OPTS, "{}")).toEqual({ [VIEW]: '{"motion":"always"}', [OPTS]: "{}" });
+    expect(JSON.parse(readFileSync(file, "utf8")).uiPrefs).toEqual({ [VIEW]: '{"motion":"always"}', [OPTS]: "{}" });
+    expect(setUiPref(VIEW, null)).toEqual({ [OPTS]: "{}" });
   });
 
   test("an unknown key, a non-string or an oversized value changes nothing", () => {
     isolated();
-    setVizPref(VIEW, "{}");
-    expect(setVizPref("lucid.theme", "dark")).toBeNull();
-    expect(setVizPref(VIEW, 42)).toBeNull();
-    expect(setVizPref(VIEW, "x".repeat(VIZ_PREF_MAX + 1))).toBeNull();
-    expect(vizPrefs()).toEqual({ [VIEW]: "{}" });
+    setUiPref(VIEW, "{}");
+    expect(setUiPref("lucid.theme", "dark")).toBeNull();
+    expect(setUiPref(VIEW, 42)).toBeNull();
+    expect(setUiPref(VIEW, "x".repeat(UI_PREF_MAX + 1))).toBeNull();
+    expect(uiPrefs()).toEqual({ [VIEW]: "{}" });
   });
 });

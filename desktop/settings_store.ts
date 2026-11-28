@@ -33,7 +33,7 @@ import { DEFAULT_RELAY_URL } from "@oh-my-pi/pi-wire"; // P-COLLAB.3: the public
 import { sanitizeModelCompat, validateLocalProvider, type LocalModelDef, type LocalProviderDef } from "./local_providers.ts";
 import { isLocalModel } from "./renderer/model_families.ts"; // cloud-only default: explicit-choice migration
 import { sanitizeAnnounced } from "./renderer/world_update_keys.ts"; // P-WORLDS.UPDATE1 (ADR-0685); import-free (ADR-0695)
-import { isVizPrefKey, isVizPrefValue, sanitizeVizPrefs, type VizPrefKey } from "./renderer/viz_pref_keys.ts"; // P-VIZ.PREFS1 (ADR-0697); import-free
+import { isUiPrefKey, isUiPrefValue, sanitizeUiPrefs, type UiPrefKey } from "./renderer/ui_pref_keys.ts"; // P-VIZ.PREFS1 (ADR-0697), P-FIRSTRUN.1 (ADR-0698); import-free
 import { validateCreatorEndpoint, type CreatorEndpointDef } from "./creator_registry.ts"; // CREATOR-0 (ADR-0282)
 import { parseResultWindowSetting, type ResultWindowSetting } from "./result_window.ts"; // P-CTX.2b (ADR-0579)
 import { parsePerCallModelSetting, type PerCallModelSetting } from "./per_call_model.ts"; // P-MODEL.11 (ADR-0602)
@@ -202,9 +202,10 @@ export interface GuiSettings {
   // recorded silently). Engine-side on purpose: the renderer's localStorage is per origin and a port-rolled
   // launch (ADR-0458) starts empty. Unset = an install from before the popup existed.
   whatsNewSeen?: string;
-  // P-VIZ.PREFS1 (ADR-0697): Visualize's preferences (view, style and world options, motion, cast, panel size...),
-  // each the string the renderer kept in localStorage under that key. Engine-side for the same reason as above.
-  vizPrefs?: Record<string, string>;
+  // P-VIZ.PREFS1 (ADR-0697), P-FIRSTRUN.1 (ADR-0698): renderer preferences (ui_pref_keys.ts: Visualize's view and
+  // options, which first-run toasts were seen, Lucid's suggestion memory, the special theme), each the string the
+  // renderer kept in localStorage under that key. Engine-side for the same reason as above.
+  uiPrefs?: Record<string, string>;
   // P-GOVCUI.1: the first-run "are you a Government/GovCon user handling CUI?" answer. Cosmetic onboarding
   // state (like userRole/tourSeen). `undefined` = not asked yet (drives the first-run gov step); `true` = the
   // user is on the CUI (gov gateway) path; `false` = standard use. It NEVER weakens the gate; the actual
@@ -1123,17 +1124,18 @@ export function oauthMemory(): { seen: string[]; displaced: Record<string, strin
 export function setOauthMemory(m: { seen: string[]; displaced: Record<string, string> }): void {
   const s = load(); s.oauthMemory = m; save(s);
 }
-/** P-VIZ.PREFS1 (ADR-0697): the Visualize preferences kept, known keys with bounded string values only. */
-export function vizPrefs(): Partial<Record<VizPrefKey, string>> { return sanitizeVizPrefs(load().vizPrefs); }
-/** Sets one Visualize preference (`value` null removes it). An unknown key or a malformed value changes nothing and
+/** P-VIZ.PREFS1 (ADR-0697), P-FIRSTRUN.1 (ADR-0698): the renderer preferences kept, known keys with bounded string
+ *  values only. */
+export function uiPrefs(): Partial<Record<UiPrefKey, string>> { return sanitizeUiPrefs(load().uiPrefs); }
+/** Sets one renderer preference (`value` null removes it). An unknown key or a malformed value changes nothing and
  *  returns null; otherwise returns every preference now kept. One key per call, so two windows saving different
  *  preferences never overwrite each other's. */
-export function setVizPref(key: unknown, value: unknown): Partial<Record<VizPrefKey, string>> | null {
-  if (!isVizPrefKey(key) || (value !== null && !isVizPrefValue(value))) return null;
+export function setUiPref(key: unknown, value: unknown): Partial<Record<UiPrefKey, string>> | null {
+  if (!isUiPrefKey(key) || (value !== null && !isUiPrefValue(value))) return null;
   const s = load();
-  const next = sanitizeVizPrefs(s.vizPrefs);
+  const next = sanitizeUiPrefs(s.uiPrefs);
   if (value === null) delete next[key]; else next[key] = value;
-  s.vizPrefs = next;
+  s.uiPrefs = next;
   save(s);
   return next;
 }

@@ -123,6 +123,8 @@ import { addSeen, featureQuestion, featuresFromSurfaces, FEATURES_SEEN_KEY, pars
 import { ASK_SETTINGS, type AskSettingKey } from "../ask_lucid_actions.ts"; // P-ASKLUCID.6: the settings Lucid may propose changing
 import { pushTrail, type Follow, type Rec, type RecSignals } from "./lucid_recs.ts"; // P-ASKLUCID.5 (ADR-0586): suggestions that follow the work
 import type { AskAction } from "../ask_lucid_actions.ts"; // P-ASKLUCID.2 (ADR-0582): what Lucid may propose
+import { uiPrefs } from "./ui_prefs.ts"; // P-FIRSTRUN.1 (ADR-0698): engine-kept preferences, mirrored in localStorage
+import type { UiPrefsStore } from "./ui_prefs_store.ts";
 import { holidayOffer, holidayToast, nextNews, noteHolidayAnswer, noteNewsSeen, pickSuggestion, pinExpired, readHolidayMemory, readPin, readSeenNews, setSuggestEnabled, suggestEnabled, suggestToggleHtml, writePin } from "./lucid_suggest.ts"; // P-MINI.2 (ADR-0583): what Lucid may suggest
 import { hydrateVaultDestinations } from "./vault_dest_ui.ts"; import { VAULT_DEST_SEC, VAULT_DEST_SUB, VAULT_DEST_TITLE } from "./vault_dest_card.ts"; // P-VAULT-DEST.1 (ADR-0478): Settings → Vault destinations (Enterprise)
 import { acceptAttachment, promptImageBlocks, thumbStripHtml, MAX_ATTACHMENT_BYTES, type Attachment } from "./composer_attachments.ts"; // P-VISION.1 (ADR-0136): pasted images
@@ -278,9 +280,10 @@ const SEASON_AUTO_KEY = "lucid.season.auto";
 const SEASON_PICK_KEY = "lucid.season.pick";
 const SEASON_SCENE_KEY = "lucid.season.scene"; // "" = the season's own scene, a SceneId, or "none"
 const SEASON_WHERE_KEY = "lucid.season.where"; // "stage" (LUCID Agent stage only) | "everywhere"
+// P-FIRSTRUN.1 (ADR-0698): these four live in the engine-kept store (ui_prefs.ts), so a launch on a new port keeps the
+// special theme, and the holiday theme Lucid pinned (lucid.suggest.pin) still matches the pinned season.
 function seasonPrefs(): SeasonPrefs {
-  try { return { auto: localStorage.getItem(SEASON_AUTO_KEY) === "1", pick: localStorage.getItem(SEASON_PICK_KEY) ?? "" }; }
-  catch { return { auto: false, pick: "" }; }
+  return { auto: uiPrefs.getItem(SEASON_AUTO_KEY) === "1", pick: uiPrefs.getItem(SEASON_PICK_KEY) ?? "" };
 }
 /** Resolve `pref` and paint it: the <html> data-theme attribute drives every `:root[data-theme=...]`
  *  block in styles.css, and Monaco is re-themed to match (a no-op before the editor loads).
@@ -5713,7 +5716,9 @@ let miniRunner: RunnerHandle | null = null;
 let miniKind: MiniMount["kind"] = "none";
 let miniVisiting = false;
 let miniNewSessions = 0;
-function miniStore(): Storage | null { try { return localStorage; } catch { return null; } }
+/** P-FIRSTRUN.1 (ADR-0698): Mini Lucid's and Lucid's suggestion state. The suggestion keys (lucid.suggest.*) are kept
+ *  by the engine through this store; Mini Lucid's own keys pass straight through to localStorage, as before. */
+function miniStore(): UiPrefsStore { return uiPrefs; }
 
 /** P-MINI.1 (ADR-0580): mount, swap or remove the prompt-bar runner so it matches the role, the user's
  *  preference and the visit state. A resident (the LUCID Agent role, or "Always") is greeted by a click; a
@@ -5791,7 +5796,8 @@ function noteNewSessionForMini(): void {
   syncMiniLucid();
   // P-MINI.2 (ADR-0583): a new session is also the one moment Lucid may suggest something. Wait until the
   // session has settled on screen, then decide.
-  setTimeout(maybeSuggest, SUGGEST_DELAY_MS);
+  // P-FIRSTRUN.1 (ADR-0698): decide on what the engine remembers, not on an empty new-port mirror.
+  void uiPrefs.ready.then(() => setTimeout(maybeSuggest, SUGGEST_DELAY_MS));
 }
 
 // ── P-MINI.2 (ADR-0583): Lucid's suggestions ─────────────────────────────────────────────────────────
@@ -6904,10 +6910,10 @@ let seasonMenuOpen = false;
 let seasonBackdrop: BackdropHandle | null = null;
 let seasonPreview: BackdropHandle | null = null;
 function seasonScenePref(): string {
-  try { return localStorage.getItem(SEASON_SCENE_KEY) ?? ""; } catch { return ""; }
+  return uiPrefs.getItem(SEASON_SCENE_KEY) ?? "";
 }
 function seasonWherePref(): "stage" | "everywhere" {
-  try { return localStorage.getItem(SEASON_WHERE_KEY) === "everywhere" ? "everywhere" : "stage"; } catch { return "stage"; }
+  return uiPrefs.getItem(SEASON_WHERE_KEY) === "everywhere" ? "everywhere" : "stage";
 }
 /** The scene to paint for `season` under the user's backdrop pref, or null for none. */
 function sceneFor(season: SeasonDef | undefined): SceneId | null {
@@ -7045,7 +7051,7 @@ function mountSeasonPreview(): void {
   });
 }
 function setSeasonPref(key: string, value: string): void {
-  try { if (value) localStorage.setItem(key, value); else localStorage.removeItem(key); } catch { /* storage off: this session still applies */ }
+  if (value) uiPrefs.setItem(key, value); else uiPrefs.removeItem(key);
   applyTheme(themePref());
   seasonChanged();
 }
@@ -9877,9 +9883,11 @@ async function maybeOnboardPersonal(): Promise<void> {
   try { p = await bridge.personal(); } catch { return; }
   if (p?.configured) return; // already set up → normal (collapsed-by-default) behavior
   SET_OPEN.add("personal"); // unconfigured → expand the section whenever Settings opens
-  let nudged = false; try { nudged = localStorage.getItem("lucid.personalNudged") === "1"; } catch { /* ignore */ }
-  if (nudged) return; // the toast is one-time; the expanded section persists until they configure
-  try { localStorage.setItem("lucid.personalNudged", "1"); } catch { /* ignore */ }
+  // P-FIRSTRUN.1 (ADR-0698): "shown" is kept by the engine, so a launch on a new port (an empty localStorage) does not
+  // nudge again. Its answer arrives before anything here would show.
+  await uiPrefs.ready;
+  if (uiPrefs.getItem("lucid.personalNudged") === "1") return; // the toast is one-time; the expanded section persists until they configure
+  uiPrefs.setItem("lucid.personalNudged", "1");
   setTimeout(() => showToast({
     title: "Make LucidAgent yours",
     desc: "Import your ChatGPT, Claude, or Gemini history to tailor replies. It's encrypted on this device, scanned by the security gate, and you can forget or export anything anytime.",
@@ -22896,6 +22904,9 @@ refresh();
 void bridge.chatBackground().then((c) => { if (c) { state.chatBg = c; applyChatBg(c); } }); // P-APPEAR.1: paint the saved chat background
 void bridge.codeGraphAgent().then((a) => { if (a) state.codeGraphAgent = a.enabled; }); // P-KG-SYM.1: reflect the agent-tool opt-in
 void maybeOnboardPersonal(); // P-IMP.2: first-run nudge + expand Personalization until it's configured
+// P-FIRSTRUN.1 (ADR-0698): a launch on a new port painted from an empty mirror; when the engine's preferences differ,
+// the special theme (lucid.season.*) is painted again from them.
+void uiPrefs.ready.then((changed) => { if (changed) { applyTheme(themePref()); seasonChanged(); } });
 void bridge.auth().then((a) => { if (a) { state.auth = a; renderStatus(); } }); // gate the budget pill (OAuth vs API key) from first paint
 scheduleBudgetPoll(); // provider budget: re-check every 5 min for the current model
 // P-PERF.2 (ADR-0129): battery/visibility-aware polling. Work is SKIPPED while the window is hidden and

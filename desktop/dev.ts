@@ -194,7 +194,7 @@ import { bunProbeVerdict, isOmpSpawnFailure, OMP_PROBE_TIMEOUT_MS, ompUnavailabl
 import { listLocalProviders, upsertLocalProvider, removeLocalProvider, setLocalProviderEnabled } from "./settings_store.ts";
 import { oauthMemory, setOauthMemory } from "./settings_store.ts"; // P-AUTH.RELOGIN1 (ADR-0640)
 import { setWorldUpdatesAnnounced, worldUpdatesAnnounced } from "./settings_store.ts"; // P-WORLDS.UPDATE1 (ADR-0685)
-import { setVizPref, vizPrefs } from "./settings_store.ts"; // P-VIZ.PREFS1 (ADR-0697)
+import { setUiPref, uiPrefs } from "./settings_store.ts"; // P-VIZ.PREFS1 (ADR-0697), P-FIRSTRUN.1 (ADR-0698)
 import { lastModel as lastChatModel, resultWindowSetting, setPerCallModelSetting, setResultWindowSetting } from "./settings_store.ts"; // P-CTX.2b (ADR-0579), P-MODEL.11 (ADR-0602)
 import { chatModelContextWindow, resolveResultWindow } from "./result_window.ts"; // P-CTX.2b (ADR-0579)
 import { parseQuestion, sanitizeHistory } from "./ask_lucid.ts"; // P-ASKLUCID.1 (ADR-0581)
@@ -6337,16 +6337,17 @@ return Bun.serve({
         }
         return json({ ok: true, data: { announced: worldUpdatesAnnounced() } });
       }
-      // P-VIZ.PREFS1 (ADR-0697): Visualize's preferences, kept in the engine settings so a port-rolled launch (a new
-      // renderer origin, an empty localStorage) keeps the view, the style and world options, Motion and the rest.
-      // UI token only (not in AGENT_ROUTES). POST sets one known key (`value` null removes it); anything else is a 400.
-      if (p === "/api/viz/prefs") {
+      // P-VIZ.PREFS1 (ADR-0697), P-FIRSTRUN.1 (ADR-0698): renderer preferences (ui_pref_keys.ts), kept in the engine
+      // settings so a port-rolled launch (a new renderer origin, an empty localStorage) keeps Visualize's choices, the
+      // first-run toasts already seen, Lucid's suggestion memory and the special theme. UI token only (not in
+      // AGENT_ROUTES). POST sets one known key (`value` null removes it); anything else is a 400.
+      if (p === "/api/ui/prefs") {
         if (req.method === "POST") {
           const b = await readBody<{ key?: unknown; value?: unknown }>(req);
-          const prefs = setVizPref(b.key, b.value ?? null);
-          return prefs ? json({ ok: true, data: { prefs } }) : Response.json({ ok: false, error: "unknown Visualize preference or malformed value" }, { status: 400 });
+          const prefs = setUiPref(b.key, b.value ?? null);
+          return prefs ? json({ ok: true, data: { prefs } }) : Response.json({ ok: false, error: "unknown preference or malformed value" }, { status: 400 });
         }
-        return json({ ok: true, data: { prefs: vizPrefs() } });
+        return json({ ok: true, data: { prefs: uiPrefs() } });
       }
       // ADR-0653 (P-WORLDS.BUILD1): a world build's HTML artifact passes the in-process gate (shape, then the scanner,
       // FAIL-CLOSED) before the Visualize popup may show it; a pass is held under a random id and served only as the
