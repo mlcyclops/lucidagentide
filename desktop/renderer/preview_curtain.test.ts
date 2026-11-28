@@ -4,7 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   CURTAIN, canvasShows, canvasVerdict, chipAfterHide, chipCardAt, chipStackAt, chipTarget, chipText, chipView, classifyCurtain, curtainLabel, curtainMotion, dropCurtain,
-  headChip, paintCommand, paintContentful, parsePaint, probeConcurrency, settleCurtain, shouldReprobe, swingOrigin, thumbFor, upsertCurtain,
+  headChip, nodeOnStage, paintCommand, paintContentful, parsePaint, probeConcurrency, settleCurtain, shouldReprobe, swingOrigin, thumbFor, upsertCurtain,
   type CanvasSample, type CurtainInput, type PaintStats,
 } from "./preview_curtain.ts";
 
@@ -312,5 +312,17 @@ describe("chipAfterHide: a lane chip closed with its red x (P-PREVIEW.CHIPX1)", 
   });
   test("no hide paints what it is given", () => {
     expect(chipAfterHide(undefined, page("games/a.html"))).toEqual({ show: page("games/a.html"), hidden: undefined });
+  });
+});
+
+describe("nodeOnStage: a chip over a node that left the stage hides (P-PREVIEW.CHIPOFF1)", () => {
+  const stage = { left: 0, top: 92, width: 1584, height: 852 };
+  test("a node on the stage keeps its chip, its edges included", () => {
+    expect(nodeOnStage({ x: 792, y: 500 }, stage)).toBe(true);
+    expect(nodeOnStage({ x: 0, y: 92 }, stage)).toBe(true);
+    expect(nodeOnStage({ x: 1584, y: 944 }, stage)).toBe(true);
+  });
+  test("a node panned off any side (under the header included) has no chip", () => {
+    for (const box of [{ x: -40, y: 500 }, { x: 1700, y: 500 }, { x: 792, y: 60 }, { x: 792, y: 990 }]) expect(nodeOnStage(box, stage)).toBe(false);
   });
 });

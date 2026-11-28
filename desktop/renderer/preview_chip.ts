@@ -20,7 +20,7 @@
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
 import { laneShots, laneShotsStripHtml, onLaneShots } from "./lane_shots.ts"; // P-LANESHOTS.1: the agent's snapshots
-import { chipCardAt, chipStackAt, chipText, type ChipState } from "./preview_curtain.ts";
+import { chipCardAt, chipStackAt, chipText, nodeOnStage, type ChipState } from "./preview_curtain.ts";
 import { setTip } from "./ui.ts";
 
 export type ChipSize = "full" | "compact";
@@ -114,7 +114,8 @@ export function mountWorldPreviewChips(stage: HTMLElement, deps: WorldChipDeps):
   let tabbing = false;
 
   const placeOne = (id: string, c: Chip, s: DOMRect): void => {
-    const b = deps.boxOf(id);
+    const seen = deps.boxOf(id);
+    const b = seen && nodeOnStage(seen, s) ? seen : null; // P-PREVIEW.CHIPOFF1: off the stage, not pinned to its edge
     c.btn.hidden = !b;
     if (!b) { c.at = null; if (cardFor === id) hideCard(); return; }
     c.at = chipStackAt(b, s, { w: c.btn.offsetWidth, h: c.btn.offsetHeight }, deps.below(id));

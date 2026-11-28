@@ -18,6 +18,7 @@
 import { AGENTS_KEY, baseName, defaultTheme, displayNames, laneFolderIds, loadDoc, type AgentsDoc } from "./agents_store.ts";
 import { lucidWalkerArt, paletteOf, themePalette, type AgentPalette } from "./agents_rail_art.ts";
 import { baseTier, type PerfTier } from "./perf_tier.ts";
+import { nodeOnStage } from "./preview_curtain.ts"; // P-PREVIEW.CHIPOFF1: one off-stage rule for everything over a node
 
 /** One status line this long, then the next (with a quick crossfade). */
 export const CYCLE_MS = 2600;
@@ -412,7 +413,7 @@ export function mountSpinupWalkers(d: SpinupWalkersDeps): SpinupWalkers {
   function layoutWorld(w: Walker, att: Attachment, id: string, s: DOMRect): void {
     const box = att.src.boxOf(id);
     // A node off the stage (panned or orbited away) hides its walker, never piled on the stage's edge.
-    if (!box || box.x < s.left || box.x > s.right || box.y < s.top || box.y > s.bottom) { w.host.hidden = true; return; }
+    if (!box || !nodeOnStage(box, s)) { w.host.hidden = true; return; }
     w.host.hidden = false;
     const k = scaleOf(att.stage, s);
     const size = sizeOf("world");

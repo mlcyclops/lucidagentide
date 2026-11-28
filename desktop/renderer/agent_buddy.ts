@@ -22,6 +22,7 @@ import { DRAG_SLOP, loopDelay, placeModule } from "./agents_rail.ts";
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
 import { baseTier, pollDelay, type PerfTier } from "./perf_tier.ts";
+import { nodeOnStage } from "./preview_curtain.ts"; // P-PREVIEW.CHIPOFF1: one off-stage rule for buddies and chips
 import type { BuddyIdea, BuddyReply, BuddySurface, FleetStatusView } from "./bridge.ts";
 import { setTip, type ToastOpts } from "./ui.ts";
 import { tipValue } from "./tip_text.ts";
@@ -485,7 +486,7 @@ export function mountAgentBuddies(d: AgentBuddiesDeps): AgentBuddies {
   function worldBase(b: Buddy, att: Attachment, nodeId: string, s: DOMRect): Pt | null {
     const box = att.src.boxOf(nodeId);
     // A node off the stage (panned or orbited away) takes its buddy with it, never piled on the stage's edge.
-    if (!box || box.x < s.left || box.x > s.right || box.y < s.top || box.y > s.bottom) return null;
+    if (!box || !nodeOnStage(box, s)) return null;
     const k = scaleOf(att.stage, s);
     const size = sizeOf(b);
     return { x: (box.x - box.r - s.left) / k - size.w / 2, y: (box.y - box.r - s.top) / k - size.h / 2 };

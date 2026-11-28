@@ -354,6 +354,13 @@ export function chipText(v: ChipState): { k: string; name: string; aria: string;
     };
 }
 
+/** P-PREVIEW.CHIPOFF1: the node's center is on the stage (both in client px). scene.screenBoxOf answers for a node
+ *  panned or orbited off the stage too, and chipStackAt clamps to the stage's edge, so a chip over such a node would
+ *  pin itself to the edge (under a docked node panel). Its chip hides instead, the same rule its buddy follows. */
+export function nodeOnStage(box: { x: number; y: number }, stage: { left: number; top: number; width: number; height: number }): boolean {
+  return box.x >= stage.left && box.x <= stage.left + stage.width && box.y >= stage.top && box.y <= stage.top + stage.height;
+}
+
 /** Agent Worlds: where a chip over a node goes (its top-left corner, stage px). Centered above the node's frame,
  *  `gap` px clear of it and above the `below` px already standing there (the node's artifact chip with its own
  *  gap), so the chips stack instead of overlapping. `box` is the node in client px (scene.screenBoxOf), `stage`

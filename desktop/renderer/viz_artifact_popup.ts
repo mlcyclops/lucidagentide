@@ -27,7 +27,7 @@
 import { authHeaders } from "./bridge.ts";
 import { esc } from "./format.ts";
 import { icon } from "./icons.ts";
-import { chipStackAt } from "./preview_curtain.ts";
+import { chipStackAt, nodeOnStage } from "./preview_curtain.ts";
 import { popover } from "./ui.ts";
 import { ART_DEFAULT_W, fitArtWidth, frameAttrs, readVerdict, type ArtifactVerdict, type BuildArtifact } from "./viz_build_model.ts";
 
@@ -256,7 +256,8 @@ export function mountArtifactChips(stage: HTMLElement, boxOf: (id: string) => { 
     if (!chips.size) return;
     const s = stage.getBoundingClientRect();
     for (const [id, chip] of chips) {
-      const b = boxOf(id);
+      const seen = boxOf(id);
+      const b = seen && nodeOnStage(seen, s) ? seen : null; // P-PREVIEW.CHIPOFF1: off the stage, not pinned to its edge
       chip.hidden = !b;
       if (!b) { spots.delete(id); continue; }
       const at = chipStackAt(b, s, { w: chip.offsetWidth, h: chip.offsetHeight });
